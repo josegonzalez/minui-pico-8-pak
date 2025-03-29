@@ -88,7 +88,7 @@ launch_cart() {
     cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
     cp -f "$PAK_DIR/config/$PLATFORM.txt" "$HOME/config.txt"
 
-    echo performance >/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+    echo 1600000 >/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed
 
     pico_bin="$(get_pico_bin)"
 
