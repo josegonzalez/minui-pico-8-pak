@@ -7,7 +7,7 @@ A pak wrapping PICO-8, a fantasy video game console.
 This pak is designed and tested on the following MinUI Platforms and devices:
 
 - `rg35xxplus`: RG-CubeXX
-- `tg5040`: Trimui Brick (formerly `tg3040`)
+- `tg5040`: Trimui Brick (formerly `tg3040`) and Trimui Smart Pro
 
 Use the correct platform for your device.
 
@@ -20,8 +20,11 @@ To being, make sure your MinUI SD card is mounted.
 
 ### Installing the Emulator
 
+> [!NOTE]
+> The word `$PLATFORM` should be replaced with your platform of choice. Please see the [Requirements](#requirements) section to find the platform for your device.
+
 1. Download the latest release from Github. It will be named `PICO.pak.zip`.
-2. Copy the zip file to `/Emus/$PLATFORM/PICO.pak.zip`.
+2. Copy the zip file to `/Emus/$PLATFORM/PICO.pak.zip` on your SD card.
 3. Extract the zip in place, then delete the zip file.
 4. Confirm that there is a `/Emus/$PLATFORM/PICO.pak/launch.sh` file on your SD card.
 
@@ -35,7 +38,7 @@ To being, make sure your MinUI SD card is mounted.
 
 ### Downloading Roms
 
-1. Create a folder at `/Roms/Pico-8 (PICO)`
+1. Create a folder at `/Roms/Pico-8 (PICO)` on your SD card.
 2. Create an empty file named `Splore.p8` in `/Roms/Pico-8 (PICO)` for Splore support.
 3. Place your roms in this directory.
     1. See [this itch.io link](https://itch.io/games/downloadable/free/tag-pico-8) for free downloadable Pico-8 games.
@@ -63,7 +66,7 @@ To exit a game:
 
 ### In-Game saves
 
-Any game that creates in-game saves will save these to `$SDCARD_PATH/.userdata/shared/Pico-8-native`.
+Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8-native` on your SD Card.
 
 ### Splore
 
@@ -72,7 +75,7 @@ Any game that creates in-game saves will save these to `$SDCARD_PATH/.userdata/s
 
 To run splore, create a `Splore.p8` file in `/Roms/Pico-8 (PICO)` (it can be empty). Choosing this game in MinUI will launch the Splore UI. If no wifi connection is available, Splore will fail to start.
 
-Carts downloaded via Splore will only be available via Splore. To copy them to the `/Roms/Pico-8 (PICO)` folder of your SD card, create a file named `copy-carts` in `$SDCARD_PATH/.userdata/$PLATFORM/Pico-8-native` folder.
+Carts downloaded via Splore will only be available via Splore. To copy them to the `/Roms/Pico-8 (PICO)` folder of your SD card, create a file named `copy-carts` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card.
 
 To exit Splore, choose a game and follow the normal process of exiting a game.
 
@@ -135,7 +138,7 @@ As an example, [Poom](https://freds72.itch.io/poom) - a Doom clone written for P
 
 By default, Pico-8 is launched in as a centered square resolution. For some games, it may be desirable to have the screen drawn such that it stretches to cover the entire screen instead of being 1x1 width to height, in a "stretched" mode that simulates widescreen functionality.
 
-To set the screen mode to `stretched`, create a file named `screen-mode` in `$SDCARD_PATH/.userdata/$PLATFORM/Pico-8-native` folder. The contents of this can be either of the following:
+To set the screen mode to `stretched`, create a file named `screen-mode` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. The contents of this can be either of the following:
 
 - `standard`: the standard screen display, showing the game centered as a square.
 - `stretched`: display the screen stretched to match the width of the device's screen.
@@ -148,4 +151,4 @@ Built-in MinUI cores have support for turning off the display and eventually shu
 
 ### Debug Logging
 
-To enable debug logging, create a file named `debug` in `$SDCARD_PATH/.userdata/$PLATFORM/Pico-8-native` folder. Logs will be written to the`$SDCARD_PATH/.userdata/$PLATFORM/logs/` folder.
+Logs will be written to the`/.userdata/$PLATFORM/logs/` folder on your SD card.
