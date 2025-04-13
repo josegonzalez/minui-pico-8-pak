@@ -2,6 +2,7 @@
     "label": "PICO",
     "launch": "launch.sh",
     "description": "Runs pico-8 in standalone mode",
+    "pak_type": "emu",
     "platforms": [
         "rg35xxplus",
         "tg5040"
