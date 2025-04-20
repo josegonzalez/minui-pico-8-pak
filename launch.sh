@@ -29,23 +29,94 @@ export SCREENSHOT_DIR="$SDCARD_PATH/Screenshots"
 
 copy_carts() {
     ROM_FOLDER="$1"
+    [ ! -f "$USERDATA_PATH/Pico-8-native/copy-carts" ] && return
 
-    if [ ! -f "$USERDATA_PATH/Pico-8-native/copy-carts" ]; then
-        return
-    fi
+    FAV_FILE="$HOME/favourites.txt"
+    MAP_FILE="$ROM_FOLDER/map.txt"
+    MEDIA_FOLDER="$ROM_FOLDER/.media"
 
-    for cart in "$HOME/bbs/carts"/*.p8.png; do
-        # remove the -0.p8.png extension
-        CART_NAME="${cart%-0.p8.png}"
-        FILENAME="$(basename "$CART_NAME")"
+    [ ! -f "$FAV_FILE" ] && return
 
-        if [ -f "$HOME/bbs/carts/temp-$FILENAME.nfo" ]; then
-            TITLE="$(grep title: "$HOME/bbs/carts/temp-$FILENAME.nfo" | cut -d: -f2-)"
-            cp -f "$cart" "$ROM_FOLDER/$TITLE.p8.png"
-        else
-            cp -f "$cart" "$ROM_FOLDER/$FILENAME"
+    mkdir -p "$MEDIA_FOLDER"
+    > "$MAP_FILE"
+    tr -d '\r' < "$FAV_FILE" > "$FAV_FILE.tmp" && mv "$FAV_FILE.tmp" "$FAV_FILE"
+
+	titlecase() {
+		input="$1"
+		exceptions="a an the and but or nor for so yet at by in of on to up off out over with as"
+		acronyms="Pico-8=PICO-8 Rpg=RPG Ai=AI Ui=UI Os=OS Cpu=CPU Tmnt=TMNT"
+
+		echo "$input" | awk -v IGNORECASE=1 -v exceptions="$exceptions" -v acronyms="$acronyms" '
+		BEGIN {
+			split(exceptions, exlist)
+			for (e in exlist) exc[exlist[e]] = 1
+
+			split(acronyms, acrlist)
+			for (a in acrlist) {
+				n = split(acrlist[a], kv, "=")
+				acr[tolower(kv[1])] = kv[2]
+			}
+		}
+		{
+			gsub("_", " ")
+			gsub("-", " - ")
+
+			n = split($0, words, " ")
+			for (i = 1; i <= n; i++) {
+				word = words[i]
+				orig = word
+				trailing = ""
+
+				# Capture trailing punctuation
+				if (match(word, /[^[:alnum:]]+$/)) {
+					trailing = substr(word, RSTART)
+					orig = substr(word, 1, RSTART - 1)
+				}
+
+				lw = tolower(orig)
+				prev_colon = (i > 1 && match(words[i - 1], /:$/))
+
+				if (acr[lw]) {
+					words[i] = acr[lw] trailing
+				} else if (i == 1 || prev_colon || !(lw in exc)) {
+					words[i] = toupper(substr(orig,1,1)) substr(orig,2) trailing
+				} else {
+					words[i] = lw trailing
+				}
+			}
+
+			out = words[1]
+			for (i = 2; i <= n; i++) out = out " " words[i]
+			gsub(" - ", "-", out)
+			print out
+		}'
+	}
+
+
+
+
+    grep -v '^$' "$FAV_FILE" | while IFS='|' read -r _ filename_raw _ _ _ _ full_title; do
+        filename_raw="${filename_raw#"${filename_raw%%[![:space:]]*}"}"
+        filename_raw="${filename_raw%"${filename_raw##*[![:space:]]}"}"
+
+        full_title="${full_title#"${full_title%%[![:space:]]*}"}"
+        full_title="${full_title%"${full_title##*[![:space:]]}"}"
+
+        full_title="$(titlecase "$full_title")"
+        filename_png="$filename_raw.p8.png"
+
+        case "$filename_raw" in
+            [0-9]*) CART_PATH="$HOME/bbs/${filename_raw:0:1}/$filename_png" ;;
+            *)      CART_PATH="$HOME/bbs/carts/$filename_png" ;;
+        esac
+
+        if [ -f "$CART_PATH" ]; then
+            [ ! -f "$ROM_FOLDER/$filename_png" ] && cp -f "$CART_PATH" "$ROM_FOLDER/$filename_png"
+            [ ! -f "$MEDIA_FOLDER/$filename_png" ] && cp -f "$CART_PATH" "$MEDIA_FOLDER/$filename_png"
+            printf "%s\t%s\n" "$filename_png" "$full_title" >> "$MAP_FILE"
         fi
     done
+
     sync
 }
 
