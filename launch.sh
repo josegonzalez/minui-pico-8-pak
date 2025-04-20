@@ -38,7 +38,7 @@ copy_carts() {
     [ ! -f "$FAV_FILE" ] && return
 
     mkdir -p "$MEDIA_FOLDER"
-    > "$MAP_FILE"
+    true > "$MAP_FILE"
     tr -d '\r' < "$FAV_FILE" > "$FAV_FILE.tmp" && mv "$FAV_FILE.tmp" "$FAV_FILE"
 
 	titlecase() {
@@ -91,9 +91,6 @@ copy_carts() {
 			print out
 		}'
 	}
-
-
-
 
     grep -v '^$' "$FAV_FILE" | while IFS='|' read -r _ filename_raw _ _ _ _ full_title; do
         filename_raw="${filename_raw#"${filename_raw%%[![:space:]]*}"}"
