@@ -216,10 +216,7 @@ main() {
         return 1
     fi
 
-    # run the power-button-pressed script if it exists for this platform
-    if command -v power-button-pressed >/dev/null; then
-        power-button-monitor &
-    fi
+    minui-power-control "$(get_pico_bin)" &
 
     ROM_PATH="$1"
     launch_cart "$ROM_PATH"
