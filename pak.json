@@ -3,7 +3,7 @@
   "type": "EMU",
   "description": "Runs pico-8 in standalone mode",
   "author": "josegonzalez",
-  "repo_url": "https://github.com/josegonzalez/minui-pico-pak",
+  "repo_url": "https://github.com/josegonzalez/minui-pico-8-pak",
   "release_filename": "PICO.pak.zip",
   "platforms": [
     "rg35xxplus",
