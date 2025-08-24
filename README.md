@@ -98,7 +98,7 @@ As an example, [Poom](https://freds72.itch.io/poom) - a Doom clone written for P
     <details>
     <summary><b>Poom.m3u</b></summary>
 
-    ```
+    ```shell
     poom_0.p8
     poom_1.p8
     poom_2.p8
