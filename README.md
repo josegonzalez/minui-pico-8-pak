@@ -85,6 +85,26 @@ To exit Splore, choose a game and follow the normal process of exiting a game.
 
 A sample `Splore.p8` file is included in the base of this repository. You may wish to name the file `1) Splore.p8` to move it to the top of the game list.
 
+### Artwork
+
+MinUI and NextUI both support artwork. P8 files are regular PNG files with the `p8` extension. To display artwork, copy the `p8` files and rename them to `png` and place them in the appropriate folder for your CFW.
+
+For example, if you have the following file:
+
+```shell
+/Roms/Pico-8 (PICO)/Freecell.p8
+```
+
+Copy it over to the correct folder for each CFW.
+
+For nextui:
+
+- Folder: `.media`
+- Path: `Roms/Pico-8 (PICO)/.media/Freecell.png` (omit the `p8` extension)
+
+- Folder: `.res`
+- Path: `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` (include the `p8` extension)
+
 ### Multi-cart Game Support
 
 The Pico-8 pak supports multi-cart games via a MinUI's M3U functionality. This requires that all game files - including the `p8` files and any supporting scripts and resources - are in the folder containing the `.m3u` file.
