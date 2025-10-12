@@ -77,7 +77,7 @@ Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8
 > [!NOTE]
 > Splore requires an internet connection. The [Wifi.pak](https://github.com/josegonzalez/minui-wifi-pak/) can be used to connect to your network to provide Splore with an internet connection.
 
-To run splore, create a `Splore.p8` file in `/Roms/Pico-8 (PICO)` (it can be empty). Choosing this game in MinUI will launch the Splore UI. If no wifi connection is available, Splore will fail to start.
+To run splore, create a `Splore.p8` file in `/Roms/Pico-8 (PICO)`. This can be an empty file _or_ it can be one of the two png files in the `splore` directory of this repository. Choosing this game in MinUI will launch the Splore UI. If no wifi connection is available, Splore will fail to start.
 
 Carts downloaded via Splore will only be available via Splore. To copy them to the `/Roms/Pico-8 (PICO)` folder of your SD card, create a file named `copy-carts` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card.
 
