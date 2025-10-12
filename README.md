@@ -105,6 +105,22 @@ For nextui:
 - Folder: `.res`
 - Path: `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` (include the `p8` extension)
 
+If your pico-8 files end in `.p8.png`, then you can copy the files over to the respective image folder as is. For example, if you have the following file:
+
+```shell
+/Roms/Pico-8 (PICO)/Freecell.p8.png
+```
+
+Copy it over to the correct folder for each CFW.
+
+For nextui:
+
+- Folder: `.media`
+- Path: `Roms/Pico-8 (PICO)/.media/Freecell.p8.png` (omit the `p8` extension)
+
+- Folder: `.res`
+- Path: `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` (include the `p8` extension)
+
 ### Multi-cart Game Support
 
 The Pico-8 pak supports multi-cart games via a MinUI's M3U functionality. This requires that all game files - including the `p8` files and any supporting scripts and resources - are in the folder containing the `.m3u` file.
