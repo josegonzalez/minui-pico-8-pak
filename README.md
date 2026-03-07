@@ -8,6 +8,7 @@ This pak is designed and tested on the following MinUI Platforms and devices:
 
 - `rg35xxplus`: RG-CubeXX
 - `tg5040`: Trimui Brick (formerly `tg3040`) and Trimui Smart Pro
+- `tg5050`: Trimui Smart Pro S
 
 Use the correct platform for your device.
 
