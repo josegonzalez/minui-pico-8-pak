@@ -34,8 +34,17 @@ To being, make sure your MinUI SD card is mounted.
 > [!WARNING]
 > This step is required or the Pico-8 emulator will fail to load.
 
-1. Download the `Raspberry PI` Pico-8 zip. As of this time of writing, it will be `pico-8_0.2.6b_raspi.zip`, available from the [Lexaloffle site](https://www.lexaloffle.com/pico-8.php).
-2. Extract the `pico-8_0.2.6b_raspi.zip` zip and place the `pico8`, `pico8_dyn`, `pico8_64`, and`pico8.dat` in the `/Bios/PICO` folder on your SD card.
+1. Download the `Raspberry PI` Pico-8 zip. As of this time of writing, it will be `pico-8_0.2.7_raspi.zip`, available from the [Lexaloffle site](https://www.lexaloffle.com/pico-8.php).
+2. Extract the `pico-8_0.2.7_raspi.zip` zip and place the `pico8`, `pico8_dyn`, `pico8_64`, and`pico8.dat` in the `/Bios/PICO` folder on your SD card.
+
+The following are the sha256sum of known working pico8 files:
+
+```shell
+443e9553a6aa81dd2bbb26cbe9a6ea00cad4a16f8cd93be765811792833ffffc  pico8_dyn
+91212d55b540ef2abf9d5df7bb46fb87f41c35f3e9d108ebd8680debab020be2  pico8.dat
+ad56e8ed1ad812cab57a7e2679b6731eba367cdd626cbf40a12b514060b597aa  pico8_64
+cee03b8ffd89bd3881a04ab51a21b0f47655c70d20bcec44cd7203274b24a817  pico8
+```
 
 ### Downloading Roms
 
