@@ -156,7 +156,9 @@ launch_cart() {
     cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
     cp -f "$PAK_DIR/config/$PLATFORM.txt" "$HOME/config.txt"
 
-    echo 1600000 >/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed
+    if [ "$PLATFORM" != "tg5050" ]; then
+        echo 1600000 >/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed
+    fi
 
     pico_bin="$(get_pico_bin)"
 
