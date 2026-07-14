@@ -15,7 +15,7 @@ Use the correct platform for your device.
 ## Installation
 
 > [!IMPORTANT]
-> This emulator pack requires a paid copy of Pico-8. Please purchase this from [the official Pico-8 page](https://www.lexaloffle.com/pico-8.php). No Pico-8 binaries will be provided otherwise.
+> This emulator pack requires a paid copy of PICO-8. Please purchase this from [the official PICO-8 page](https://www.lexaloffle.com/pico-8.php). No PICO-8 binaries will be provided otherwise.
 
 To being, make sure your MinUI SD card is mounted.
 
@@ -24,7 +24,7 @@ To being, make sure your MinUI SD card is mounted.
 > [!NOTE]
 > The word `$PLATFORM` should be replaced with your platform of choice. Please see the [Requirements](#requirements) section to find the platform for your device.
 
-1. Download the latest release from Github. It will be named `PICO.pak.zip`.
+1. Download the latest release from GitHub. It will be named `PICO.pak.zip`.
 2. Copy the zip file to `/Emus/$PLATFORM/PICO.pak.zip` on your SD card.
 3. Extract the zip in place, then delete the zip file.
 4. Confirm that there is a `/Emus/$PLATFORM/PICO.pak/launch.sh` file on your SD card.
@@ -32,7 +32,7 @@ To being, make sure your MinUI SD card is mounted.
 ### Installing the BIOS
 
 > [!WARNING]
-> This step is required or the Pico-8 emulator will fail to load.
+> This step is required or the PICO-8 emulator will fail to load.
 
 1. Download the `Raspberry PI` Pico-8 zip. As of this time of writing, it will be `pico-8_0.2.7_raspi.zip`, available from the [Lexaloffle site](https://www.lexaloffle.com/pico-8.php).
 2. Extract the `pico-8_0.2.7_raspi.zip` zip and place the `pico8`, `pico8_dyn`, `pico8_64`, and`pico8.dat` in the `/Bios/PICO` folder on your SD card.
@@ -87,7 +87,7 @@ Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8
 > [!NOTE]
 > Splore requires an internet connection. The [Wifi.pak](https://github.com/josegonzalez/minui-wifi-pak/) can be used to connect to your network to provide Splore with an internet connection.
 
-To run splore, create a `Splore.p8` file in `/Roms/Pico-8 (PICO)`. This can be an empty file _or_ it can be one of the two png files in the `splore` directory of this repository. Choosing this game in MinUI will launch the Splore UI. If no wifi connection is available, Splore will fail to start.
+To run Splore, create a `Splore.p8` file in `/Roms/Pico-8 (PICO)`. This can be an empty file _or_ it can be one of the two png files in the `splore` directory of this repository. Choosing this game in MinUI will launch the Splore UI. If no WiFi connection is available, Splore will fail to start.
 
 Carts downloaded via Splore will only be available via Splore. To copy them to the `/Roms/Pico-8 (PICO)` folder of your SD card, create a file named `copy-carts` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card.
 
@@ -107,7 +107,7 @@ For example, if you have the following file:
 
 Copy it over to the correct folder for each CFW.
 
-For nextui:
+For NextUI:
 
 - Folder: `.media`
 - Path: `Roms/Pico-8 (PICO)/.media/Freecell.png` (omit the `p8` extension)
@@ -115,7 +115,7 @@ For nextui:
 - Folder: `.res`
 - Path: `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` (include the `p8` extension)
 
-If your pico-8 files end in `.p8.png`, then you can copy the files over to the respective image folder as is. For example, if you have the following file:
+If your PICO-8 files end in `.p8.png`, then you can copy the files over to the respective image folder as is. For example, if you have the following file:
 
 ```shell
 /Roms/Pico-8 (PICO)/Freecell.p8.png
@@ -123,7 +123,7 @@ If your pico-8 files end in `.p8.png`, then you can copy the files over to the r
 
 Copy it over to the correct folder for each CFW.
 
-For nextui:
+For NextUI:
 
 - Folder: `.media`
 - Path: `Roms/Pico-8 (PICO)/.media/Freecell.p8.png` (omit the `p8` extension)
@@ -186,7 +186,7 @@ As an example, [Poom](https://freds72.itch.io/poom) - a Doom clone written for P
 
 ### Screen Mode
 
-By default, Pico-8 is launched in as a centered square resolution. For some games, it may be desirable to have the screen drawn such that it stretches to cover the entire screen instead of being 1x1 width to height, in a "stretched" mode that simulates widescreen functionality.
+By default, PICO-8 is launched in as a centered square resolution. For some games, it may be desirable to have the screen drawn such that it stretches to cover the entire screen instead of being 1x1 width to height, in a "stretched" mode that simulates widescreen functionality.
 
 To set the screen mode to `stretched`, create a file named `screen-mode` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. The contents of this can be either of the following:
 
