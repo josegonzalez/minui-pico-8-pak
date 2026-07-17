@@ -70,9 +70,8 @@ The following filetypes are supported:
 
 To exit a game:
 
-- press the `Start` button
-- select `Options`
-- select `shutdown Pico-8`
+- Press the `Start` button
+- Select `shutdown`
 
 ### Deep Sleep & Shutdown
 
