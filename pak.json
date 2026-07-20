@@ -8,7 +8,8 @@
   "platforms": [
     "rg35xxplus",
     "tg5040",
-    "tg5050"
+    "tg5050",
+    "trimuismart"
   ],
   "launch": "launch.sh",
   "version": "0.7.0"

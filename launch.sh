@@ -209,7 +209,7 @@ launch_cart() {
 }
 
 verify_platform() {
-    allowed_platforms="rg35xxplus tg5040 tg5050"
+    allowed_platforms="rg35xxplus tg5040 tg5050 trimuismart"
     if ! echo "$allowed_platforms" | grep -q "$PLATFORM"; then
         show_message "$PLATFORM is not a supported platform" 2
         return 1
