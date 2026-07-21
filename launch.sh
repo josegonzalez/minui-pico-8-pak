@@ -130,7 +130,7 @@ get_pico_bin() {
     if [ "$architecture" = "arm" ]; then
         pico_bin="pico8"
     fi
-    if [ "$PLATFORM" = "rg35xxplus" ]; then
+    if [ "$PLATFORM" = "rg35xxplus" ] || [ "$PLATFORM" = "trimuismart" ]; then
         pico_bin="pico8_dyn"
     fi
     echo "$pico_bin"
