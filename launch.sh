@@ -286,8 +286,6 @@ main() {
         return 1
     fi
 
-    controllermap
-
     minui-power-control "$(get_pico_bin)" &
 
     ROM_PATH="$1"

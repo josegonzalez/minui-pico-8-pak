@@ -2,5 +2,4 @@ bin/minui-power-control
 bin/rg35xxplus/minui-presenter
 bin/tg5040/minui-presenter
 bin/tg5050/minui-presenter
-bin/trimuismart/controllermap
 bin/trimuismart/minui-presenter
