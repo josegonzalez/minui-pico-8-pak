@@ -10,6 +10,10 @@ PLATFORMS := rg35xxplus tg5040 tg5050
 MINUI_PRESENTER_VERSION := 0.12.0
 MINUI_POWER_CONTROL_VERSION := 1.2.0
 
+SHELL_FILES := launch.sh bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
+
+.PHONY: clean build release bump-version push lint format test
+
 clean:
 	rm -f bin/*/minui-presenter || true
 	rm -f bin/minui-power-control || true
@@ -37,6 +41,16 @@ release: build
 bump-version:
 	jq '.version = "$(RELEASE_VERSION)"' pak.json > pak.json.tmp
 	mv pak.json.tmp pak.json
+
+lint:
+	shellcheck $(SHELL_FILES)
+	shfmt -l -d -i 2 .
+
+format:
+	shfmt -l -i 2 -w .
+
+test:
+	bats test
 
 push: release
 	rm -rf "dist/$(PAK_NAME).pak"
