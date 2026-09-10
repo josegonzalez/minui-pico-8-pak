@@ -82,9 +82,14 @@ copy_carts() {
 		}'
   }
 
-  grep -v '^$' "$FAV_FILE" | while IFS='|' read -r _ filename_raw _ _ _ _ full_title; do
+  # read from the file rather than a pipe so the loop does not run in a subshell
+  while IFS='|' read -r _ filename_raw _ _ _ _ full_title; do
     filename_raw="${filename_raw#"${filename_raw%%[![:space:]]*}"}"
     filename_raw="${filename_raw%"${filename_raw##*[![:space:]]}"}"
+
+    if [ -z "$filename_raw" ]; then
+      continue
+    fi
 
     full_title="${full_title#"${full_title%%[![:space:]]*}"}"
     full_title="${full_title%"${full_title##*[![:space:]]}"}"
@@ -102,14 +107,14 @@ copy_carts() {
       [ ! -f "$MEDIA_FOLDER/$filename_png" ] && cp -f "$CART_PATH" "$MEDIA_FOLDER/$filename_png"
       printf "%s\t%s\n" "$filename_png" "$full_title" >>"$MAP_FILE"
     fi
-  done
+  done <"$FAV_FILE"
 
   sync
 }
 
 get_screen_mode() {
   if [ ! -f "$USERDATA_PATH/Pico-8-native/screen-mode" ]; then
-    echo "normal" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+    echo "standard" >"$USERDATA_PATH/Pico-8-native/screen-mode"
   fi
 
   cat "$USERDATA_PATH/Pico-8-native/screen-mode"

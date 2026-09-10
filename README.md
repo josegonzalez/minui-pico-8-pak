@@ -108,39 +108,26 @@ You may wish to rename the cart to `1) Splore.p8` to move it to the top of the g
 
 ### Artwork
 
-MinUI and NextUI both support artwork. P8 files are regular PNG files with the `p8` extension. To display artwork, copy the `p8` files and rename them to `png` and place them in the appropriate folder for your CFW.
+MinUI and NextUI both support artwork, but they look in different folders and name the image differently:
 
-For example, if you have the following file:
+- NextUI reads from a `.media` folder, and the image drops the cart's last extension.
+- MinUI reads from a `.res` folder, and the image keeps the cart's full name.
 
-```shell
-/Roms/Pico-8 (PICO)/Freecell.p8
-```
+PICO-8 carts are PNG images whatever they are named, so the artwork is a copy of the cart itself. Carts ending in `.p8.png` can be copied across as they are. Carts ending in `.p8` need to be renamed to end in `png`.
 
-Copy it over to the correct folder for each CFW.
+For a cart at `/Roms/Pico-8 (PICO)/Freecell.p8`:
 
-For NextUI:
+| CFW | Path |
+| --- | --- |
+| NextUI | `Roms/Pico-8 (PICO)/.media/Freecell.png` |
+| MinUI | `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` |
 
-- Folder: `.media`
-- Path: `Roms/Pico-8 (PICO)/.media/Freecell.png` (omit the `p8` extension)
+For a cart at `/Roms/Pico-8 (PICO)/Freecell.p8.png`:
 
-- Folder: `.res`
-- Path: `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` (include the `p8` extension)
-
-If your PICO-8 files end in `.p8.png`, then you can copy the files over to the respective image folder as is. For example, if you have the following file:
-
-```shell
-/Roms/Pico-8 (PICO)/Freecell.p8.png
-```
-
-Copy it over to the correct folder for each CFW.
-
-For NextUI:
-
-- Folder: `.media`
-- Path: `Roms/Pico-8 (PICO)/.media/Freecell.p8.png` (omit the `p8` extension)
-
-- Folder: `.res`
-- Path: `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` (include the `p8` extension)
+| CFW | Path |
+| --- | --- |
+| NextUI | `Roms/Pico-8 (PICO)/.media/Freecell.p8.png` |
+| MinUI | `Roms/Pico-8 (PICO)/.res/Freecell.p8.png.png` |
 
 ### Multi-cart Game Support
 
@@ -202,7 +189,7 @@ As an example, [Poom](https://freds72.itch.io/poom) - a Doom clone written for P
 
 By default, PICO-8 is launched in as a centered square resolution. For some games, it may be desirable to have the screen drawn such that it stretches to cover the entire screen instead of being 1x1 width to height, in a "stretched" mode that simulates widescreen functionality.
 
-To set the screen mode to `stretched`, create a file named `screen-mode` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. The contents of this can be either of the following:
+The screen mode is held in a file named `screen-mode` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. The pak creates it set to `standard` the first time you launch a game, and you can edit it yourself. The contents can be either of the following:
 
 - `standard`: the standard screen display, showing the game centered as a square.
 - `stretched`: display the screen stretched to match the width of the device's screen.
