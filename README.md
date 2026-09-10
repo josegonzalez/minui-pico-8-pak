@@ -49,9 +49,11 @@ cee03b8ffd89bd3881a04ab51a21b0f47655c70d20bcec44cd7203274b24a817  pico8
 ### Downloading Roms
 
 1. Create a folder at `/Roms/Pico-8 (PICO)` on your SD card.
-2. Create an empty file named `Splore.p8` in `/Roms/Pico-8 (PICO)` for Splore support.
-3. Place your roms in this directory.
+2. Place your roms in this directory.
     1. See [this itch.io link](https://itch.io/games/downloadable/free/tag-pico-8) for free downloadable Pico-8 games.
+
+> [!NOTE]
+> A `Splore.p8` cart is created for you the first time you launch a game. See [Splore](#splore) for details.
 
 ### Finishing up
 
@@ -89,13 +91,20 @@ Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8
 > [!NOTE]
 > Splore requires an internet connection. The [Wifi.pak](https://github.com/josegonzalez/minui-wifi-pak/) can be used to connect to your network to provide Splore with an internet connection.
 
-To run Splore, create a `Splore.p8` file in `/Roms/Pico-8 (PICO)`. This can be an empty file _or_ it can be one of the two png files in the `splore` directory of this repository. Choosing this game in MinUI will launch the Splore UI. If no WiFi connection is available, Splore will fail to start.
+The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png`, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI. If no WiFi connection is available, Splore will fail to start.
+
+The cart is created once and only once. The pak records this by writing a file named `splore-installed` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card, so deleting the cart will not bring it back. To have it recreated, delete `splore-installed` and launch a game again.
+
+A roms folder that already contains a cart with `Splore` or `splore` in its name is left alone.
+
+> [!NOTE]
+> The cart is created while a game is starting, so it will not appear until you leave the folder and enter it again.
 
 Carts downloaded via Splore will only be available via Splore. To copy them to the `/Roms/Pico-8 (PICO)` folder of your SD card, create a file named `copy-carts` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card.
 
 To exit Splore, choose a game and follow the normal process of exiting a game.
 
-A sample `Splore.p8` file is included in the base of this repository. You may wish to name the file `1) Splore.p8` to move it to the top of the game list.
+You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png`. The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover you can copy over the generated artwork.
 
 ### Artwork
 

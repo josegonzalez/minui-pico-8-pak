@@ -102,3 +102,10 @@ jobs:
             echo "Artifact does not exist"
             exit 1
           fi
+
+      - name: Validate Splore cart is bundled
+        run: |
+          if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "splore/Splore.p8.png"; then
+            echo "Splore cart is missing from the artifact"
+            exit 1
+          fi
