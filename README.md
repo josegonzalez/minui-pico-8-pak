@@ -64,7 +64,9 @@ Browse to `Pico-8` and press `A` to play a game.
 
 The following filetypes are supported:
 
-- Native: `.p8`, `.p8.png`
+- Native: `.p8`, `.p8.png`, `.png`
+
+Choosing a file with any other extension, or one that is missing from the SD card, displays an error and exits without starting PICO-8.
 
 ### Exiting a game
 
@@ -184,6 +186,9 @@ As an example, [Poom](https://freds72.itch.io/poom) - a Doom clone written for P
 > [!WARNING]
 > If any resources are missing from the folder containing your `m3u` file, the game may fail to load.
 
+> [!NOTE]
+> MinUI resolves the `m3u` file to the first cart listed inside it before starting the pak, so the `m3u` file itself is never loaded by PICO-8.
+
 ### Screen Mode
 
 By default, PICO-8 is launched in as a centered square resolution. For some games, it may be desirable to have the screen drawn such that it stretches to cover the entire screen instead of being 1x1 width to height, in a "stretched" mode that simulates widescreen functionality.
@@ -202,3 +207,13 @@ Built-in MinUI cores have support for turning off the display and eventually shu
 ### Debug Logging
 
 Logs will be written to the`/.userdata/$PLATFORM/logs/` folder on your SD card.
+
+## Development
+
+The launcher is POSIX shell, and is linted and formatted with [shellcheck](https://www.shellcheck.net/) and [shfmt](https://github.com/mvdan/sh). Tests are written with [bats](https://github.com/bats-core/bats-core).
+
+```shell
+make lint
+make format
+make test
+```
