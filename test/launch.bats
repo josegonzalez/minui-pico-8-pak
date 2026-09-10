@@ -102,6 +102,142 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "rom_folder_has_splore_cart finds an existing splore cart" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  : >"$rom_folder/1) Splore.p8.png"
+
+  run rom_folder_has_splore_cart "$rom_folder"
+  [ "$status" -eq 0 ]
+}
+
+@test "rom_folder_has_splore_cart ignores ordinary carts" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  : >"$rom_folder/Freecell.p8"
+
+  run rom_folder_has_splore_cart "$rom_folder"
+  [ "$status" -eq 1 ]
+}
+
+@test "rom_folder_has_splore_cart ignores an empty folder" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  run rom_folder_has_splore_cart "$rom_folder"
+  [ "$status" -eq 1 ]
+}
+
+@test "rom_folder_has_splore_cart ignores a directory named splore" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$rom_folder/Splore"
+
+  run rom_folder_has_splore_cart "$rom_folder"
+  [ "$status" -eq 1 ]
+}
+
+@test "rom_folder_has_splore_cart matches the file name not the folder path" {
+  rom_folder="$(make_rom_folder "Splore Carts (PICO)")"
+  : >"$rom_folder/Freecell.p8"
+
+  run rom_folder_has_splore_cart "$rom_folder"
+  [ "$status" -eq 1 ]
+}
+
+@test "install_splore_cart seeds a tagged roms folder" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/Splore.p8" ]
+  [ -f "$rom_folder/.media/Splore.png" ]
+  [ -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/Splore.p8"
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.media/Splore.png"
+}
+
+@test "install_splore_cart seeds every tagged roms folder" {
+  first="$(make_rom_folder "Pico-8 (PICO)")"
+  second="$(make_rom_folder "Extra Pico (PICO)")"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  [ -f "$first/Splore.p8" ]
+  [ -f "$second/Splore.p8" ]
+  [ -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+}
+
+@test "install_splore_cart skips a folder that already has a splore cart" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  : >"$rom_folder/1) Splore.p8.png"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/Splore.p8" ]
+  [ ! -d "$rom_folder/.media" ]
+  [ -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+}
+
+@test "install_splore_cart does not recreate a cart the user deleted" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  : >"$USERDATA_PATH/Pico-8-native/splore-installed"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/Splore.p8" ]
+  [ ! -d "$rom_folder/.media" ]
+}
+
+@test "install_splore_cart does not write the marker without a tagged roms folder" {
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+  [ ! -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+}
+
+@test "install_splore_cart ignores folders for other emulators" {
+  rom_folder="$(make_rom_folder "Game Boy (GB)")"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/Splore.p8" ]
+  [ ! -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+}
+
+@test "install_splore_cart ignores a tagged path that is not a directory" {
+  : >"$SDCARD_PATH/Roms/Pico-8 (PICO)"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+  [ ! -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+}
+
+@test "install_splore_cart tolerates a missing source cart" {
+  make_rom_folder "Pico-8 (PICO)" >/dev/null
+
+  PAK_DIR="$BATS_TEST_TMPDIR/no-pak" run install_splore_cart
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is missing, skipping"* ]]
+  [ ! -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+}
+
+@test "install_splore_cart does not mark a folder it could not write to" {
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "chmod does not restrict root"
+  fi
+
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  chmod 555 "$rom_folder"
+
+  run install_splore_cart
+  chmod 755 "$rom_folder"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Unable to create"* ]]
+  [ ! -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+}
+
 @test "get_pico_bin returns the dynamic binary on rg35xxplus" {
   PLATFORM=rg35xxplus run get_pico_bin
   [ "$output" = "pico8_dyn" ]
@@ -158,4 +294,121 @@ setup() {
 
   [ "$status" -eq 1 ]
   grep -q "does not exist" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh seeds the splore cart even when the cart is invalid" {
+  pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  mkdir -p "$pak_dir"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$(make_cart Game.txt)"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 1 ]
+  [ -f "$rom_folder/Splore.p8" ]
+  [ -f "$rom_folder/.media/Splore.png" ]
+  [ -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
+  grep -q "is not a supported filetype" "$LOGS_PATH/PICO.txt"
+}
+
+@test "get_screen_mode defaults to the documented standard mode" {
+  run get_screen_mode
+  [ "$status" -eq 0 ]
+  [ "$output" = "standard" ]
+  [ "$(cat "$USERDATA_PATH/Pico-8-native/screen-mode")" = "standard" ]
+}
+
+@test "get_screen_mode keeps a mode the user already chose" {
+  echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+
+  run get_screen_mode
+  [ "$output" = "stretched" ]
+}
+
+@test "copy_carts does nothing without the copy-carts flag" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$HOME/bbs/carts"
+  : >"$HOME/bbs/carts/freecell.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ ! -f "$rom_folder/freecell.p8.png" ]
+  [ ! -f "$rom_folder/map.txt" ]
+}
+
+@test "copy_carts copies a favourited cart and titles it" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$HOME/bbs/carts"
+  : >"$HOME/bbs/carts/freecell.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ -f "$rom_folder/.media/freecell.p8.png" ]
+  grep -q "^freecell.p8.png	Freecell Classic$" "$rom_folder/map.txt"
+}
+
+@test "copy_carts resolves a numerically named cart to its bbs subfolder" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$HOME/bbs/4"
+  : >"$HOME/bbs/4/42000.p8.png"
+  printf 'x|42000|x|x|x|x|the answer\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/42000.p8.png" ]
+  grep -q "^42000.p8.png	The Answer$" "$rom_folder/map.txt"
+}
+
+@test "copy_carts skips blank lines in the favourites file" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$HOME/bbs/carts"
+  : >"$HOME/bbs/carts/freecell.p8.png"
+  printf '\nx|freecell|x|x|x|x|freecell classic\n\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ "$(wc -l <"$rom_folder/map.txt")" -eq 1 ]
+}
+
+@test "copy_carts ignores a favourite with no downloaded cart" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$HOME/bbs/carts"
+  printf 'x|missing|x|x|x|x|missing cart\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/missing.p8.png" ]
+  [ ! -s "$rom_folder/map.txt" ]
+}
+
+@test "copy_carts runs its loop in the current shell" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$HOME/bbs/carts"
+  : >"$HOME/bbs/carts/freecell.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+
+  filename_png=""
+  copy_carts "$rom_folder"
+
+  [ "$filename_png" = "freecell.p8.png" ]
 }

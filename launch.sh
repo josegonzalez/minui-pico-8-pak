@@ -82,9 +82,14 @@ copy_carts() {
 		}'
   }
 
-  grep -v '^$' "$FAV_FILE" | while IFS='|' read -r _ filename_raw _ _ _ _ full_title; do
+  # read from the file rather than a pipe so the loop does not run in a subshell
+  while IFS='|' read -r _ filename_raw _ _ _ _ full_title; do
     filename_raw="${filename_raw#"${filename_raw%%[![:space:]]*}"}"
     filename_raw="${filename_raw%"${filename_raw##*[![:space:]]}"}"
+
+    if [ -z "$filename_raw" ]; then
+      continue
+    fi
 
     full_title="${full_title#"${full_title%%[![:space:]]*}"}"
     full_title="${full_title%"${full_title##*[![:space:]]}"}"
@@ -102,14 +107,14 @@ copy_carts() {
       [ ! -f "$MEDIA_FOLDER/$filename_png" ] && cp -f "$CART_PATH" "$MEDIA_FOLDER/$filename_png"
       printf "%s\t%s\n" "$filename_png" "$full_title" >>"$MAP_FILE"
     fi
-  done
+  done <"$FAV_FILE"
 
   sync
 }
 
 get_screen_mode() {
   if [ ! -f "$USERDATA_PATH/Pico-8-native/screen-mode" ]; then
-    echo "normal" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+    echo "standard" >"$USERDATA_PATH/Pico-8-native/screen-mode"
   fi
 
   cat "$USERDATA_PATH/Pico-8-native/screen-mode"
@@ -149,6 +154,61 @@ is_splore_cart() {
   esac
 
   return 1
+}
+
+rom_folder_has_splore_cart() {
+  splore_folder="$1"
+
+  for splore_entry in "$splore_folder"/*; do
+    [ -f "$splore_entry" ] || continue
+    if is_splore_cart "${splore_entry##*/}"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+install_splore_cart() {
+  marker_file="$USERDATA_PATH/Pico-8-native/splore-installed"
+  if [ -f "$marker_file" ]; then
+    return 0
+  fi
+
+  source_cart="$PAK_DIR/splore/Splore.p8.png"
+  if [ ! -f "$source_cart" ]; then
+    echo "Splore cart $source_cart is missing, skipping" 1>&2
+    return 0
+  fi
+
+  seeded=false
+  for rom_folder in "$SDCARD_PATH/Roms/"*"($PAK_NAME)"; do
+    [ -d "$rom_folder" ] || continue
+
+    if rom_folder_has_splore_cart "$rom_folder"; then
+      seeded=true
+      continue
+    fi
+
+    echo "Creating Splore.p8 in $rom_folder" 1>&2
+    if ! cp -f "$source_cart" "$rom_folder/Splore.p8"; then
+      echo "Unable to create Splore.p8 in $rom_folder" 1>&2
+      continue
+    fi
+
+    seeded=true
+    mkdir -p "$rom_folder/.media"
+    if [ ! -f "$rom_folder/.media/Splore.png" ]; then
+      cp -f "$source_cart" "$rom_folder/.media/Splore.png"
+    fi
+  done
+
+  if [ "$seeded" = "true" ]; then
+    true >"$marker_file"
+    sync
+  fi
+
+  return 0
 }
 
 launch_cart() {
@@ -324,6 +384,9 @@ main() {
   if ! verify_platform; then
     return 1
   fi
+
+  # seeding is best-effort and must never block a launch
+  install_splore_cart
 
   if ! verify_cart "$ROM_PATH"; then
     return 1
