@@ -412,3 +412,302 @@ setup() {
 
   [ "$filename_png" = "freecell.p8.png" ]
 }
+
+@test "is_network_link_up detects an interface that is up" {
+  stub_network up
+
+  run is_network_link_up
+  [ "$status" -eq 0 ]
+}
+
+@test "is_network_link_up rejects an interface that is down" {
+  stub_network down
+
+  run is_network_link_up
+  [ "$status" -eq 1 ]
+}
+
+@test "is_network_link_up ignores the loopback interface" {
+  stub_network up lo
+
+  run is_network_link_up
+  [ "$status" -eq 1 ]
+}
+
+@test "is_network_link_up accepts a tethered interface" {
+  stub_network up eth0
+
+  run is_network_link_up
+  [ "$status" -eq 0 ]
+}
+
+@test "is_network_link_up accepts any interface that is up" {
+  stub_network up lo
+  stub_network down wlan0
+  stub_network up eth0
+
+  run is_network_link_up
+  [ "$status" -eq 0 ]
+}
+
+@test "is_network_link_up ignores an interface with no operstate file" {
+  stub_network "" wlan0
+
+  run is_network_link_up
+  [ "$status" -eq 1 ]
+}
+
+@test "is_network_link_up handles a device with no interfaces" {
+  run is_network_link_up
+  [ "$status" -eq 1 ]
+}
+
+@test "is_network_link_up handles a missing sysfs directory" {
+  PICO_PAK_NET_DIR="$BATS_TEST_TMPDIR/absent" run is_network_link_up
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "get_network_probe_file is namespaced by the pak name" {
+  run get_network_probe_file
+  [ "$output" = "/tmp/PICO-network-probe" ]
+}
+
+@test "is_internet_reachable succeeds when the probe downloads a body" {
+  stub_wget reachable
+
+  run is_internet_reachable
+  [ "$status" -eq 0 ]
+}
+
+@test "is_internet_reachable fails when the probe leaves an empty file" {
+  stub_wget unreachable
+
+  run is_internet_reachable
+  [ "$status" -eq 1 ]
+}
+
+@test "is_internet_reachable fails when the body is empty" {
+  stub_wget empty
+
+  run is_internet_reachable
+  [ "$status" -eq 1 ]
+}
+
+@test "is_internet_reachable fails when the probe writes nothing" {
+  stub_wget silent
+
+  run is_internet_reachable
+  [ "$status" -eq 1 ]
+}
+
+@test "is_internet_reachable requests the lexaloffle probe url" {
+  stub_wget reachable
+
+  is_internet_reachable
+  grep -q "https://www.lexaloffle.com/robots.txt" "$WGET_LOG"
+}
+
+@test "is_internet_reachable obeys the positional shim contract" {
+  stub_wget reachable
+
+  is_internet_reachable
+  grep -q -- "-q -O /tmp/PICO-network-probe" "$WGET_LOG"
+}
+
+@test "is_internet_reachable removes the probe file" {
+  stub_wget reachable
+  is_internet_reachable
+  [ ! -f "$(get_network_probe_file)" ]
+
+  stub_wget unreachable
+  ! is_internet_reachable
+  [ ! -f "$(get_network_probe_file)" ]
+}
+
+@test "is_internet_reachable bounds the probe with timeout" {
+  stub_wget reachable
+  stub_timeout
+
+  run is_internet_reachable
+  [ "$status" -eq 0 ]
+  grep -q "^10s wget https://www.lexaloffle.com/robots.txt" "$TIMEOUT_LOG"
+}
+
+@test "show_confirmation returns zero when the user confirms" {
+  stub_presenter 0
+
+  run show_confirmation "are you sure"
+  [ "$status" -eq 0 ]
+}
+
+@test "show_confirmation returns non-zero when the user cancels" {
+  stub_presenter 2
+
+  run show_confirmation "are you sure"
+  [ "$status" -ne 0 ]
+}
+
+@test "show_confirmation blocks with continue and exit buttons" {
+  stub_presenter 0
+
+  show_confirmation "are you sure"
+  grep -q -- "--confirm-show --confirm-text CONTINUE" "$PRESENTER_CONFIRM_LOG"
+  grep -q -- "--cancel-show --cancel-text EXIT" "$PRESENTER_CONFIRM_LOG"
+  grep -q -- "--timeout 0" "$PRESENTER_CONFIRM_LOG"
+}
+
+@test "show_confirmation uses the button text it is given" {
+  stub_presenter 0
+
+  show_confirmation "are you sure" YES NO
+  grep -q -- "--confirm-text YES" "$PRESENTER_CONFIRM_LOG"
+  grep -q -- "--cancel-text NO" "$PRESENTER_CONFIRM_LOG"
+}
+
+@test "verify_splore_connection ignores an ordinary cart" {
+  stub_presenter 0
+  stub_wget reachable
+
+  run verify_splore_connection "$(make_cart Game.p8)"
+  [ "$status" -eq 0 ]
+  [ ! -f "$WGET_LOG" ]
+  [ ! -f "$PRESENTER_CONFIRM_LOG" ]
+}
+
+@test "verify_splore_connection ignores a cart inside a splore named folder" {
+  stub_presenter 0
+  stub_wget reachable
+
+  run verify_splore_connection "$SDCARD_PATH/Roms/Splore Carts (PICO)/Game.p8"
+  [ "$status" -eq 0 ]
+  [ ! -f "$PRESENTER_CONFIRM_LOG" ]
+}
+
+@test "verify_splore_connection allows splore when the servers respond" {
+  stub_network up
+  stub_presenter 0
+  stub_wget reachable
+
+  run verify_splore_connection "$(make_cart Splore.p8)"
+  [ "$status" -eq 0 ]
+  [ ! -f "$PRESENTER_CONFIRM_LOG" ]
+}
+
+@test "verify_splore_connection warns when there is no network link" {
+  stub_presenter 0
+  stub_wget reachable
+
+  run verify_splore_connection "$(make_cart Splore.p8)"
+  [ "$status" -eq 0 ]
+  grep -q "No network connection was detected" "$PRESENTER_CONFIRM_LOG"
+  [ ! -f "$WGET_LOG" ]
+}
+
+@test "verify_splore_connection aborts when the user exits the link warning" {
+  stub_presenter 2
+  stub_wget reachable
+
+  run verify_splore_connection "$(make_cart Splore.p8)"
+  [ "$status" -eq 1 ]
+}
+
+@test "verify_splore_connection warns when the servers are unreachable" {
+  stub_network up
+  stub_presenter 0
+  stub_wget unreachable
+
+  run verify_splore_connection "$(make_cart Splore.p8)"
+  [ "$status" -eq 0 ]
+  grep -q "Lexaloffle servers could not be reached" "$PRESENTER_CONFIRM_LOG"
+}
+
+@test "verify_splore_connection aborts when the user exits the server warning" {
+  stub_network up
+  stub_presenter 2
+  stub_wget unreachable
+
+  run verify_splore_connection "$(make_cart Splore.p8)"
+  [ "$status" -eq 1 ]
+}
+
+@test "verify_splore_connection matches a renamed splore cart" {
+  stub_presenter 0
+  stub_wget reachable
+
+  run verify_splore_connection "$(make_cart "1) Splore.p8.png")"
+  [ "$status" -eq 0 ]
+  grep -q "No network connection was detected" "$PRESENTER_CONFIRM_LOG"
+}
+
+@test "launch.sh exits non-zero when the user exits the splore warning" {
+  pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  mkdir -p "$pak_dir"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+
+  make_bios
+  stub_presenter 2
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Splore.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 1 ]
+  grep -q "No network connection was detected" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh does not start power control when the warning is exited" {
+  pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  mkdir -p "$pak_dir"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+
+  make_bios
+  stub_presenter 2
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Splore.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 1 ]
+  ! grep -q "minui-power-control" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh starts splore when the user continues past the warning" {
+  pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  mkdir -p "$pak_dir/pico8"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+  ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
+  ln -s "$REPO_ROOT/config" "$pak_dir/config"
+  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
+  chmod +x "$pak_dir/pico8/pico8_64"
+  : >"$pak_dir/pico8/pico8.dat"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Splore.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -q "No network connection was detected" "$LOGS_PATH/PICO.txt"
+  grep -q -- "-splore" "$LOGS_PATH/PICO.txt"
+}

@@ -146,6 +146,53 @@ get_controller_file() {
   fi
 }
 
+get_network_probe_file() {
+  echo "/tmp/$PAK_NAME-network-probe"
+}
+
+# the sysfs directory is overridable so the test suite can fake a link state
+is_network_link_up() {
+  net_dir="${PICO_PAK_NET_DIR:-/sys/class/net}"
+
+  for interface_dir in "$net_dir"/*; do
+    [ -d "$interface_dir" ] || continue
+
+    interface="${interface_dir##*/}"
+    if [ "$interface" = "lo" ]; then
+      continue
+    fi
+
+    if [ "$(cat "$interface_dir/operstate" 2>/dev/null)" = "up" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+is_internet_reachable() {
+  probe_url="https://www.lexaloffle.com/robots.txt"
+  probe_file="$(get_network_probe_file)"
+  rm -f "$probe_file"
+
+  # every platform ships its own wget shim, and two of them are curl wrappers
+  # that read only the url and the output path, so no timeout flag survives
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 10s wget "$probe_url" -q -O "$probe_file" || true
+  else
+    wget "$probe_url" -q -O "$probe_file" || true
+  fi
+
+  # a failed fetch leaves an empty file behind on every platform
+  if [ -s "$probe_file" ]; then
+    rm -f "$probe_file"
+    return 0
+  fi
+
+  rm -f "$probe_file"
+  return 1
+}
+
 is_splore_cart() {
   case "$1" in
   *"Splore"* | *"splore"*)
@@ -238,12 +285,6 @@ launch_cart() {
   fi
 
   if is_splore_cart "$ROM_NAME"; then
-    enabled="$(cat /sys/class/net/wlan0/operstate 2>/dev/null)"
-    if [ "$enabled" != "up" ]; then
-      show_message "Required wifi connection is not available." 2
-      return 1
-    fi
-
     # draw_rect is left unquoted so it splits into separate arguments
     # shellcheck disable=SC2086
     "$pico_bin" \
@@ -316,6 +357,38 @@ verify_cart() {
   return 1
 }
 
+verify_splore_connection() {
+  splore_cart_name="$(basename "$1")"
+
+  if ! is_splore_cart "$splore_cart_name"; then
+    return 0
+  fi
+
+  # show_message and show_confirmation both assign to a variable named message,
+  # and this shell has no locals, so the prompt text needs its own name
+  splore_message=""
+  if ! is_network_link_up; then
+    splore_message="No network connection was detected. Use Wifi.pak to connect. Splore can still browse the carts already downloaded to this device."
+  else
+    show_message "Checking the connection to the Splore servers." forever
+    if ! is_internet_reachable; then
+      splore_message="The Lexaloffle servers could not be reached. Check your connection. Splore can still browse the carts already downloaded to this device."
+    fi
+    killall minui-presenter >/dev/null 2>&1 || true
+  fi
+
+  if [ -z "$splore_message" ]; then
+    return 0
+  fi
+
+  # normalise the presenter's exit code so the gate matches its verify_ siblings
+  if show_confirmation "$splore_message"; then
+    return 0
+  fi
+
+  return 1
+}
+
 install_pico_files() {
   pico_bin="$(get_pico_bin)"
 
@@ -354,8 +427,25 @@ show_message() {
   fi
 }
 
+show_confirmation() {
+  message="$1"
+  confirm_text="${2:-CONTINUE}"
+  cancel_text="${3:-EXIT}"
+
+  killall minui-presenter >/dev/null 2>&1 || true
+  echo "$message" 1>&2
+  minui-presenter \
+    --cancel-show \
+    --cancel-text "$cancel_text" \
+    --confirm-show \
+    --confirm-text "$confirm_text" \
+    --message "$message" \
+    --timeout 0
+}
+
 cleanup() {
   rm -f /tmp/stay_awake
+  rm -f "$(get_network_probe_file)"
   killall minui-presenter >/dev/null 2>&1 || true
 }
 
@@ -393,6 +483,10 @@ main() {
   fi
 
   if ! install_pico_files; then
+    return 1
+  fi
+
+  if ! verify_splore_connection "$ROM_PATH"; then
     return 1
   fi
 
