@@ -2,16 +2,6 @@
 PAK_DIR="$(dirname "$0")"
 PAK_NAME="$(basename "$PAK_DIR")"
 PAK_NAME="${PAK_NAME%.*}"
-set -x
-
-rm -f "$LOGS_PATH/$PAK_NAME.txt"
-exec >>"$LOGS_PATH/$PAK_NAME.txt"
-exec 2>&1
-
-echo "$0" "$*"
-cd "$PAK_DIR" || exit 1
-mkdir -p "$USERDATA_PATH/Pico-8-native"
-mkdir -p "$SHARED_USERDATA_PATH/Pico-8-native"
 
 architecture=arm
 if uname -m | grep -q '64'; then
@@ -151,6 +141,16 @@ get_controller_file() {
   fi
 }
 
+is_splore_cart() {
+  case "$1" in
+  *"Splore"* | *"splore"*)
+    return 0
+    ;;
+  esac
+
+  return 1
+}
+
 launch_cart() {
   ROM_PATH="$1"
   cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
@@ -177,31 +177,31 @@ launch_cart() {
     draw_rect="-draw_rect 0,0,${width},${height}"
   fi
 
-  case "$ROM_NAME" in
-  *"Splore"* | *"splore"*)
+  if is_splore_cart "$ROM_NAME"; then
     enabled="$(cat /sys/class/net/wlan0/operstate 2>/dev/null)"
     if [ "$enabled" != "up" ]; then
       show_message "Required wifi connection is not available." 2
       return 1
     fi
 
+    # draw_rect is left unquoted so it splits into separate arguments
+    # shellcheck disable=SC2086
     "$pico_bin" \
       -desktop "$SDCARD_PATH/Screenshots" \
       -home "$HOME" \
       -joystick 0 \
       -root_path "$ROM_FOLDER" \
       -splore $draw_rect
-
-    ;;
-  *)
+  else
+    # draw_rect is left unquoted so it splits into separate arguments
+    # shellcheck disable=SC2086
     "$pico_bin" \
       -desktop "$SDCARD_PATH/Screenshots" \
       -home "$HOME" \
       -joystick 0 \
       -root_path "$ROM_FOLDER" \
       -run "$ROM_PATH" $draw_rect
-    ;;
-  esac
+  fi
 
   sync
   copy_carts "$ROM_FOLDER"
@@ -224,6 +224,36 @@ verify_platform() {
     show_message "wget not found" 2
     return 1
   fi
+}
+
+verify_cart() {
+  cart_path="$1"
+
+  if [ -z "$cart_path" ]; then
+    show_message "No cart was specified." 4
+    return 1
+  fi
+
+  cart_name="$(basename "$cart_path")"
+
+  if [ ! -f "$cart_path" ]; then
+    show_message "Cart file $cart_name does not exist." 4
+    return 1
+  fi
+
+  if is_splore_cart "$cart_name"; then
+    return 0
+  fi
+
+  cart_extension="$(printf "%s" "${cart_name##*.}" | tr '[:upper:]' '[:lower:]')"
+  case "$cart_extension" in
+  p8 | png)
+    return 0
+    ;;
+  esac
+
+  show_message "Cart file $cart_name is not a supported filetype. Only .p8, .p8.png and .png carts can be loaded." 4
+  return 1
 }
 
 install_pico_files() {
@@ -270,6 +300,17 @@ cleanup() {
 }
 
 main() {
+  set -x
+
+  rm -f "$LOGS_PATH/$PAK_NAME.txt"
+  exec >>"$LOGS_PATH/$PAK_NAME.txt"
+  exec 2>&1
+
+  echo "$0" "$*"
+  cd "$PAK_DIR" || exit 1
+  mkdir -p "$USERDATA_PATH/Pico-8-native"
+  mkdir -p "$SHARED_USERDATA_PATH/Pico-8-native"
+
   echo "1" >/tmp/stay_awake
   trap "cleanup" EXIT INT TERM HUP QUIT
 
@@ -278,7 +319,13 @@ main() {
     export PLATFORM="tg5040"
   fi
 
+  ROM_PATH="$1"
+
   if ! verify_platform; then
+    return 1
+  fi
+
+  if ! verify_cart "$ROM_PATH"; then
     return 1
   fi
 
@@ -288,8 +335,9 @@ main() {
 
   minui-power-control "$(get_pico_bin)" &
 
-  ROM_PATH="$1"
-  launch_cart "$ROM_PATH"
+  if ! launch_cart "$ROM_PATH"; then
+    return 1
+  fi
 
   # handle the power-button pressed event
   if [ -f /tmp/shutdown_from_pak ]; then
@@ -304,4 +352,6 @@ main() {
   fi
 }
 
-main "$@"
+if [ -z "$PICO_PAK_SOURCE_ONLY" ]; then
+  main "$@"
+fi
