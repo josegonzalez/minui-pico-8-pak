@@ -103,7 +103,7 @@ copy_carts() {
         filename_png="$filename_raw.p8.png"
 
         case "$filename_raw" in
-            [0-9]*) CART_PATH="$HOME/bbs/${filename_raw:0:1}/$filename_png" ;;
+            [0-9]*) CART_PATH="$HOME/bbs/$(printf "%s" "$filename_raw" | cut -c1)/$filename_png" ;;
             *)      CART_PATH="$HOME/bbs/carts/$filename_png" ;;
         esac
 
