@@ -5,3 +5,4 @@
 .gitignore export-ignore
 Makefile export-ignore
 Splore.p8 export-ignore
+/test export-ignore

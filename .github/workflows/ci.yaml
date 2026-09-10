@@ -16,6 +16,30 @@ permissions:
   contents: write
 
 jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install tooling
+        env:
+          SHFMT_VERSION: "3.14.1"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats shellcheck
+          curl -f -o /tmp/shfmt -sSL \
+            "https://github.com/mvdan/sh/releases/download/v$SHFMT_VERSION/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
   build:
     name: build
     runs-on: ubuntu-24.04-arm
