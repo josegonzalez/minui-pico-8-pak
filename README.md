@@ -6,11 +6,14 @@ A pak wrapping PICO-8, a fantasy video game console.
 
 This pak is designed and tested on the following MinUI Platforms and devices:
 
-- `rg35xxplus`: RG-CubeXX
+- `h700`: Anbernic RG28XX, RG34XX, RG34XX SP, RG35XX (Plus and 2024), RG35XX H, RG35XX Pro, RG35XX SP, RG40XX H, RG40XX V, RG CubeXX and RGSP, running NextUI
+- `rg35xxplus`: the same Anbernic handhelds, running MinUI
 - `tg5040`: Trimui Brick (formerly `tg3040`) and Trimui Smart Pro
 - `tg5050`: Trimui Smart Pro S
 
 Use the correct platform for your device.
+
+The Anbernic handhelds are listed twice because MinUI and NextUI give the same hardware different platform names. Install the `h700` build on NextUI and the `rg35xxplus` build on MinUI. NextUI runs a 64-bit userland and uses the `pico8_64` binary, while MinUI's is 32-bit and uses `pico8_dyn`.
 
 ## Installation
 
@@ -82,14 +85,19 @@ To exit a game:
 
 Deep sleep is supported on compatible devices. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. **Note:** Shutdown does not save or resume the game and any unsaved progress will be lost. For more information and issues, see [MinUI Power Control](https://github.com/ben16w/minui-power-control).
 
+MinUI Power Control does not support `h700`, so the power button keeps its default behaviour on those devices. The pak notes this in its log and starts PICO-8 as usual.
+
 ### In-Game saves
 
-Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8-native` on your SD Card.
+Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8-native` on your SD Card. The pak fills that path into the PICO-8 configuration each time a game starts, so it is correct whatever your device mounts the SD card as.
 
 ### Splore
 
 > [!NOTE]
 > Splore requires an internet connection to browse and download new carts. The [Wifi.pak](https://github.com/josegonzalez/minui-wifi-pak/) can be used to connect to your network to provide Splore with an internet connection.
+
+> [!NOTE]
+> On `h700`, NextUI ships `curl` but no `libcurl`, so PICO-8 falls back to downloading through a `wget` script the pak provides, which wraps that `curl`. Uploading a cart to the BBS is not supported through this route.
 
 The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png`, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI.
 
@@ -203,6 +211,8 @@ The screen mode is held in a file named `screen-mode` in the `/.userdata/$PLATFO
 
 Please note that using `stretched` mode may look unnatural for games with circular objects or on 16:9 resolution screens.
 
+`stretched` mode needs to know the size of your screen. It reads that from `fbset` where the device provides one, and otherwise falls back to the panel size for your model, which is known for every `h700` device. On the RG28XX, NextUI rotates the display for applications, so both screen modes look the same there as they do on the other models.
+
 ### Sleep Mode
 
 Built-in MinUI cores have support for turning off the display and eventually shutting down when the power button is pressed. Standalone emulators do not have this functionality due to needing support inside of the console for this. At this time, this pak does not implement sleep mode.
@@ -221,4 +231,4 @@ make format
 make test
 ```
 
-Two environment variables exist for the test suite only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, and `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads.
+Three environment variables exist for the test suite only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to.

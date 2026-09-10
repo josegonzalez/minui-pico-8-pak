@@ -6,6 +6,7 @@
   "repo_url": "https://github.com/josegonzalez/minui-pico-8-pak",
   "release_filename": "PICO.pak.zip",
   "platforms": [
+    "h700",
     "rg35xxplus",
     "tg5040",
     "tg5050"
