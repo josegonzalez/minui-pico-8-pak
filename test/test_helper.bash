@@ -28,6 +28,13 @@ setup_launch() {
   export CARTS
   mkdir -p "$CARTS"
 
+  # An empty tree is the baseline, so the suite never reads the host's real
+  # network state. macOS has no /sys/class/net at all and the CI runner has a
+  # populated one, which would otherwise make the link check non-deterministic.
+  PICO_PAK_NET_DIR="$BATS_TEST_TMPDIR/net"
+  export PICO_PAK_NET_DIR
+  mkdir -p "$PICO_PAK_NET_DIR"
+
   export PICO_PAK_SOURCE_ONLY=1
   # shellcheck source=/dev/null
   . "$REPO_ROOT/launch.sh"
@@ -55,4 +62,110 @@ make_rom_folder() {
   local path="$SDCARD_PATH/Roms/$1"
   mkdir -p "$path"
   printf '%s' "$path"
+}
+
+# Creates a fake sysfs network interface with the given operstate. The interface
+# defaults to wlan0. Call it on top of the empty tree setup_launch builds.
+stub_network() {
+  local state="$1"
+  local interface="${2:-wlan0}"
+
+  mkdir -p "$PICO_PAK_NET_DIR/$interface"
+  if [ -n "$state" ]; then
+    printf '%s\n' "$state" >"$PICO_PAK_NET_DIR/$interface/operstate"
+  fi
+}
+
+# Replaces the minui-presenter stub with one that logs its arguments and exits
+# with the given code, where 0 confirms a dialog and non-zero cancels it.
+#
+# show_message backgrounds the presenter, so logging every call to one file
+# races with assertions made after the function under test returns. Only the
+# blocking dialog passes --confirm-show, and that call runs in the foreground,
+# so it is logged separately and can be asserted on deterministically.
+#
+# Arguments are logged as "$*" on a single line so that flag and value
+# adjacency can be asserted, for example "--confirm-text CONTINUE".
+stub_presenter() {
+  PRESENTER_LOG="$BATS_TEST_TMPDIR/presenter.log"
+  PRESENTER_CONFIRM_LOG="$BATS_TEST_TMPDIR/presenter.confirm.log"
+  PRESENTER_EXIT="$BATS_TEST_TMPDIR/presenter.exit"
+  export PRESENTER_LOG PRESENTER_CONFIRM_LOG PRESENTER_EXIT
+  printf '%s' "${1:-0}" >"$PRESENTER_EXIT"
+
+  cat >"$STUB_BIN/minui-presenter" <<'STUB'
+#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "--confirm-show" ]; then
+    printf '%s\n' "$*" >>"$PRESENTER_CONFIRM_LOG"
+    exit "$(cat "$PRESENTER_EXIT")"
+  fi
+done
+printf '%s\n' "$*" >>"$PRESENTER_LOG"
+exit 0
+STUB
+  chmod +x "$STUB_BIN/minui-presenter"
+}
+
+# Replaces the wget stub with one that logs its arguments and reproduces one of
+# the outcomes the platform shims produce:
+#
+#   reachable    a body is written and the fetch succeeds
+#   unreachable  an empty file is left behind and the fetch fails
+#   empty        an empty file is left behind but the fetch reports success
+#   silent       nothing is written at all and the fetch reports success
+#
+# The output path is read from $4 to match the positional contract of the curl
+# based shims on rg35xxplus and tg5050.
+stub_wget() {
+  WGET_LOG="$BATS_TEST_TMPDIR/wget.log"
+  WGET_MODE="$BATS_TEST_TMPDIR/wget.mode"
+  export WGET_LOG WGET_MODE
+  printf '%s' "${1:-reachable}" >"$WGET_MODE"
+
+  cat >"$STUB_BIN/wget" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$WGET_LOG"
+mode="$(cat "$WGET_MODE")"
+if [ "$mode" = "reachable" ]; then
+  printf 'User-agent: *\n' >"$4"
+  exit 0
+fi
+if [ "$mode" = "empty" ]; then
+  : >"$4"
+  exit 0
+fi
+if [ "$mode" = "silent" ]; then
+  exit 0
+fi
+: >"$4"
+exit 1
+STUB
+  chmod +x "$STUB_BIN/wget"
+}
+
+# Puts a recording timeout on PATH so the bounded probe can be asserted on hosts
+# that do not ship one. Opt in per test and never remove it mid-test: dropping a
+# command from PATH leaves a stale entry in the shell's command hash table, so
+# `command -v` keeps succeeding while the exec fails.
+stub_timeout() {
+  TIMEOUT_LOG="$BATS_TEST_TMPDIR/timeout.log"
+  export TIMEOUT_LOG
+
+  cat >"$STUB_BIN/timeout" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$TIMEOUT_LOG"
+shift
+exec "$@"
+STUB
+  chmod +x "$STUB_BIN/timeout"
+}
+
+# Creates the files install_pico_files requires, so end to end tests reach the
+# checks that run after it.
+make_bios() {
+  mkdir -p "$SDCARD_PATH/Bios/PICO"
+  for bios in pico8 pico8_64 pico8_dyn pico8.dat; do
+    : >"$SDCARD_PATH/Bios/PICO/$bios"
+  done
 }
