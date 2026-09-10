@@ -89,9 +89,16 @@ Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8
 ### Splore
 
 > [!NOTE]
-> Splore requires an internet connection. The [Wifi.pak](https://github.com/josegonzalez/minui-wifi-pak/) can be used to connect to your network to provide Splore with an internet connection.
+> Splore requires an internet connection to browse and download new carts. The [Wifi.pak](https://github.com/josegonzalez/minui-wifi-pak/) can be used to connect to your network to provide Splore with an internet connection.
 
-The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png`, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI. If no WiFi connection is available, Splore will fail to start.
+The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png`, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI.
+
+Before Splore starts, the pak checks that the device has a network connection and then downloads a small file from `lexaloffle.com` to confirm the Splore servers are reachable. If either check fails, a message is displayed and waits for you to choose:
+
+- `CONTINUE` starts Splore anyway. Carts you have already downloaded stay browsable, but new carts cannot be fetched.
+- `EXIT` returns to MinUI without starting Splore.
+
+This check only runs for the Splore cart. Ordinary carts start without touching the network.
 
 The cart is created once and only once. The pak records this by writing a file named `splore-installed` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card, so deleting the cart will not bring it back. To have it recreated, delete `splore-installed` and launch a game again.
 
@@ -213,3 +220,5 @@ make lint
 make format
 make test
 ```
+
+Two environment variables exist for the test suite only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, and `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads.
