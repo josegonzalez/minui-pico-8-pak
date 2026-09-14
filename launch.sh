@@ -209,16 +209,23 @@ get_screen_resolution() {
   fi
 }
 
+# MinUI and NextUI both keep saves under /Saves, in a folder named for the
+# emulator tag, which is the name the pak folder carries. PAK_NAME is read
+# lazily because the test suite overrides it after sourcing this file.
+get_saves_dir() {
+  echo "$SDCARD_PATH/Saves/$PAK_NAME"
+}
+
 # config.txt has no command line equivalent for cdata_path, and pico-8 writes
-# cart saves there, so it has to name this device's SD card rather than the
-# mount the checked in template happened to be captured on. root_path is
-# rewritten alongside it so the file agrees with the -root_path already passed
-# on the command line.
+# cart saves there, so it has to name the Saves folder on this device's SD card
+# rather than the mount the checked in template happened to be captured on.
+# root_path is rewritten alongside it so the file agrees with the -root_path
+# already passed on the command line.
 install_config() {
   rom_folder="$1"
 
   # ENVIRON rather than awk -v, which would process backslash escapes in a path
-  PICO_CDATA_PATH="$HOME/cdata/" PICO_ROOT_PATH="$rom_folder/" awk '
+  PICO_CDATA_PATH="$(get_saves_dir)/" PICO_ROOT_PATH="$rom_folder/" awk '
     BEGIN {
       cdata = ENVIRON["PICO_CDATA_PATH"]
       root = ENVIRON["PICO_ROOT_PATH"]
@@ -226,6 +233,47 @@ install_config() {
     /^cdata_path / { print "cdata_path " cdata; next }
     /^root_path / { print "root_path " root; next }
     { print }' "$PAK_DIR/config/$PLATFORM.txt" >"$HOME/config.txt"
+}
+
+# Saves used to live beside the pak's other shared userdata. Move them into the
+# folder MinUI and NextUI keep saves in, once, and record that it happened: were
+# pico-8 to ignore cdata_path and write back to the old folder, an ungated
+# migration would move those saves out from under it on every launch.
+migrate_saves() {
+  saves_dir="$(get_saves_dir)"
+  mkdir -p "$saves_dir"
+
+  # install_splore_cart has a marker_file of its own and this shell has no
+  # locals, so the two markers need separate names
+  saves_marker="$USERDATA_PATH/Pico-8-native/saves-migrated"
+  if [ -f "$saves_marker" ]; then
+    return 0
+  fi
+
+  legacy_dir="$HOME/cdata"
+  if [ ! -d "$legacy_dir" ]; then
+    true >"$saves_marker"
+    return 0
+  fi
+
+  for legacy_save in "$legacy_dir"/*; do
+    [ -e "$legacy_save" ] || continue
+
+    save_name="${legacy_save##*/}"
+    if [ -e "$saves_dir/$save_name" ]; then
+      echo "$save_name already exists in $saves_dir, leaving the copy in $legacy_dir" 1>&2
+      continue
+    fi
+
+    echo "Moving $save_name to $saves_dir" 1>&2
+    mv -f "$legacy_save" "$saves_dir/$save_name" || true
+  done
+
+  # only removes an empty folder, so a save left behind keeps the old one around
+  rmdir "$legacy_dir" 2>/dev/null || true
+
+  true >"$saves_marker"
+  sync
 }
 
 get_network_probe_file() {
@@ -573,6 +621,10 @@ main() {
   if ! verify_platform; then
     return 1
   fi
+
+  # saves move to the folder MinUI and NextUI use before anything writes to
+  # either one
+  migrate_saves
 
   # seeding is best-effort and must never block a launch
   install_splore_cart

@@ -89,7 +89,9 @@ MinUI Power Control does not support `h700`, so the power button keeps its defau
 
 ### In-Game saves
 
-Any game that creates in-game saves will save these to `/.userdata/shared/Pico-8-native` on your SD Card. The pak fills that path into the PICO-8 configuration each time a game starts, so it is correct whatever your device mounts the SD card as.
+Any game that creates in-game saves will save these to `/Saves/PICO` on your SD card, the same folder MinUI and NextUI keep the saves for their built-in emulators in. The pak fills that path into the PICO-8 configuration each time a game starts, so it is correct whatever your device mounts the SD card as.
+
+Earlier versions of this pak saved to `/.userdata/shared/Pico-8-native/cdata`. The first launch after upgrading moves those saves into `/Saves/PICO` and records that it has done so by writing a file named `saves-migrated` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. A save whose name is already present in `/Saves/PICO` is left in the old folder rather than overwriting the copy there, and the log names it.
 
 ### Splore
 
