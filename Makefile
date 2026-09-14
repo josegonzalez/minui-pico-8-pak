@@ -6,13 +6,19 @@ PUSH_SDCARD_PATH ?= /mnt/SDCARD
 PUSH_PLATFORM ?= tg5040
 
 ARCHITECTURES := arm64
-PLATFORMS := rg35xxplus tg5040 tg5050
-MINUI_PRESENTER_VERSION := 0.12.0
-MINUI_POWER_CONTROL_VERSION := 1.2.0
+PLATFORMS := h700 rg35xxplus tg5040 tg5050
+MINUI_PRESENTER_VERSION := 0.13.0
+MINUI_POWER_CONTROL_VERSION := 3.0.0
 
-SHELL_FILES := launch.sh bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
+# minui-presenter asset names stopped matching platform names in 0.13.0: h700
+# and tg5050 are published only as NextUI builds, while tg5040 and rg35xxplus
+# keep their plain MinUI ones. A platform with no entry here uses its own name.
+MINUI_PRESENTER_ASSET_h700 := h700-nextui
+MINUI_PRESENTER_ASSET_tg5050 := tg5050-nextui
 
-.PHONY: clean build release bump-version push lint format test
+SHELL_FILES := launch.sh bin/h700/wget bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
+
+.PHONY: clean build release bump-version push lint format test print-%
 
 clean:
 	rm -f bin/*/minui-presenter || true
@@ -22,7 +28,7 @@ build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) bin/minu
 
 bin/%/minui-presenter:
 	mkdir -p bin/$*
-	curl -f -o bin/$*/minui-presenter -sSL https://github.com/josegonzalez/minui-presenter/releases/download/$(MINUI_PRESENTER_VERSION)/minui-presenter-$*
+	curl -f -o bin/$*/minui-presenter -sSL https://github.com/josegonzalez/minui-presenter/releases/download/$(MINUI_PRESENTER_VERSION)/minui-presenter-$(or $(MINUI_PRESENTER_ASSET_$*),$*)
 	chmod +x bin/$*/minui-presenter
 
 bin/minui-power-control:
@@ -51,6 +57,10 @@ format:
 
 test:
 	bats test
+
+# lets test/makefile.bats read the build wiring without a toolchain
+print-%:
+	@echo "$*=$($*)"
 
 push: release
 	rm -rf "dist/$(PAK_NAME).pak"

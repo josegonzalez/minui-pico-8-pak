@@ -253,16 +253,78 @@ setup() {
   [ "$output" = "pico8_64" ]
 }
 
-@test "get_controller_file returns the cube mapping" {
-  PLATFORM=rg35xxplus DEVICE=cube run get_controller_file
-  [ "$output" = "rg35xxplus-cube.txt" ]
+@test "get_controller_file returns one mapping for every h700 device" {
+  for device in '' rg28xx rg34xx rg34xxsp rg35xxh rg35xxplus rg35xxpro \
+    rg35xxsp rg40xxh rg40xxv rgcubexx rgsp; do
+    PLATFORM=h700 DEVICE="$device" run get_controller_file
+    [ "$output" = "h700.txt" ]
+  done
+}
+
+@test "get_controller_file returns the same mapping on minui h700 hardware" {
+  # MinUI reports DEVICE=hdmi whenever a cable is attached, which hides the
+  # model, so the mapping must not depend on it
+  for device in '' cube wide hdmi; do
+    PLATFORM=rg35xxplus DEVICE="$device" run get_controller_file
+    [ "$output" = "h700.txt" ]
+  done
 }
 
 @test "get_controller_file falls back to the platform mapping" {
-  PLATFORM=rg35xxplus DEVICE= run get_controller_file
-  [ "$output" = "rg35xxplus.txt" ]
   PLATFORM=tg5040 run get_controller_file
   [ "$output" = "tg5040.txt" ]
+  PLATFORM=tg5050 run get_controller_file
+  [ "$output" = "tg5050.txt" ]
+}
+
+# controllers/rg35xxplus.txt was named by get_controller_file for months without
+# ever existing, so the cp in launch_cart failed and the pad went unmapped.
+@test "every controller file get_controller_file can name exists" {
+  for platform in $SUPPORTED_PLATFORMS; do
+    for device in '' cube wide hdmi brick smartpro rg28xx rg34xx rg34xxsp \
+      rg35xxh rg35xxplus rg35xxpro rg35xxsp rg40xxh rg40xxv rgcubexx rgsp; do
+      PLATFORM="$platform" DEVICE="$device"
+      [ -f "$REPO_ROOT/controllers/$(get_controller_file)" ]
+    done
+  done
+}
+
+# config/tg5050.txt was missing for that platform's first release
+@test "every supported platform ships a config and a wget shim" {
+  for platform in $SUPPORTED_PLATFORMS; do
+    [ -f "$REPO_ROOT/config/$platform.txt" ]
+    [ -x "$REPO_ROOT/bin/$platform/wget" ]
+  done
+}
+
+@test "the h700 mapping carries both pads with self consistent crcs" {
+  grep -q "^1900d60b010000000100000000010000,Deeplay-keys,.*crc:0bd6," \
+    "$REPO_ROOT/controllers/h700.txt"
+  grep -q "^19002cb4010000000100000000010000,Anbernic-RGCubeXX,.*crc:b42c," \
+    "$REPO_ROOT/controllers/h700.txt"
+}
+
+@test "platform_in_list matches whole names only" {
+  for platform in $SUPPORTED_PLATFORMS; do
+    run platform_in_list "$platform" "$SUPPORTED_PLATFORMS"
+    [ "$status" -eq 0 ]
+  done
+
+  for platform in rg35xx tg50 h70 700 plus tg3040 ''; do
+    run platform_in_list "$platform" "$SUPPORTED_PLATFORMS"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "verify_platform accepts h700" {
+  PLATFORM=h700 run verify_platform
+  [ "$status" -eq 0 ]
+}
+
+@test "verify_platform rejects a platform that only looks supported" {
+  PLATFORM=rg35xx run verify_platform
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"is not a supported platform"* ]]
 }
 
 @test "launch.sh exits non-zero for an unsupported filetype" {
@@ -316,6 +378,110 @@ setup() {
   [ -f "$rom_folder/.media/Splore.png" ]
   [ -f "$USERDATA_PATH/Pico-8-native/splore-installed" ]
   grep -q "is not a supported filetype" "$LOGS_PATH/PICO.txt"
+}
+
+@test "get_pico_bin returns the 64 bit binary on h700" {
+  PLATFORM=h700 architecture=arm64 run get_pico_bin
+  [ "$output" = "pico8_64" ]
+}
+
+@test "set_cpu_speed writes the frequency on the platforms that use it" {
+  for platform in rg35xxplus tg5040; do
+    stub_cpufreq
+    PLATFORM="$platform" set_cpu_speed
+    [ "$(cat "$PICO_PAK_CPUFREQ_DIR/scaling_setspeed")" = "1600000" ]
+  done
+}
+
+@test "set_cpu_speed leaves the trimui and nextui governors alone" {
+  for platform in h700 tg5050; do
+    stub_cpufreq
+    PLATFORM="$platform" set_cpu_speed
+    [ ! -s "$PICO_PAK_CPUFREQ_DIR/scaling_setspeed" ]
+  done
+}
+
+@test "set_cpu_speed tolerates a device with no cpufreq node" {
+  PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" PLATFORM=tg5040 run set_cpu_speed
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "get_screen_resolution prefers fbset when the device has one" {
+  stub_fbset 1024 768
+
+  PLATFORM=h700 DEVICE=rgcubexx run get_screen_resolution
+  [ "$output" = "1024 768" ]
+}
+
+@test "get_screen_resolution knows the h700 panels without fbset" {
+  PLATFORM=h700 DEVICE=rgcubexx run get_screen_resolution
+  [ "$output" = "720 720" ]
+
+  for device in rg34xx rg34xxsp rgsp; do
+    PLATFORM=h700 DEVICE="$device" run get_screen_resolution
+    [ "$output" = "720 480" ]
+  done
+
+  # the rg28xx panel is portrait but SDL_ROTATION presents it as landscape
+  for device in '' rg28xx rg35xxplus rg35xxh rg35xxpro rg35xxsp rg40xxh rg40xxv; do
+    PLATFORM=h700 DEVICE="$device" run get_screen_resolution
+    [ "$output" = "640 480" ]
+  done
+}
+
+@test "get_screen_resolution reports nothing without fbset or a known panel" {
+  PLATFORM=tg5040 run get_screen_resolution
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "install_config points cart saves at this device's sd card" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  grep -q "^cdata_path $HOME/cdata/$" "$HOME/config.txt"
+  grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
+  ! grep -q "/mnt/" "$HOME/config.txt"
+}
+
+@test "install_config keeps every other key from the template" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  [ "$(wc -l <"$HOME/config.txt")" -eq "$(wc -l <"$REPO_ROOT/config/tg5040.txt")" ]
+  grep -q "^use_wget 0 " "$HOME/config.txt"
+  grep -q "^transform_screen 0$" "$HOME/config.txt"
+}
+
+@test "install_config rewrites the same keys on every supported platform" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  for platform in $SUPPORTED_PLATFORMS; do
+    PLATFORM="$platform" install_config "$rom_folder"
+    grep -q "^cdata_path $HOME/cdata/$" "$HOME/config.txt"
+    grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
+  done
+}
+
+@test "the h700 config matches the tg5040 one it was taken from" {
+  cmp -s "$REPO_ROOT/config/h700.txt" "$REPO_ROOT/config/tg5040.txt"
+}
+
+@test "start_power_control skips the platforms upstream does not support" {
+  PLATFORM=h700 run start_power_control
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"does not support h700"* ]]
+}
+
+@test "start_power_control runs on the platforms upstream supports" {
+  for platform in rg35xxplus tg5040 tg5050; do
+    PLATFORM="$platform" run start_power_control
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+  done
 }
 
 @test "get_screen_mode defaults to the documented standard mode" {
@@ -710,4 +876,41 @@ setup() {
   [ "$status" -eq 0 ]
   grep -q "No network connection was detected" "$LOGS_PATH/PICO.txt"
   grep -q -- "-splore" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh runs a cart on h700 without starting power control" {
+  pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  mkdir -p "$pak_dir/pico8"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+  ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
+  ln -s "$REPO_ROOT/config" "$pak_dir/config"
+  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
+  chmod +x "$pak_dir/pico8/pico8_64"
+  : >"$pak_dir/pico8/pico8.dat"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=h700 DEVICE=rg35xxplus \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  # set -x quotes the cart path because the roms folder name has a space in it
+  grep -q -- "-run" "$LOGS_PATH/PICO.txt"
+  grep -q "Freecell.p8" "$LOGS_PATH/PICO.txt"
+  grep -q "does not support h700" "$LOGS_PATH/PICO.txt"
+  ! grep -q "minui-power-control pico8_64" "$LOGS_PATH/PICO.txt"
+
+  # the h700 mapping and a config naming this device's card both land in $HOME
+  cmp -s "$REPO_ROOT/controllers/h700.txt" "$SHARED_USERDATA_PATH/Pico-8-native/sdl_controllers.txt"
+  grep -q "^cdata_path $SHARED_USERDATA_PATH/Pico-8-native/cdata/$" \
+    "$SHARED_USERDATA_PATH/Pico-8-native/config.txt"
 }

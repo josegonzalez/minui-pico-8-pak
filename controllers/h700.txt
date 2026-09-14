@@ -1,0 +1,12 @@
+// SDL2 game controller mappings for the Allwinner H700 handhelds.
+//
+// The same silicon reports the same joystick GUIDs under MinUI (the rg35xxplus
+// platform) and NextUI (the h700 platform), so both share this file and SDL
+// picks the line whose GUID matches the pad. DEVICE is deliberately not used to
+// choose between them: MinUI reports DEVICE=hdmi whenever a cable is attached,
+// and NextUI falls back to DEVICE=rg35xxplus for any model it does not know.
+//
+// Bytes 3 and 4 of each GUID are a CRC16 of the name the kernel reports, and a
+// crc: field overrides them, so each line's crc: has to match its own GUID.
+1900d60b010000000100000000010000,Deeplay-keys,a:b0,b:b1,x:b3,y:b2,back:b6,start:b7,leftshoulder:b4,rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,rightx:a0,righty:a1,lefttrigger:b10,righttrigger:b11,crc:0bd6,platform:Linux
+19002cb4010000000100000000010000,Anbernic-RGCubeXX,a:b0,b:b1,x:b3,y:b2,back:b6,start:b7,leftshoulder:b4,rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,rightx:a0,righty:a1,lefttrigger:b10,righttrigger:b11,crc:b42c,platform:Linux

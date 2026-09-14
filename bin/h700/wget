@@ -1,0 +1,8 @@
+#!/bin/sh
+
+# NextUI ships a statically linked curl and no wget, so shim one onto it.
+#
+# pico-8 dlopens libcurl and falls back to `wget "$url" -q -O "$path"` when it
+# cannot find one, which is the same shape the pak's own connectivity probe
+# uses, so only $1 and $4 are ever read.
+curl -s -L -k "$1" -q -o "$4"

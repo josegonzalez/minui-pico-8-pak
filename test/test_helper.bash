@@ -169,3 +169,31 @@ make_bios() {
     : >"$SDCARD_PATH/Bios/PICO/$bios"
   done
 }
+
+# Creates a writable fake cpufreq policy directory and points launch.sh at it.
+# scaling_setspeed starts empty so a test can tell "not written" from "written".
+stub_cpufreq() {
+  PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/cpufreq"
+  export PICO_PAK_CPUFREQ_DIR
+
+  mkdir -p "$PICO_PAK_CPUFREQ_DIR"
+  : >"$PICO_PAK_CPUFREQ_DIR/scaling_setspeed"
+}
+
+# Puts an fbset reporting the given geometry on PATH, so the panel lookup can be
+# exercised on hosts that have no framebuffer. Defaults to the tg5040 panel.
+#
+# Never remove it mid-test: dropping a command from PATH leaves a stale entry in
+# the shell's command hash table, so `command -v` keeps succeeding.
+stub_fbset() {
+  local width="${1:-1280}"
+  local height="${2:-720}"
+
+  cat >"$STUB_BIN/fbset" <<STUB
+#!/bin/sh
+echo "mode \"${width}x${height}\""
+echo "    geometry $width $height $width $((height * 2)) 32"
+echo "endmode"
+STUB
+  chmod +x "$STUB_BIN/fbset"
+}

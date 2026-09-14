@@ -17,6 +17,19 @@ export XDG_DATA_HOME="$HOME/data"
 export GAMESETTINGS_DIR="$HOME/game-settings/$ROM_NAME"
 export SCREENSHOT_DIR="$SDCARD_PATH/Screenshots"
 
+# The platforms this pak supports. test/makefile.bats asserts this agrees with
+# pak.json and with the Makefile.
+SUPPORTED_PLATFORMS="h700 rg35xxplus tg5040 tg5050"
+
+# minui-power-control refuses to start on a platform its own launcher does not
+# list, so calling it elsewhere only logs noise. Keep this in sync with the
+# release the Makefile pins.
+POWER_CONTROL_PLATFORMS="miyoomini my355 rg35xxplus tg5040 tg5050"
+
+# scaling_setspeed only takes effect under the userspace governor and the value
+# is a per SoC frequency, so the write is opt in per platform.
+CPU_SETSPEED_PLATFORMS="rg35xxplus tg5040"
+
 copy_carts() {
   ROM_FOLDER="$1"
   [ ! -f "$USERDATA_PATH/Pico-8-native/copy-carts" ] && return
@@ -131,19 +144,88 @@ get_pico_bin() {
   echo "$pico_bin"
 }
 
+# Whole word match against a space separated list. The platform checks used to
+# be `echo "$list" | grep -q "$PLATFORM"`, which also accepted every substring,
+# so rg35xx and tg50 both passed as supported platforms.
+platform_in_list() {
+  case " $2 " in
+  *" $1 "*)
+    return 0
+    ;;
+  esac
+
+  return 1
+}
+
 get_controller_file() {
-  if [ "$PLATFORM" = "rg35xxplus" ]; then
+  case "$PLATFORM" in
+  h700 | rg35xxplus)
+    # both platforms are Allwinner H700 hardware and report the same joystick
+    # GUIDs, so one file holds every mapping and SDL picks by GUID
+    echo "h700.txt"
+    ;;
+  *)
+    echo "$PLATFORM.txt"
+    ;;
+  esac
+}
+
+# the sysfs directory is overridable so the test suite can observe the write
+set_cpu_speed() {
+  cpufreq_dir="${PICO_PAK_CPUFREQ_DIR:-/sys/devices/system/cpu/cpu0/cpufreq}"
+
+  if ! platform_in_list "$PLATFORM" "$CPU_SETSPEED_PLATFORMS"; then
+    return 0
+  fi
+
+  if [ ! -w "$cpufreq_dir/scaling_setspeed" ]; then
+    return 0
+  fi
+
+  echo 1600000 >"$cpufreq_dir/scaling_setspeed"
+}
+
+get_screen_resolution() {
+  if command -v fbset >/dev/null 2>&1; then
+    fbset | grep 'geometry' | awk '{print $2,$3}'
+    return 0
+  fi
+
+  # NextUI ships no fbset. DEVICE is a poor way to name the pad but it is
+  # exactly what NextUI exports to describe the panel. The RG28XX panel is
+  # portrait and SDL_ROTATION presents it to applications as 640x480 landscape.
+  if [ "$PLATFORM" = "h700" ]; then
     case "$DEVICE" in
-    "cube")
-      echo "rg35xxplus-cube.txt"
+    rgcubexx)
+      echo "720 720"
+      ;;
+    rg34xx | rg34xxsp | rgsp)
+      echo "720 480"
       ;;
     *)
-      echo "rg35xxplus.txt"
+      echo "640 480"
       ;;
     esac
-  else
-    echo "$PLATFORM.txt"
   fi
+}
+
+# config.txt has no command line equivalent for cdata_path, and pico-8 writes
+# cart saves there, so it has to name this device's SD card rather than the
+# mount the checked in template happened to be captured on. root_path is
+# rewritten alongside it so the file agrees with the -root_path already passed
+# on the command line.
+install_config() {
+  rom_folder="$1"
+
+  # ENVIRON rather than awk -v, which would process backslash escapes in a path
+  PICO_CDATA_PATH="$HOME/cdata/" PICO_ROOT_PATH="$rom_folder/" awk '
+    BEGIN {
+      cdata = ENVIRON["PICO_CDATA_PATH"]
+      root = ENVIRON["PICO_ROOT_PATH"]
+    }
+    /^cdata_path / { print "cdata_path " cdata; next }
+    /^root_path / { print "root_path " root; next }
+    { print }' "$PAK_DIR/config/$PLATFORM.txt" >"$HOME/config.txt"
 }
 
 get_network_probe_file() {
@@ -260,28 +342,29 @@ install_splore_cart() {
 
 launch_cart() {
   ROM_PATH="$1"
-  cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
-  cp -f "$PAK_DIR/config/$PLATFORM.txt" "$HOME/config.txt"
-
-  if [ "$PLATFORM" != "tg5050" ]; then
-    echo 1600000 >/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed
-  fi
-
-  pico_bin="$(get_pico_bin)"
-
   ROM_FOLDER="$(dirname "$ROM_PATH")"
   ROM_NAME="$(basename "$ROM_PATH")"
+
+  cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
+  install_config "$ROM_FOLDER"
+  set_cpu_speed
+
+  pico_bin="$(get_pico_bin)"
 
   # only set LD_LIBRARY_PATH for pico8
   export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture:$LD_LIBRARY_PATH"
 
   draw_rect=""
   screen_mode="$(get_screen_mode)"
-  if [ "$screen_mode" = "stretched" ] && command -v fbset >/dev/null 2>&1; then
-    resolution="$(fbset | grep 'geometry' | awk '{print $2,$3}')"
-    width="$(echo "$resolution" | awk '{print $1}')"
-    height="$(echo "$resolution" | awk '{print $2}')"
-    draw_rect="-draw_rect 0,0,${width},${height}"
+  if [ "$screen_mode" = "stretched" ]; then
+    resolution="$(get_screen_resolution)"
+    # a platform with neither fbset nor a known panel falls back to unstretched
+    # rather than passing pico-8 a draw rect with empty dimensions
+    if [ -n "$resolution" ]; then
+      width="$(echo "$resolution" | awk '{print $1}')"
+      height="$(echo "$resolution" | awk '{print $2}')"
+      draw_rect="-draw_rect 0,0,${width},${height}"
+    fi
   fi
 
   if is_splore_cart "$ROM_NAME"; then
@@ -310,8 +393,7 @@ launch_cart() {
 }
 
 verify_platform() {
-  allowed_platforms="rg35xxplus tg5040 tg5050"
-  if ! echo "$allowed_platforms" | grep -q "$PLATFORM"; then
+  if ! platform_in_list "$PLATFORM" "$SUPPORTED_PLATFORMS"; then
     show_message "$PLATFORM is not a supported platform" 2
     return 1
   fi
@@ -407,6 +489,14 @@ install_pico_files() {
     show_message "Missing $pico_bin or pico8.dat. Please copy them to the Bios/PICO directory at the root of your SD card." 4
     return 1
   fi
+
+  # pico-8 is supplied by the user and links against whatever the device has, so
+  # record that in the log: a library it cannot find is otherwise a silent
+  # failure to launch that no bug report can describe
+  if command -v ldd >/dev/null 2>&1; then
+    ldd "$EMU_DIR/$pico_bin" || true
+  fi
+
   killall minui-presenter >/dev/null 2>&1 || true
 }
 
@@ -441,6 +531,15 @@ show_confirmation() {
     --confirm-text "$confirm_text" \
     --message "$message" \
     --timeout 0
+}
+
+start_power_control() {
+  if ! platform_in_list "$PLATFORM" "$POWER_CONTROL_PLATFORMS"; then
+    echo "minui-power-control does not support $PLATFORM, deep sleep is unavailable" 1>&2
+    return 0
+  fi
+
+  minui-power-control "$(get_pico_bin)" &
 }
 
 cleanup() {
@@ -490,7 +589,7 @@ main() {
     return 1
   fi
 
-  minui-power-control "$(get_pico_bin)" &
+  start_power_control
 
   if ! launch_cart "$ROM_PATH"; then
     return 1

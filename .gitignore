@@ -4,6 +4,7 @@ bin/*
 res/fonts/*
 !res/fonts/.gitkeep
 
+!bin/h700/wget
 !bin/tg5040/wget
 !bin/tg5040/wget-original
 !bin/rg35xxplus/curl
