@@ -12,5 +12,5 @@
     "tg5050"
   ],
   "launch": "launch.sh",
-  "version": "0.8.1"
+  "version": "0.8.2"
 }
