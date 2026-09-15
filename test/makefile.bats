@@ -81,3 +81,22 @@ pak_platforms() {
   [ "$output" = "3.0.0" ]
   [ "$POWER_CONTROL_PLATFORMS" = "miyoomini my355 rg35xxplus tg5040 tg5050" ]
 }
+
+# launch.sh derives the architecture from uname -m and puts bin/$architecture on
+# PATH, so anything shipped per architecture has to cover both of its answers.
+@test "the architecture list matches what launch.sh can detect" {
+  mk ARCHITECTURES
+  [ "$output" = "arm arm64" ]
+}
+
+@test "every architecture's cart title extractor is injected into the release archive" {
+  mk ARCHITECTURES
+  for architecture in $output; do
+    grep -qx "bin/$architecture/pico8-data-extractor" "$REPO_ROOT/.gitarchiveinclude"
+  done
+}
+
+@test "the cart title extractor version is pinned" {
+  mk PICO8_DATA_EXTRACTOR_VERSION
+  [ "$output" = "0.1.0" ]
+}

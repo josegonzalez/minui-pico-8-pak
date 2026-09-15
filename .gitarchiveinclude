@@ -1,3 +1,5 @@
+bin/arm/pico8-data-extractor
+bin/arm64/pico8-data-extractor
 bin/h700/minui-presenter
 bin/minui-power-control
 bin/rg35xxplus/minui-presenter

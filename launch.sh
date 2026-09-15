@@ -30,99 +30,250 @@ POWER_CONTROL_PLATFORMS="miyoomini my355 rg35xxplus tg5040 tg5050"
 # is a per SoC frequency, so the write is opt in per platform.
 CPU_SETSPEED_PLATFORMS="rg35xxplus tg5040"
 
-copy_carts() {
-  ROM_FOLDER="$1"
-  [ ! -f "$USERDATA_PATH/Pico-8-native/copy-carts" ] && return
+titlecase() {
+  input="$1"
+  exceptions="a an the and but or nor for so yet at by in of on to up off out over with as"
+  acronyms="Pico-8=PICO-8 Rpg=RPG Ai=AI Ui=UI Os=OS Cpu=CPU Tmnt=TMNT"
 
-  FAV_FILE="$HOME/favourites.txt"
-  MAP_FILE="$ROM_FOLDER/map.txt"
-  MEDIA_FOLDER="$ROM_FOLDER/.media"
+  echo "$input" | awk -v IGNORECASE=1 -v exceptions="$exceptions" -v acronyms="$acronyms" '
+	BEGIN {
+		split(exceptions, exlist)
+		for (e in exlist) exc[exlist[e]] = 1
 
-  [ ! -f "$FAV_FILE" ] && return
+		split(acronyms, acrlist)
+		for (a in acrlist) {
+			n = split(acrlist[a], kv, "=")
+			acr[tolower(kv[1])] = kv[2]
+		}
+	}
+	{
+		gsub("_", " ")
+		gsub("-", " - ")
 
-  mkdir -p "$MEDIA_FOLDER"
-  true >"$MAP_FILE"
-  tr -d '\r' <"$FAV_FILE" >"$FAV_FILE.tmp" && mv "$FAV_FILE.tmp" "$FAV_FILE"
+		n = split($0, words, " ")
+		for (i = 1; i <= n; i++) {
+			word = words[i]
+			orig = word
+			trailing = ""
 
-  titlecase() {
-    input="$1"
-    exceptions="a an the and but or nor for so yet at by in of on to up off out over with as"
-    acronyms="Pico-8=PICO-8 Rpg=RPG Ai=AI Ui=UI Os=OS Cpu=CPU Tmnt=TMNT"
+			# Capture trailing punctuation
+			if (match(word, /[^[:alnum:]]+$/)) {
+				trailing = substr(word, RSTART)
+				orig = substr(word, 1, RSTART - 1)
+			}
 
-    echo "$input" | awk -v IGNORECASE=1 -v exceptions="$exceptions" -v acronyms="$acronyms" '
-		BEGIN {
-			split(exceptions, exlist)
-			for (e in exlist) exc[exlist[e]] = 1
+			lw = tolower(orig)
+			prev_colon = (i > 1 && match(words[i - 1], /:$/))
 
-			split(acronyms, acrlist)
-			for (a in acrlist) {
-				n = split(acrlist[a], kv, "=")
-				acr[tolower(kv[1])] = kv[2]
+			if (acr[lw]) {
+				words[i] = acr[lw] trailing
+			} else if (i == 1 || prev_colon || !(lw in exc)) {
+				words[i] = toupper(substr(orig,1,1)) substr(orig,2) trailing
+			} else {
+				words[i] = lw trailing
 			}
 		}
-		{
-			gsub("_", " ")
-			gsub("-", " - ")
 
-			n = split($0, words, " ")
-			for (i = 1; i <= n; i++) {
-				word = words[i]
-				orig = word
-				trailing = ""
+		out = words[1]
+		for (i = 2; i <= n; i++) out = out " " words[i]
+		gsub(" - ", "-", out)
+		print out
+	}'
+}
 
-				# Capture trailing punctuation
-				if (match(word, /[^[:alnum:]]+$/)) {
-					trailing = substr(word, RSTART)
-					orig = substr(word, 1, RSTART - 1)
-				}
+# copy_carts builds its cart list and the replacement map.txt outside the roms
+# folder so a half-written file is never visible to MinUI. cleanup removes the
+# folder, and copy_carts rebuilds it, so neither a crash nor a stale run leaks.
+get_copy_carts_tmp_dir() {
+  echo "/tmp/$PAK_NAME-copy-carts"
+}
 
-				lw = tolower(orig)
-				prev_colon = (i > 1 && match(words[i - 1], /:$/))
+# pico-8 is started with -home "$HOME", which makes that folder the data folder
+# itself. A build that ignores the flag nests everything under .lexaloffle/pico-8
+# instead - config/zero28.txt was captured from a run like that - so both layouts
+# are searched rather than one being assumed.
+list_bbs_carts() {
+  for bbs_root in "$HOME/bbs" "$HOME/.lexaloffle/pico-8/bbs"; do
+    [ -d "$bbs_root" ] || continue
 
-				if (acr[lw]) {
-					words[i] = acr[lw] trailing
-				} else if (i == 1 || prev_colon || !(lw in exc)) {
-					words[i] = toupper(substr(orig,1,1)) substr(orig,2) trailing
-				} else {
-					words[i] = lw trailing
-				}
-			}
+    # downloads land in bbs/carts, and pico-8 shards numerically named ones into
+    # bbs/1, bbs/4 and so on, so one level of nesting is covered as well
+    for bbs_cart in "$bbs_root"/*.p8.png "$bbs_root"/*/*.p8.png; do
+      [ -f "$bbs_cart" ] || continue
 
-			out = words[1]
-			for (i = 2; i <= n; i++) out = out " " words[i]
-			gsub(" - ", "-", out)
-			print out
-		}'
-  }
+      # splore writes partial downloads and their sidecars under a temp- prefix
+      case "${bbs_cart##*/}" in
+      temp-*) continue ;;
+      esac
+
+      echo "$bbs_cart"
+    done
+  done
+}
+
+# favourites.txt has changed shape across pico-8 releases - some builds write a
+# bare cart name, others a path such as bbs/1/15133.p8.png - so it is read as a
+# set of cart names rather than by field position, which is what the parser this
+# replaced got wrong.
+list_favourite_names() {
+  tr -d '\r' <"$1" |
+    tr '|' '\n' |
+    sed -e 's#.*/##' -e 's#\.p8\.png$##' -e 's#\.p8$##' -e '/^[[:space:]]*$/d'
+}
+
+# A BBS cart is named for its id or its slug, so a readable name has to come out
+# of the cart itself. pico8-data-extractor prints the cart's lua, and the BBS
+# convention puts the title on the first line as a comment, the same rule
+# parsepico applies for its cartName. Titles are often wrapped in decoration -
+# celeste ships as "-- ~celeste~" - so that is trimmed off.
+get_cart_title() {
+  cart_file="$1"
+
+  if ! command -v pico8-data-extractor >/dev/null 2>&1; then
+    return 1
+  fi
+
+  cart_title="$(pico8-data-extractor "$cart_file" | awk '/^-- /{sub(/^-- /, ""); print; exit}')"
+  cart_title="$(printf '%s' "$cart_title" | sed -e 's/^[~*=+[:space:]]*//' -e 's/[~*=+[:space:]]*$//')"
+
+  if [ -z "$cart_title" ]; then
+    return 1
+  fi
+
+  printf '%s\n' "$cart_title"
+}
+
+copy_carts() {
+  ROM_FOLDER="$1"
+
+  # the marker was only ever read from the platform userdata folder, but every
+  # other piece of pico-8 data lives in the shared one, so both are accepted
+  copy_marker=""
+  favourites_only=false
+  for marker_dir in "$USERDATA_PATH/Pico-8-native" "$SHARED_USERDATA_PATH/Pico-8-native"; do
+    if [ -f "$marker_dir/copy-carts" ]; then
+      copy_marker="$marker_dir/copy-carts"
+    fi
+
+    # the favourites marker turns the copy on by itself, so creating only that
+    # file is not another silent no-op
+    if [ -f "$marker_dir/copy-carts-favourites" ]; then
+      copy_marker="$marker_dir/copy-carts-favourites"
+      favourites_only=true
+    fi
+  done
+
+  if [ -z "$copy_marker" ]; then
+    echo "No copy-carts marker in $USERDATA_PATH/Pico-8-native or $SHARED_USERDATA_PATH/Pico-8-native, not copying carts" 1>&2
+    return 0
+  fi
+
+  # scratch is rebuilt from empty so a run that died before its cleanup cannot
+  # feed stale cart names into this one
+  COPY_CARTS_TMP="$(get_copy_carts_tmp_dir)"
+  rm -rf "$COPY_CARTS_TMP"
+  mkdir -p "$COPY_CARTS_TMP"
+
+  CARTS_FILE="$COPY_CARTS_TMP/carts.txt"
+  COPIED_FILE="$COPY_CARTS_TMP/copied.txt"
+  KEPT_FILE="$COPY_CARTS_TMP/kept.txt"
+  FAV_FILE_NAMES="$COPY_CARTS_TMP/favourites.txt"
+  MAP_FILE="$ROM_FOLDER/map.txt"
+  MEDIA_FOLDER="$ROM_FOLDER/.media"
+  RES_FOLDER="$ROM_FOLDER/.res"
+
+  # the same cart can sit under both bbs roots, and deduplicating the list here
+  # keeps the loop below from spawning a lookup per cart to notice it
+  list_bbs_carts | awk -F/ '!seen[$NF]++' >"$CARTS_FILE"
+  if [ ! -s "$CARTS_FILE" ]; then
+    echo "No downloaded carts under $HOME/bbs, nothing to copy" 1>&2
+    rm -rf "$COPY_CARTS_TMP"
+    return 0
+  fi
+
+  if [ "$favourites_only" = "true" ]; then
+    FAV_FILE="$HOME/favourites.txt"
+    if [ ! -f "$FAV_FILE" ]; then
+      FAV_FILE="$HOME/.lexaloffle/pico-8/favourites.txt"
+    fi
+
+    if [ ! -f "$FAV_FILE" ]; then
+      echo "$copy_marker asks for favourites only but no favourites.txt exists, nothing to copy" 1>&2
+      rm -rf "$COPY_CARTS_TMP"
+      return 0
+    fi
+
+    # read into scratch rather than rewriting the file pico-8 owns, which is
+    # what the line stripping carriage returns here used to do
+    list_favourite_names "$FAV_FILE" >"$FAV_FILE_NAMES"
+  fi
+
+  true >"$COPIED_FILE"
 
   # read from the file rather than a pipe so the loop does not run in a subshell
-  while IFS='|' read -r _ filename_raw _ _ _ _ full_title; do
-    filename_raw="${filename_raw#"${filename_raw%%[![:space:]]*}"}"
-    filename_raw="${filename_raw%"${filename_raw##*[![:space:]]}"}"
+  while IFS= read -r bbs_cart; do
+    cart_name="${bbs_cart##*/}"
 
-    if [ -z "$filename_raw" ]; then
-      continue
+    if [ "$favourites_only" = "true" ]; then
+      if ! grep -Fxq "${cart_name%.p8.png}" "$FAV_FILE_NAMES"; then
+        continue
+      fi
     fi
 
-    full_title="${full_title#"${full_title%%[![:space:]]*}"}"
-    full_title="${full_title%"${full_title##*[![:space:]]}"}"
-
-    full_title="$(titlecase "$full_title")"
-    filename_png="$filename_raw.p8.png"
-
-    case "$filename_raw" in
-    [0-9]*) CART_PATH="$HOME/bbs/$(printf "%s" "$filename_raw" | cut -c1)/$filename_png" ;;
-    *) CART_PATH="$HOME/bbs/carts/$filename_png" ;;
-    esac
-
-    if [ -f "$CART_PATH" ]; then
-      [ ! -f "$ROM_FOLDER/$filename_png" ] && cp -f "$CART_PATH" "$ROM_FOLDER/$filename_png"
-      [ ! -f "$MEDIA_FOLDER/$filename_png" ] && cp -f "$CART_PATH" "$MEDIA_FOLDER/$filename_png"
-      printf "%s\t%s\n" "$filename_png" "$full_title" >>"$MAP_FILE"
+    # a row already in map.txt is both the name the user sees and the reason the
+    # extractor does not run again for a cart that was named on an earlier launch
+    cart_title=""
+    if [ -f "$MAP_FILE" ]; then
+      cart_title="$(awk -F'\t' -v name="$cart_name" '$1 == name { print $2; exit }' "$MAP_FILE")"
     fi
-  done <"$FAV_FILE"
+
+    if [ -z "$cart_title" ]; then
+      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="${cart_name%.p8.png}"
+      cart_title="$(titlecase "$cart_title")"
+    fi
+
+    # NextUI drops the cart's last extension and MinUI keeps the whole name, so
+    # the two artwork folders need different filenames for the same cart
+    media_name="${cart_name%.*}.png"
+    res_name="$cart_name.png"
+
+    mkdir -p "$MEDIA_FOLDER" "$RES_FOLDER"
+
+    if [ ! -f "$ROM_FOLDER/$cart_name" ]; then
+      cp -f "$bbs_cart" "$ROM_FOLDER/$cart_name"
+    fi
+    if [ ! -f "$MEDIA_FOLDER/$media_name" ]; then
+      cp -f "$bbs_cart" "$MEDIA_FOLDER/$media_name"
+    fi
+    if [ ! -f "$RES_FOLDER/$res_name" ]; then
+      cp -f "$bbs_cart" "$RES_FOLDER/$res_name"
+    fi
+
+    printf "%s\t%s\n" "$cart_name" "$cart_title" >>"$COPIED_FILE"
+  done <"$CARTS_FILE"
+
+  if [ ! -s "$COPIED_FILE" ]; then
+    echo "No downloaded carts matched, nothing to copy into $ROM_FOLDER" 1>&2
+    rm -rf "$COPY_CARTS_TMP"
+    return 0
+  fi
+
+  echo "Copied $(grep -c '' "$COPIED_FILE") carts into $ROM_FOLDER" 1>&2
+
+  # map.txt is the display name file MinUI and NextUI read, and a user may have
+  # written rows for carts of their own, so only the rows for the carts copied
+  # here are replaced instead of the whole file being truncated
+  if [ -f "$MAP_FILE" ]; then
+    awk -F'\t' 'NR == FNR { copied[$1] = 1; next } !($1 in copied)' \
+      "$COPIED_FILE" "$MAP_FILE" >"$KEPT_FILE"
+    cat "$KEPT_FILE" >>"$COPIED_FILE"
+  fi
+
+  cp -f "$COPIED_FILE" "$MAP_FILE"
+  rm -rf "$COPY_CARTS_TMP"
 
   sync
+  return 0
 }
 
 get_screen_mode() {
@@ -374,9 +525,15 @@ install_splore_cart() {
     fi
 
     seeded=true
-    mkdir -p "$rom_folder/.media"
+
+    # NextUI drops the cart's last extension and MinUI keeps the whole name, so
+    # the same artwork is written under both folders and both spellings
+    mkdir -p "$rom_folder/.media" "$rom_folder/.res"
     if [ ! -f "$rom_folder/.media/Splore.png" ]; then
       cp -f "$source_cart" "$rom_folder/.media/Splore.png"
+    fi
+    if [ ! -f "$rom_folder/.res/Splore.p8.png" ]; then
+      cp -f "$source_cart" "$rom_folder/.res/Splore.p8.png"
     fi
   done
 
@@ -593,6 +750,7 @@ start_power_control() {
 cleanup() {
   rm -f /tmp/stay_awake
   rm -f "$(get_network_probe_file)"
+  rm -rf "$(get_copy_carts_tmp_dir)"
   killall minui-presenter >/dev/null 2>&1 || true
 }
 

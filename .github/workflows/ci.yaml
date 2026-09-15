@@ -109,3 +109,12 @@ jobs:
             echo "Splore cart is missing from the artifact"
             exit 1
           fi
+
+      - name: Validate cart title extractor is bundled
+        run: |
+          for architecture in arm arm64; do
+            if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "bin/$architecture/pico8-data-extractor"; then
+              echo "pico8-data-extractor for $architecture is missing from the artifact"
+              exit 1
+            fi
+          done

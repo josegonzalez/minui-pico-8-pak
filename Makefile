@@ -5,10 +5,14 @@ PAK_FOLDER := $(shell echo $(PAK_TYPE) | cut -c1)$(shell echo $(PAK_TYPE) | tr '
 PUSH_SDCARD_PATH ?= /mnt/SDCARD
 PUSH_PLATFORM ?= tg5040
 
-ARCHITECTURES := arm64
+# the two values launch.sh derives from uname -m, and the two bin folders it
+# puts on PATH: a 32-bit device finding no binary of its own falls back to
+# naming copied carts after their files
+ARCHITECTURES := arm arm64
 PLATFORMS := h700 rg35xxplus tg5040 tg5050
 MINUI_PRESENTER_VERSION := 0.13.0
 MINUI_POWER_CONTROL_VERSION := 3.0.0
+PICO8_DATA_EXTRACTOR_VERSION := 0.1.0
 
 # minui-presenter asset names stopped matching platform names in 0.13.0: h700
 # and tg5050 are published only as NextUI builds, while tg5040 and rg35xxplus
@@ -22,9 +26,15 @@ SHELL_FILES := launch.sh bin/h700/wget bin/rg35xxplus/wget bin/tg5040/wget bin/t
 
 clean:
 	rm -f bin/*/minui-presenter || true
+	rm -f bin/*/pico8-data-extractor || true
 	rm -f bin/minui-power-control || true
 
-build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) bin/minui-power-control
+build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control
+
+bin/%/pico8-data-extractor:
+	mkdir -p bin/$*
+	curl -f -o bin/$*/pico8-data-extractor -sSL https://github.com/josegonzalez/pico8-data-extractor/releases/download/$(PICO8_DATA_EXTRACTOR_VERSION)/pico8-data-extractor-linux-$*
+	chmod +x bin/$*/pico8-data-extractor
 
 bin/%/minui-presenter:
 	mkdir -p bin/$*

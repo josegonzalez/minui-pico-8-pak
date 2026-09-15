@@ -101,7 +101,7 @@ Earlier versions of this pak saved to `/.userdata/shared/Pico-8-native/cdata`. T
 > [!NOTE]
 > On `h700`, NextUI ships `curl` but no `libcurl`, so PICO-8 falls back to downloading through a `wget` script the pak provides, which wraps that `curl`. Uploading a cart to the BBS is not supported through this route.
 
-The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png`, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI.
+The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png` for NextUI and `.res/Splore.p8.png` for MinUI, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI.
 
 Before Splore starts, the pak checks that the device has a network connection and then downloads a small file from `lexaloffle.com` to confirm the Splore servers are reachable. If either check fails, a message is displayed and waits for you to choose:
 
@@ -117,11 +117,21 @@ A roms folder that already contains a cart with `Splore` or `splore` in its name
 > [!NOTE]
 > The cart is created while a game is starting, so it will not appear until you leave the folder and enter it again.
 
-Carts downloaded via Splore will only be available via Splore. To copy them to the `/Roms/Pico-8 (PICO)` folder of your SD card, create a file named `copy-carts` in `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card.
-
 To exit Splore, choose a game and follow the normal process of exiting a game.
 
-You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png`. The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover you can copy over the generated artwork.
+You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png` and `.res/1) Splore.p8.png`. The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover you can copy over the generated artwork.
+
+### Copying Splore carts into your roms folder
+
+Carts downloaded via Splore are only available via Splore. To copy them into your roms folder as well, create a file named `copy-carts` in either the `/.userdata/$PLATFORM/Pico-8-native` or the `/.userdata/shared/Pico-8-native` folder on your SD card. The file can be empty, and it needs no extension - if your computer hides extensions, check on a terminal that it is not really named `copy-carts.txt`.
+
+Every cart Splore has downloaded is copied, whether or not you favourited it. To copy only your favourites, name the file `copy-carts-favourites` instead. Either file on its own turns the copying on.
+
+The copy runs when you exit a cart, into the roms folder that cart was launched from. Like the Splore cart itself, the new games will not appear until you leave the folder and enter it again.
+
+Carts keep the filename Splore gave them, which is usually an id or a slug. Their names in the game list come from a `map.txt` file the pak writes in the roms folder, taken from the title inside each cart. Rows in `map.txt` for your own games are left alone, and so is any name you edit yourself - the pak reuses what is already there rather than overwriting it. Cover art is written for both NextUI and MinUI, in the `.media` and `.res` folders.
+
+If nothing is copied, the log at `/.userdata/$PLATFORM/logs/PICO.txt` records the reason.
 
 ### Artwork
 

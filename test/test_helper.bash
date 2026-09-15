@@ -64,6 +64,38 @@ make_rom_folder() {
   printf '%s' "$path"
 }
 
+# Creates an empty downloaded cart at a path relative to the pico-8 home, so
+# tests can name the bbs layout they mean, and echoes its path.
+make_bbs_cart() {
+  local path="$HOME/$1"
+  mkdir -p "$(dirname "$path")"
+  : >"$path"
+  printf '%s' "$path"
+}
+
+# Stands in for pico8-data-extractor, which is not stubbed by default: the real
+# binary lands in bin/arm64 once `make build` has run, and launch.sh puts that
+# folder ahead of $STUB_BIN on PATH, so a test that wants a known answer has to
+# say so. Pass a title to print a cart whose first line is that title, or "fail"
+# to exit non-zero the way a cart that will not decode does. Every call is
+# logged to $EXTRACTOR_LOG so a test can assert the binary was never reached.
+stub_extractor() {
+  local title="$1"
+
+  EXTRACTOR_LOG="$BATS_TEST_TMPDIR/extractor.log"
+  export EXTRACTOR_LOG
+  : >"$EXTRACTOR_LOG"
+
+  if [ "$title" = "fail" ]; then
+    printf '#!/bin/sh\necho "$@" >>"%s"\nexit 1\n' "$EXTRACTOR_LOG" >"$STUB_BIN/pico8-data-extractor"
+  else
+    printf '#!/bin/sh\necho "$@" >>"%s"\nprintf -- "-- %s\\n-- by nobody\\n"\n' \
+      "$EXTRACTOR_LOG" "$title" >"$STUB_BIN/pico8-data-extractor"
+  fi
+
+  chmod +x "$STUB_BIN/pico8-data-extractor"
+}
+
 # Creates a fake sysfs network interface with the given operstate. The interface
 # defaults to wlan0. Call it on top of the empty tree setup_launch builds.
 stub_network() {

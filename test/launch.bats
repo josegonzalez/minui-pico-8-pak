@@ -154,6 +154,19 @@ setup() {
   cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.media/Splore.png"
 }
 
+# NextUI reads .media and MinUI reads .res, and the seeded cover used to be
+# written only for NextUI.
+@test "install_splore_cart seeds artwork for both MinUI and NextUI" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/.media/Splore.png" ]
+  [ -f "$rom_folder/.res/Splore.p8.png" ]
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.res/Splore.p8.png"
+}
+
 @test "install_splore_cart seeds every tagged roms folder" {
   first="$(make_rom_folder "Pico-8 (PICO)")"
   second="$(make_rom_folder "Extra Pico (PICO)")"
@@ -556,85 +569,287 @@ setup() {
   [ "$output" = "stretched" ]
 }
 
-@test "copy_carts does nothing without the copy-carts flag" {
+@test "titlecase capitalises words and keeps the stop words lowercase" {
+  run titlecase "the legend of the sword"
+  [ "$output" = "The Legend of the Sword" ]
+}
+
+# Underscores become word breaks and hyphens are kept. The acronym map is
+# consulted per word after that split, so only single word entries such as Rpg
+# can ever match - Pico-8 is split into "pico", "-" and "8" before the lookup
+# and stays as it reads.
+@test "titlecase splits on separators and expands a single word acronym" {
+  run titlecase "pico-8_rpg demo"
+  [ "$output" = "Pico-8 RPG Demo" ]
+}
+
+@test "copy_carts does nothing without a marker" {
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  mkdir -p "$HOME/bbs/carts"
-  : >"$HOME/bbs/carts/freecell.p8.png"
-  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
 
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
   [ ! -f "$rom_folder/freecell.p8.png" ]
   [ ! -f "$rom_folder/map.txt" ]
+  [[ "$output" == *"No copy-carts marker"* ]]
 }
 
-@test "copy_carts copies a favourited cart and titles it" {
+# The bug in issue #79: a cart downloaded through splore and never favourited
+# was skipped, and the whole function returned early when no favourites file
+# existed at all, which is the normal state for someone who just browses.
+@test "copy_carts copies a downloaded cart that was never favourited" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  mkdir -p "$HOME/bbs/carts"
-  : >"$HOME/bbs/carts/freecell.p8.png"
-  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
 
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
 
   [ -f "$rom_folder/freecell.p8.png" ]
-  [ -f "$rom_folder/.media/freecell.p8.png" ]
-  grep -q "^freecell.p8.png	Freecell Classic$" "$rom_folder/map.txt"
+  [ ! -f "$HOME/favourites.txt" ]
+  grep -q "^freecell.p8.png	Freecell$" "$rom_folder/map.txt"
 }
 
-@test "copy_carts resolves a numerically named cart to its bbs subfolder" {
+@test "copy_carts honours a marker in the shared userdata folder" {
+  : >"$SHARED_USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/freecell.p8.png" ]
+}
+
+@test "copy_carts copies a cart from a digit sharded bbs folder" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  mkdir -p "$HOME/bbs/4"
-  : >"$HOME/bbs/4/42000.p8.png"
-  printf 'x|42000|x|x|x|x|the answer\n' >"$HOME/favourites.txt"
+  make_bbs_cart "bbs/4/42000.p8.png"
 
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
 
   [ -f "$rom_folder/42000.p8.png" ]
-  grep -q "^42000.p8.png	The Answer$" "$rom_folder/map.txt"
+  grep -q "^42000.p8.png	42000$" "$rom_folder/map.txt"
 }
 
-@test "copy_carts skips blank lines in the favourites file" {
+# pico-8 started with -home uses that folder directly, but a build that ignores
+# the flag nests its data under .lexaloffle/pico-8, and config/zero28.txt was
+# captured from a run like that.
+@test "copy_carts finds carts nested under .lexaloffle/pico-8" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  mkdir -p "$HOME/bbs/carts"
-  : >"$HOME/bbs/carts/freecell.p8.png"
-  printf '\nx|freecell|x|x|x|x|freecell classic\n\n' >"$HOME/favourites.txt"
+  make_bbs_cart ".lexaloffle/pico-8/bbs/carts/freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/freecell.p8.png" ]
+}
+
+@test "copy_carts copies a cart found in only one of the two bbs roots once" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart ".lexaloffle/pico-8/bbs/carts/freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '' "$rom_folder/map.txt")" -eq 1 ]
+}
+
+@test "copy_carts skips a partially downloaded cart" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/temp-freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ ! -f "$rom_folder/temp-freecell.p8.png" ]
+  [[ "$output" == *"No downloaded carts"* ]]
+}
+
+@test "copy_carts names a cart from the title in its lua header" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "freecell classic"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/4/42000.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^42000.p8.png	Freecell Classic$" "$rom_folder/map.txt"
+}
+
+# celeste ships its title as "-- ~celeste~", and the decoration should not reach
+# the game list.
+@test "copy_carts strips the decoration around a cart title" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "~celeste~"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/celeste.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^celeste.p8.png	Celeste$" "$rom_folder/map.txt"
+}
+
+@test "copy_carts falls back to the filename when the extractor fails" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor fail
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell_classic.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^freecell_classic.p8.png	Freecell Classic$" "$rom_folder/map.txt"
+}
+
+# PATH is cut back to the stubs and the system utilities, so the bin folders
+# launch.sh adds cannot supply a real extractor on a machine where `make build`
+# has run.
+@test "copy_carts falls back to the filename with no extractor on PATH" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+
+  PATH="$STUB_BIN:/usr/bin:/bin" run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^freecell.p8.png	Freecell$" "$rom_folder/map.txt"
+}
+
+@test "copy_carts reuses a name already in map.txt without extracting again" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "a different name"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  printf 'freecell.p8.png\tThe Name I Chose\n' >"$rom_folder/map.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  grep -q "^freecell.p8.png	The Name I Chose$" "$rom_folder/map.txt"
+  [ ! -s "$EXTRACTOR_LOG" ]
+}
+
+# map.txt used to be truncated on every launch, which threw away the display
+# names a user had written for carts of their own.
+@test "copy_carts keeps map.txt rows it does not own" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  printf 'Poom.m3u\tPoom\n' >"$rom_folder/map.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  grep -q "^Poom.m3u	Poom$" "$rom_folder/map.txt"
+  grep -q "^freecell.p8.png	Freecell$" "$rom_folder/map.txt"
+}
+
+@test "copy_carts writes artwork for both MinUI and NextUI" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/.media/freecell.p8.png" ]
+  [ -f "$rom_folder/.res/freecell.p8.png.png" ]
+}
+
+@test "copy_carts leaves a cart already in the roms folder alone" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$(make_bbs_cart "bbs/carts/freecell.p8.png")"
+  printf 'mine\n' >"$cart"
+  printf 'theirs\n' >"$rom_folder/freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$rom_folder/freecell.p8.png")" = "theirs" ]
+}
+
+@test "copy_carts copies only favourites when the favourites marker is set" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
 
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
 
   [ -f "$rom_folder/freecell.p8.png" ]
-  [ "$(wc -l <"$rom_folder/map.txt")" -eq 1 ]
+  [ ! -f "$rom_folder/tetris.p8.png" ]
 }
 
-@test "copy_carts ignores a favourite with no downloaded cart" {
-  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+# pico-8 has written favourites as a bare name and as a path across releases,
+# so the file is read as a set of names rather than by field position.
+@test "copy_carts matches a favourite written as a bbs path" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  mkdir -p "$HOME/bbs/carts"
-  printf 'x|missing|x|x|x|x|missing cart\n' >"$HOME/favourites.txt"
+  make_bbs_cart "bbs/1/15133.p8.png"
+  printf '|0|bbs/1/15133.p8.png|15133\r\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/15133.p8.png" ]
+}
+
+@test "copy_carts leaves the favourites file untouched" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\r\n' >"$HOME/favourites.txt"
+  cp "$HOME/favourites.txt" "$BATS_TEST_TMPDIR/favourites.before"
 
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
 
-  [ ! -f "$rom_folder/missing.p8.png" ]
-  [ ! -s "$rom_folder/map.txt" ]
+  cmp -s "$BATS_TEST_TMPDIR/favourites.before" "$HOME/favourites.txt"
+  [ ! -f "$HOME/favourites.txt.tmp" ]
+}
+
+@test "copy_carts says why it stops when favourites are asked for but absent" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/freecell.p8.png" ]
+  [[ "$output" == *"no favourites.txt exists"* ]]
+}
+
+@test "copy_carts says why it stops with no downloaded carts" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/map.txt" ]
+  [[ "$output" == *"No downloaded carts"* ]]
+}
+
+# copy_carts is the last statement in launch_cart, whose status main treats as a
+# failed launch.
+@test "copy_carts returns 0 with nothing to do" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  copy_carts "$rom_folder" >/dev/null
+  [ "$?" -eq 0 ]
 }
 
 @test "copy_carts runs its loop in the current shell" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  mkdir -p "$HOME/bbs/carts"
-  : >"$HOME/bbs/carts/freecell.p8.png"
-  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
 
-  filename_png=""
-  copy_carts "$rom_folder"
+  cart_name=""
+  copy_carts "$rom_folder" 2>/dev/null
 
-  [ "$filename_png" = "freecell.p8.png" ]
+  [ "$cart_name" = "freecell.p8.png" ]
 }
 
 @test "is_network_link_up detects an interface that is up" {
