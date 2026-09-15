@@ -441,7 +441,7 @@ setup() {
 
   PLATFORM=tg5040 install_config "$rom_folder"
 
-  grep -q "^cdata_path $HOME/cdata/$" "$HOME/config.txt"
+  grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" "$HOME/config.txt"
   grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
   ! grep -q "/mnt/" "$HOME/config.txt"
 }
@@ -461,9 +461,67 @@ setup() {
 
   for platform in $SUPPORTED_PLATFORMS; do
     PLATFORM="$platform" install_config "$rom_folder"
-    grep -q "^cdata_path $HOME/cdata/$" "$HOME/config.txt"
+    grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" "$HOME/config.txt"
     grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
   done
+}
+
+@test "get_saves_dir names the folder minui and nextui keep saves in" {
+  run get_saves_dir
+  [ "$status" -eq 0 ]
+  [ "$output" = "$SDCARD_PATH/Saves/PICO" ]
+}
+
+@test "migrate_saves moves saves out of the old userdata folder" {
+  mkdir -p "$HOME/cdata"
+  printf 'saved\n' >"$HOME/cdata/freecell.p8d.txt"
+
+  run migrate_saves
+  [ "$status" -eq 0 ]
+
+  [ "$(cat "$SDCARD_PATH/Saves/PICO/freecell.p8d.txt")" = "saved" ]
+  [ ! -d "$HOME/cdata" ]
+  [ -f "$USERDATA_PATH/Pico-8-native/saves-migrated" ]
+}
+
+@test "migrate_saves keeps a save already present in the saves folder" {
+  mkdir -p "$HOME/cdata" "$SDCARD_PATH/Saves/PICO"
+  printf 'old\n' >"$HOME/cdata/freecell.p8d.txt"
+  printf 'current\n' >"$SDCARD_PATH/Saves/PICO/freecell.p8d.txt"
+
+  run migrate_saves
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"freecell.p8d.txt already exists"* ]]
+
+  [ "$(cat "$SDCARD_PATH/Saves/PICO/freecell.p8d.txt")" = "current" ]
+  [ "$(cat "$HOME/cdata/freecell.p8d.txt")" = "old" ]
+  [ -f "$USERDATA_PATH/Pico-8-native/saves-migrated" ]
+}
+
+# pico-8 writes to the saves folder from here on, so a save that turns up in the
+# old folder afterwards is left alone rather than moved on top of whatever the
+# saves folder holds by then
+@test "migrate_saves runs only once" {
+  mkdir -p "$HOME/cdata"
+  printf 'saved\n' >"$HOME/cdata/freecell.p8d.txt"
+  migrate_saves
+
+  mkdir -p "$HOME/cdata"
+  printf 'later\n' >"$HOME/cdata/celeste.p8d.txt"
+
+  run migrate_saves
+  [ "$status" -eq 0 ]
+
+  [ ! -e "$SDCARD_PATH/Saves/PICO/celeste.p8d.txt" ]
+  [ "$(cat "$HOME/cdata/celeste.p8d.txt")" = "later" ]
+}
+
+@test "migrate_saves creates the saves folder with nothing to move" {
+  run migrate_saves
+  [ "$status" -eq 0 ]
+
+  [ -d "$SDCARD_PATH/Saves/PICO" ]
+  [ -f "$USERDATA_PATH/Pico-8-native/saves-migrated" ]
 }
 
 @test "the h700 config matches the tg5040 one it was taken from" {
@@ -911,6 +969,38 @@ setup() {
 
   # the h700 mapping and a config naming this device's card both land in $HOME
   cmp -s "$REPO_ROOT/controllers/h700.txt" "$SHARED_USERDATA_PATH/Pico-8-native/sdl_controllers.txt"
-  grep -q "^cdata_path $SHARED_USERDATA_PATH/Pico-8-native/cdata/$" \
+  grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" \
     "$SHARED_USERDATA_PATH/Pico-8-native/config.txt"
+  [ -d "$SDCARD_PATH/Saves/PICO" ]
+}
+
+@test "launch.sh moves an existing save into the saves folder" {
+  pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  mkdir -p "$pak_dir/pico8"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+  ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
+  ln -s "$REPO_ROOT/config" "$pak_dir/config"
+  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
+  chmod +x "$pak_dir/pico8/pico8_64"
+  : >"$pak_dir/pico8/pico8.dat"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  mkdir -p "$SHARED_USERDATA_PATH/Pico-8-native/cdata"
+  printf 'saved\n' >"$SHARED_USERDATA_PATH/Pico-8-native/cdata/freecell.p8d.txt"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SDCARD_PATH/Saves/PICO/freecell.p8d.txt")" = "saved" ]
+  [ ! -d "$SHARED_USERDATA_PATH/Pico-8-native/cdata" ]
 }
