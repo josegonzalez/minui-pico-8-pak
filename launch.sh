@@ -65,7 +65,7 @@ titlecase() {
 			lw = tolower(orig)
 			prev_colon = (i > 1 && match(words[i - 1], /:$/))
 
-			if (acr[lw]) {
+			if (lw in acr) {
 				words[i] = acr[lw] trailing
 			} else if (i == 1 || prev_colon || !(lw in exc)) {
 				words[i] = toupper(substr(orig,1,1)) substr(orig,2) trailing
@@ -77,6 +77,26 @@ titlecase() {
 		out = words[1]
 		for (i = 2; i <= n; i++) out = out " " words[i]
 		gsub(" - ", "-", out)
+
+		# The hyphen split above turns pico-8 into the three words pico, -
+		# and 8, so an acronym spelled with a hyphen can only be matched
+		# once the words have been joined back up.
+		m = split(out, joined, " ")
+		for (i = 1; i <= m; i++) {
+			orig = joined[i]
+			trailing = ""
+
+			if (match(orig, /[^[:alnum:]]+$/)) {
+				trailing = substr(orig, RSTART)
+				orig = substr(orig, 1, RSTART - 1)
+			}
+
+			lw = tolower(orig)
+			if (lw in acr) joined[i] = acr[lw] trailing
+		}
+
+		out = joined[1]
+		for (i = 2; i <= m; i++) out = out " " joined[i]
 		print out
 	}'
 }

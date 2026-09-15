@@ -574,13 +574,39 @@ setup() {
   [ "$output" = "The Legend of the Sword" ]
 }
 
-# Underscores become word breaks and hyphens are kept. The acronym map is
-# consulted per word after that split, so only single word entries such as Rpg
-# can ever match - Pico-8 is split into "pico", "-" and "8" before the lookup
-# and stays as it reads.
-@test "titlecase splits on separators and expands a single word acronym" {
+@test "titlecase splits on separators and expands the acronyms it knows" {
   run titlecase "pico-8_rpg demo"
-  [ "$output" = "Pico-8 RPG Demo" ]
+  [ "$output" = "PICO-8 RPG Demo" ]
+}
+
+# Hyphens are split into their own words before the per word pass, so a
+# hyphenated acronym is only matchable once the words have been joined back up.
+@test "titlecase expands an acronym spelled with a hyphen" {
+  run titlecase "pico-8"
+  [ "$output" = "PICO-8" ]
+
+  run titlecase "a pico-8 game"
+  [ "$output" = "A PICO-8 Game" ]
+}
+
+@test "titlecase keeps trailing punctuation on a hyphenated acronym" {
+  run titlecase "pico-8: the sequel"
+  [ "$output" = "PICO-8: The Sequel" ]
+}
+
+# The hyphenated pass runs over every word, so a word that is not an acronym
+# has to come through it untouched. Looking the word up with acr[lw] rather
+# than "lw in acr" creates an empty entry for it, which blanked the word.
+@test "titlecase leaves a word that is not an acronym alone" {
+  run titlecase "demo"
+  [ "$output" = "Demo" ]
+}
+
+# Splitting on hyphens is what keeps the stop words inside a hyphenated title
+# lowercase, so the acronym fix must not collapse that split.
+@test "titlecase keeps stop words lowercase inside a hyphenated title" {
+  run titlecase "king-of-the-hill"
+  [ "$output" = "King-of-the-Hill" ]
 }
 
 @test "copy_carts does nothing without a marker" {
