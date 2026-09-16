@@ -110,6 +110,13 @@ jobs:
             exit 1
           fi
 
+      - name: Validate SDL shim is bundled
+        run: |
+          if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "lib/h700/sdl-nosensor.so"; then
+            echo "sdl-nosensor.so is missing from the artifact"
+            exit 1
+          fi
+
       - name: Validate cart title extractor is bundled
         run: |
           for architecture in arm arm64; do

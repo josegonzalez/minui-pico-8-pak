@@ -10,3 +10,6 @@ res/fonts/*
 !bin/rg35xxplus/curl
 !bin/rg35xxplus/curl-config
 !bin/rg35xxplus/wget
+
+# built by `make build`, never committed: see shim/sdl-nosensor.c
+lib/h700

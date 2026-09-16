@@ -315,6 +315,38 @@ get_pico_bin() {
   echo "$pico_bin"
 }
 
+# NextUI builds SDL2 without sensor support, and pico-8 asks SDL to start every
+# subsystem and aborts when one of them will not, so it dies with "SDL not built
+# with sensor support" before drawing anything. The shim drops that one request
+# on its way past and hands the rest to the device's own SDL2, which on h700 is
+# the only build that enumerates the gpio-keys pad controllers/h700.txt maps.
+# Replacing SDL2 would fix the crash and kill the pad.
+get_sdl_shim() {
+  if [ "$PLATFORM" != "h700" ]; then
+    return 0
+  fi
+
+  echo "$PAK_DIR/lib/h700/sdl-nosensor.so"
+}
+
+# Split from get_sdl_shim so that one stays a plain value: a helper that both
+# echoes a path and logs would put the log line in its own output.
+setup_sdl_preload() {
+  sdl_shim="$(get_sdl_shim)"
+  if [ -z "$sdl_shim" ]; then
+    return 0
+  fi
+
+  if [ ! -f "$sdl_shim" ]; then
+    echo "No SDL shim at $sdl_shim, starting pico-8 without one" 1>&2
+    return 0
+  fi
+
+  # ours goes first because preload objects are searched in order, and the
+  # inherited value is appended conditionally so nothing leaves an empty element
+  export LD_PRELOAD="$sdl_shim${LD_PRELOAD:+:$LD_PRELOAD}"
+}
+
 # Whole word match against a space separated list. The platform checks used to
 # be `echo "$list" | grep -q "$PLATFORM"`, which also accepted every substring,
 # so rg35xx and tg50 both passed as supported platforms.
@@ -576,8 +608,24 @@ launch_cart() {
 
   pico_bin="$(get_pico_bin)"
 
-  # only set LD_LIBRARY_PATH for pico8
-  export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture:$LD_LIBRARY_PATH"
+  # only set LD_LIBRARY_PATH for pico8: minui-presenter is an SDL application
+  # too, and a library path set for the whole launcher would have it load the
+  # pak's own SDL2 instead of the one the device shipped with.
+  #
+  # The inherited value is appended conditionally because an empty element means
+  # the current directory, which main has already cd'd to $PAK_DIR.
+  export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  setup_sdl_preload
+
+  # pico-8 is supplied by the user and links against whatever the device has, so
+  # record that in the log: a library it cannot find is otherwise a silent
+  # failure to launch that no bug report can describe. This has to run after the
+  # two variables above are set or it reports a resolution pico-8 never sees.
+  if command -v ldd >/dev/null 2>&1; then
+    ldd "$EMU_DIR/$pico_bin" || true
+  else
+    echo "No ldd on this device, cannot record what $pico_bin links against" 1>&2
+  fi
 
   draw_rect=""
   screen_mode="$(get_screen_mode)"
@@ -611,10 +659,26 @@ launch_cart() {
       -root_path "$ROM_FOLDER" \
       -run "$ROM_PATH" $draw_rect
   fi
+  pico_status=$?
 
   sync
   copy_carts "$ROM_FOLDER"
 
+  # minui-power-control ends a session by signalling pico-8, and a status above
+  # 128 is a signal, so neither that nor a power button shutdown is a failure
+  # worth putting on screen
+  if [ "$pico_status" -gt 128 ] || [ -f /tmp/shutdown_from_pak ]; then
+    return 0
+  fi
+
+  # a pico-8 that could not start at all - an SDL subsystem it could not
+  # initialise, a library it could not find - otherwise drops the user back to
+  # the game list with nothing on screen and no reason given
+  if [ "$pico_status" -ne 0 ]; then
+    show_message "PICO-8 exited with an error. See $LOGS_PATH/$PAK_NAME.txt for details." 4
+  fi
+
+  return "$pico_status"
 }
 
 verify_platform() {
@@ -713,13 +777,6 @@ install_pico_files() {
   if [ ! -f "$EMU_DIR/$pico_bin" ] || [ ! -f "$EMU_DIR/pico8.dat" ]; then
     show_message "Missing $pico_bin or pico8.dat. Please copy them to the Bios/PICO directory at the root of your SD card." 4
     return 1
-  fi
-
-  # pico-8 is supplied by the user and links against whatever the device has, so
-  # record that in the log: a library it cannot find is otherwise a silent
-  # failure to launch that no bug report can describe
-  if command -v ldd >/dev/null 2>&1; then
-    ldd "$EMU_DIR/$pico_bin" || true
   fi
 
   killall minui-presenter >/dev/null 2>&1 || true
@@ -821,9 +878,10 @@ main() {
 
   start_power_control
 
-  if ! launch_cart "$ROM_PATH"; then
-    return 1
-  fi
+  # the status is held rather than returned on the spot: a pico-8 killed by the
+  # power button still has the shutdown handling below to run
+  launch_cart "$ROM_PATH"
+  launch_status=$?
 
   # handle the power-button pressed event
   if [ -f /tmp/shutdown_from_pak ]; then
@@ -836,6 +894,8 @@ main() {
       sleep 1
     done
   fi
+
+  return "$launch_status"
 }
 
 if [ -z "$PICO_PAK_SOURCE_ONLY" ]; then

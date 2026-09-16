@@ -100,3 +100,42 @@ pak_platforms() {
   mk PICO8_DATA_EXTRACTOR_VERSION
   [ "$output" = "0.1.0" ]
 }
+
+@test "the sdl shim is injected into the release archive" {
+  grep -qx "lib/h700/sdl-nosensor.so" "$REPO_ROOT/.gitarchiveinclude"
+}
+
+# the shim is compiled from source in this repo, so committing the object would
+# create a second copy of it that can silently disagree with the first
+@test "the sdl shim is built rather than committed" {
+  run sh -c "cd '$REPO_ROOT' && git ls-files --error-unmatch lib/h700/sdl-nosensor.so"
+  [ "$status" -ne 0 ]
+
+  run sh -c "cd '$REPO_ROOT' && git check-ignore -q lib/h700/sdl-nosensor.so"
+  [ "$status" -eq 0 ]
+}
+
+# a user with an LD_PRELOAD object on their SD card should be able to read what
+# it does, while its build recipe is machinery they never run
+@test "the sdl shim source ships with the pak but its build recipe does not" {
+  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/sdl-nosensor.c"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"export-ignore: unspecified"* ]]
+
+  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/Dockerfile"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"export-ignore: set"* ]]
+}
+
+# glibc 2.34 folded libdl into libc, so a newer base records dlsym@GLIBC_2.34
+# and the shim stops loading on the device
+@test "the sdl shim base image is pinned below the libdl merge" {
+  mk SHIM_IMAGE
+  [ "$output" = "gcc:10-bullseye" ]
+}
+
+@test "the sdl shim masks only the sensor flag" {
+  grep -q '0x00008000' "$REPO_ROOT/shim/sdl-nosensor.c"
+  ! grep -Eq 'SDL_INIT_(VIDEO|AUDIO|JOYSTICK|GAMECONTROLLER|HAPTIC|TIMER|EVENTS)' \
+    "$REPO_ROOT/shim/sdl-nosensor.c"
+}
