@@ -653,7 +653,7 @@ verify_cart() {
     return 0
   fi
 
-  cart_extension="$(printf "%s" "${cart_name##*.}" | tr '[:upper:]' '[:lower:]')"
+  cart_extension="$(printf "%s" "${cart_name##*.}" | awk '{print tolower($0)}')"
   case "$cart_extension" in
   p8 | png)
     return 0
