@@ -202,6 +202,57 @@ make_bios() {
   done
 }
 
+# Builds a pak directory launch.sh can be run out of, symlinking the real pak
+# files in beside a pico8_64 stub, and echoes its path. The stub reports the
+# loader environment it was started with, so a test can assert that a variable
+# reached pico-8 rather than only that the launcher exported it.
+#
+# Pass a shell body for the stub to run in place of its default `exit 0`.
+make_pak() {
+  local body="${1:-exit 0}"
+  local pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+
+  mkdir -p "$pak_dir/pico8"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+  ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
+  ln -s "$REPO_ROOT/config" "$pak_dir/config"
+
+  cat >"$pak_dir/pico8/pico8_64" <<'STUB'
+#!/bin/sh
+echo "pico8 LD_PRELOAD=$LD_PRELOAD"
+echo "pico8 LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+STUB
+  printf '%s\n' "$body" >>"$pak_dir/pico8/pico8_64"
+  chmod +x "$pak_dir/pico8/pico8_64"
+  : >"$pak_dir/pico8/pico8.dat"
+
+  printf '%s' "$pak_dir"
+}
+
+# Creates the sdl shim `make build` produces, inside a pak built by make_pak.
+make_sdl_shim() {
+  local pak_dir="$1"
+
+  mkdir -p "$pak_dir/lib/h700"
+  : >"$pak_dir/lib/h700/sdl-nosensor.so"
+}
+
+# Puts a recording ldd on PATH. The real one only exists on Linux, and what it
+# would resolve depends on the environment launch.sh sets, so the stub echoes
+# that environment rather than any library list.
+#
+# Never remove it mid-test: dropping a command from PATH leaves a stale entry in
+# the shell's command hash table, so `command -v` keeps succeeding.
+stub_ldd() {
+  cat >"$STUB_BIN/ldd" <<'STUB'
+#!/bin/sh
+echo "ldd LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+echo "ldd LD_PRELOAD=$LD_PRELOAD"
+STUB
+  chmod +x "$STUB_BIN/ldd"
+}
+
 # Creates a writable fake cpufreq policy directory and points launch.sh at it.
 # scaling_setspeed starts empty so a test can tell "not written" from "written".
 stub_cpufreq() {

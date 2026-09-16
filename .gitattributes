@@ -5,3 +5,4 @@
 .gitignore export-ignore
 Makefile export-ignore
 /test export-ignore
+shim/Dockerfile export-ignore

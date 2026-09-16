@@ -14,6 +14,11 @@ MINUI_PRESENTER_VERSION := 0.13.0
 MINUI_POWER_CONTROL_VERSION := 3.0.0
 PICO8_DATA_EXTRACTOR_VERSION := 0.1.0
 
+# The image the sdl sensor shim is compiled in. Pinned below glibc 2.34,
+# which folded libdl into libc: a newer base records dlsym@GLIBC_2.34 and the
+# shim then refuses to load on the device. See shim/Dockerfile.
+SHIM_IMAGE := gcc:10-bullseye
+
 # minui-presenter asset names stopped matching platform names in 0.13.0: h700
 # and tg5050 are published only as NextUI builds, while tg5040 and rg35xxplus
 # keep their plain MinUI ones. A platform with no entry here uses its own name.
@@ -28,8 +33,15 @@ clean:
 	rm -f bin/*/minui-presenter || true
 	rm -f bin/*/pico8-data-extractor || true
 	rm -f bin/minui-power-control || true
+	rm -f lib/h700/sdl-nosensor.so || true
 
-build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control
+build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control lib/h700/sdl-nosensor.so
+
+# unlike the downloads above this is built from source in this repo, so it has
+# to name its prerequisites or a stale object survives every edit to them
+lib/h700/sdl-nosensor.so: shim/sdl-nosensor.c shim/Dockerfile
+	docker buildx build --build-arg BASE_IMAGE=$(SHIM_IMAGE) \
+		--target export --file shim/Dockerfile --output "type=local,dest=lib" shim
 
 bin/%/pico8-data-extractor:
 	mkdir -p bin/$*

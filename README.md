@@ -87,6 +87,20 @@ Deep sleep is supported on compatible devices. Click the power button to enter d
 
 MinUI Power Control does not support `h700`, so the power button keeps its default behaviour on those devices. The pak notes this in its log and starts PICO-8 as usual.
 
+### SDL compatibility
+
+PICO-8 asks SDL to start every subsystem it knows about and refuses to run when one of them will not start. NextUI builds SDL2 without sensor support, so on `h700` PICO-8 used to stop before drawing anything, leaving only this in the log:
+
+```
+SDL Error: SDL not built with sensor support
+
+** FATAL ERROR: Unable to initialize SDL
+```
+
+The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead of SDL2. It drops that one request on its way past and hands everything else to the device's own SDL2 unchanged, which matters because NextUI's SDL2 is the build that sees the built-in controller and no replacement would. PICO-8 never reads a sensor, so nothing is lost. The source is in `shim/sdl-nosensor.c` in this pak.
+
+The library is only loaded on `h700`, and only when it is present. A copy the device cannot load is skipped with a line in the log rather than stopping the launch.
+
 ### In-Game saves
 
 Any game that creates in-game saves will save these to `/Saves/PICO` on your SD card, the same folder MinUI and NextUI keep the saves for their built-in emulators in. The pak fills that path into the PICO-8 configuration each time a game starts, so it is correct whatever your device mounts the SD card as.
@@ -233,6 +247,8 @@ Built-in MinUI cores have support for turning off the display and eventually shu
 
 Logs will be written to the`/.userdata/$PLATFORM/logs/` folder on your SD card.
 
+The log records the library search path PICO-8 is started with and the `ldd` output for your PICO-8 binary, so a library it cannot find or resolves to the wrong copy is visible. A PICO-8 that fails to start also says so on screen rather than only in the log.
+
 ## Development
 
 The launcher is POSIX shell, and is linted and formatted with [shellcheck](https://www.shellcheck.net/) and [shfmt](https://github.com/mvdan/sh). Tests are written with [bats](https://github.com/bats-core/bats-core).
@@ -242,5 +258,7 @@ make lint
 make format
 make test
 ```
+
+`make build` and `make release` additionally need Docker, which is what the SDL sensor shim is cross-compiled in. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
 
 Three environment variables exist for the test suite only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to.

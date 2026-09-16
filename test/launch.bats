@@ -266,6 +266,68 @@ setup() {
   [ "$output" = "pico8_64" ]
 }
 
+@test "get_sdl_shim names the shim on h700" {
+  PLATFORM=h700 run get_sdl_shim
+  [ "$output" = "$PAK_DIR/lib/h700/sdl-nosensor.so" ]
+}
+
+# every other platform either ships its own SDL2 or has one with sensors, so
+# there is nothing to preload and nothing to log about
+@test "get_sdl_shim names nothing on the other platforms" {
+  for platform in rg35xxplus tg5040 tg5050; do
+    PLATFORM="$platform" run get_sdl_shim
+    [ "$output" = "" ]
+  done
+}
+
+# setup_sdl_preload is called without run: a run subshell would discard the
+# export the function exists to make
+@test "setup_sdl_preload preloads the shim the pak ships" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/h700"
+  : >"$PAK_DIR/lib/h700/sdl-nosensor.so"
+
+  PLATFORM=h700
+  LD_PRELOAD=
+  setup_sdl_preload
+
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/h700/sdl-nosensor.so" ]
+}
+
+@test "setup_sdl_preload puts the shim ahead of an inherited preload" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/h700"
+  : >"$PAK_DIR/lib/h700/sdl-nosensor.so"
+
+  PLATFORM=h700
+  LD_PRELOAD=/usr/lib/libfoo.so
+  setup_sdl_preload
+
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/h700/sdl-nosensor.so:/usr/lib/libfoo.so" ]
+}
+
+# a pak assembled without the artifact has to launch exactly as it did before
+@test "setup_sdl_preload says so when the pak ships no shim" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR"
+
+  PLATFORM=h700
+  LD_PRELOAD=
+  run setup_sdl_preload
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No SDL shim at"* ]]
+  [ "$LD_PRELOAD" = "" ]
+}
+
+@test "setup_sdl_preload leaves the other platforms alone" {
+  PLATFORM=tg5050
+  LD_PRELOAD=
+  setup_sdl_preload
+
+  [ "$LD_PRELOAD" = "" ]
+}
+
 @test "get_controller_file returns one mapping for every h700 device" {
   for device in '' rg28xx rg34xx rg34xxsp rg35xxh rg35xxplus rg35xxpro \
     rg35xxsp rg40xxh rg40xxv rgcubexx rgsp; do
@@ -1244,4 +1306,180 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$(cat "$SDCARD_PATH/Saves/PICO/freecell.p8d.txt")" = "saved" ]
   [ ! -d "$SHARED_USERDATA_PATH/Pico-8-native/cdata" ]
+}
+
+@test "launch.sh preloads the sdl shim on h700" {
+  pak_dir="$(make_pak)"
+  make_sdl_shim "$pak_dir"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=h700 DEVICE=rg35xxh \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/h700/sdl-nosensor.so" "$LOGS_PATH/PICO.txt"
+}
+
+# a pak assembled without the artifact has to start pico-8 exactly as it did
+# before, and say in the log why no shim was loaded
+@test "launch.sh starts pico-8 without a shim it does not ship" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=h700 DEVICE=rg35xxh \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+  grep -q "No SDL shim at" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh preloads nothing on the other platforms" {
+  pak_dir="$(make_pak)"
+  make_sdl_shim "$pak_dir"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+}
+
+# the library path used to end in a colon with nothing inherited, which the
+# loader reads as the current directory, and main has already cd'd to the pak
+@test "launch.sh does not put the pak directory on the library path" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= LD_LIBRARY_PATH= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/pico8/lib:$pak_dir/lib/tg5050:$pak_dir/lib/arm64" \
+    "$LOGS_PATH/PICO.txt"
+}
+
+# the ldd used to run from install_pico_files, before either variable was set,
+# so it recorded a resolution pico-8 never saw
+@test "launch.sh records what pico-8 links against with the loader set up" {
+  pak_dir="$(make_pak)"
+  make_sdl_shim "$pak_dir"
+
+  make_bios
+  stub_presenter 0
+  stub_ldd
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=h700 DEVICE=rg35xxh \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -q "ldd LD_LIBRARY_PATH=$pak_dir/pico8/lib:" "$LOGS_PATH/PICO.txt"
+  grep -qx "ldd LD_PRELOAD=$pak_dir/lib/h700/sdl-nosensor.so" "$LOGS_PATH/PICO.txt"
+}
+
+# a pico-8 that cannot start used to drop the user back to the game list with
+# nothing on screen, which is how the h700 sensor crash went unreported
+@test "launch.sh tells the user when pico-8 could not start" {
+  pak_dir="$(make_pak "exit 1")"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 1 ]
+  grep -q "PICO-8 exited with an error" "$PRESENTER_LOG"
+}
+
+# a crash at the end of a splore session must not lose what it downloaded
+@test "launch.sh still copies carts after pico-8 failed" {
+  pak_dir="$(make_pak "exit 1")"
+
+  make_bios
+  stub_presenter 0
+  stub_extractor "Freecell"
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 1 ]
+  [ -f "$rom_folder/freecell.p8.png" ]
+}
+
+# minui-power-control ends a session by signalling pico-8, so a status above 128
+# is the power button working rather than a failure to put on screen
+@test "launch.sh says nothing when a signal ended the session" {
+  pak_dir="$(make_pak 'kill -TERM $$')"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  ! grep -q "PICO-8 exited with an error" "$PRESENTER_LOG"
 }
