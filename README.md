@@ -77,9 +77,8 @@ Choosing a file with any other extension, or one that is missing from the SD car
 
 To exit a game:
 
-- press the `Start` button
-- select `Options`
-- select `shutdown Pico-8`
+- Press the `Start` button
+- Select `shutdown`
 
 ### Deep Sleep & Shutdown
 
