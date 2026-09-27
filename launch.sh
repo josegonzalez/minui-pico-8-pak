@@ -363,8 +363,8 @@ platform_in_list() {
 get_controller_file() {
   case "$PLATFORM" in
   h700 | rg35xxplus)
-    # both platforms are Allwinner H700 hardware and report the same joystick
-    # GUIDs, so one file holds every mapping and SDL picks by GUID
+    # both platforms are Allwinner H700 hardware, so one file holds the pads
+    # either one reports and SDL picks the line by GUID
     echo "h700.txt"
     ;;
   *)

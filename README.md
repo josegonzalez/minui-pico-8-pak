@@ -73,6 +73,10 @@ The following filetypes are supported:
 
 Choosing a file with any other extension, or one that is missing from the SD card, displays an error and exits without starting PICO-8.
 
+### Controls
+
+On `h700`, NextUI v6.14.0-rc11 or newer is needed for the buttons to map correctly. From that release, the buttons match the TrimUI devices on every Anbernic model.
+
 ### Exiting a game
 
 To exit a game:

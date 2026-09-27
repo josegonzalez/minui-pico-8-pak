@@ -372,11 +372,29 @@ setup() {
   done
 }
 
-@test "the h700 mapping carries both pads with self consistent crcs" {
+@test "the h700 mapping keeps the older pads with self consistent crcs" {
   grep -q "^1900d60b010000000100000000010000,Deeplay-keys,.*crc:0bd6," \
     "$REPO_ROOT/controllers/h700.txt"
   grep -q "^19002cb4010000000100000000010000,Anbernic-RGCubeXX,.*crc:b42c," \
     "$REPO_ROOT/controllers/h700.txt"
+}
+
+# NextUI rc11 gives every H700 model the TrimUI button numbers under one GUID,
+# and without a line for it SDL's positional default swaps A and B
+@test "the h700 mapping gives NextUI rc11 the TrimUI button numbers" {
+  line="$(grep "^19000000010000000100000000016e01," "$REPO_ROOT/controllers/h700.txt")"
+  [ -n "$line" ]
+
+  for field in a:b1 b:b0 x:b3 y:b2 back:b6 start:b7 leftshoulder:b4 \
+    rightshoulder:b5 leftx:a0 lefty:a1; do
+    [[ ",$line," == *",$field,"* ]]
+  done
+}
+
+@test "every GUID in the h700 mapping appears once" {
+  run sh -c "grep -v '^//' '$REPO_ROOT/controllers/h700.txt' | cut -d, -f1 | sort | uniq -d"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "platform_in_list matches whole names only" {
