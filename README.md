@@ -53,7 +53,7 @@ cee03b8ffd89bd3881a04ab51a21b0f47655c70d20bcec44cd7203274b24a817  pico8
 
 1. Create a folder at `/Roms/Pico-8 (PICO)` on your SD card.
 2. Place your roms in this directory.
-    1. See [this itch.io link](https://itch.io/games/downloadable/free/tag-pico-8) for free downloadable Pico-8 games.
+   1. See [this itch.io link](https://itch.io/games/downloadable/free/tag-pico-8) for free downloadable Pico-8 games.
 
 > [!NOTE]
 > A `Splore.p8` cart is created for you the first time you launch a game. See [Splore](#splore) for details.
@@ -84,6 +84,8 @@ To exit a game:
 - press the `Start` button
 - select `Options`
 - select `shutdown Pico-8`
+
+On `tg5040`, you can also hold `Select` and press `Menu` to quit straight away, from a game, Splore, or PICO-8's command prompt.
 
 ### Deep Sleep & Shutdown
 
@@ -164,17 +166,17 @@ PICO-8 carts are PNG images whatever they are named, so the artwork is a copy of
 
 For a cart at `/Roms/Pico-8 (PICO)/Freecell.p8`:
 
-| CFW | Path |
-| --- | --- |
-| NextUI | `Roms/Pico-8 (PICO)/.media/Freecell.png` |
-| MinUI | `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` |
+| CFW    | Path                                      |
+| ------ | ----------------------------------------- |
+| NextUI | `Roms/Pico-8 (PICO)/.media/Freecell.png`  |
+| MinUI  | `Roms/Pico-8 (PICO)/.res/Freecell.p8.png` |
 
 For a cart at `/Roms/Pico-8 (PICO)/Freecell.p8.png`:
 
-| CFW | Path |
-| --- | --- |
-| NextUI | `Roms/Pico-8 (PICO)/.media/Freecell.p8.png` |
-| MinUI | `Roms/Pico-8 (PICO)/.res/Freecell.p8.png.png` |
+| CFW    | Path                                          |
+| ------ | --------------------------------------------- |
+| NextUI | `Roms/Pico-8 (PICO)/.media/Freecell.p8.png`   |
+| MinUI  | `Roms/Pico-8 (PICO)/.res/Freecell.p8.png.png` |
 
 ### Multi-cart Game Support
 
@@ -186,41 +188,41 @@ As an example, [Poom](https://freds72.itch.io/poom) - a Doom clone written for P
 2. Place all the files from the `poom_1.9_standalone.zip` download in that folder. There should be 32 files in total, 28 `.p8` files and 4 `.lua` files.
 3. Create a file named `Poom.m3u` in `/Roms/Pico-8 (PICO)/Poom`. The contents of this file are the `p8` files in load order, and should be as follows:
 
-    <details>
-    <summary><b>Poom.m3u</b></summary>
+   <details>
+   <summary><b>Poom.m3u</b></summary>
 
-    ```shell
-    poom_0.p8
-    poom_1.p8
-    poom_2.p8
-    poom_3.p8
-    poom_4.p8
-    poom_5.p8
-    poom_6.p8
-    poom_7.p8
-    poom_8.p8
-    poom_9.p8
-    poom_10.p8
-    poom_11.p8
-    poom_12.p8
-    poom_13.p8
-    poom_14.p8
-    poom_15.p8
-    poom_16.p8
-    poom_17.p8
-    poom_18.p8
-    poom_19.p8
-    poom_20.p8
-    poom_21.p8
-    poom_22.p8
-    poom_23.p8
-    poom_24.p8
-    poom_25.p8
-    poom_e1.p8
-    poom_e2.p8
-    ```
+   ```shell
+   poom_0.p8
+   poom_1.p8
+   poom_2.p8
+   poom_3.p8
+   poom_4.p8
+   poom_5.p8
+   poom_6.p8
+   poom_7.p8
+   poom_8.p8
+   poom_9.p8
+   poom_10.p8
+   poom_11.p8
+   poom_12.p8
+   poom_13.p8
+   poom_14.p8
+   poom_15.p8
+   poom_16.p8
+   poom_17.p8
+   poom_18.p8
+   poom_19.p8
+   poom_20.p8
+   poom_21.p8
+   poom_22.p8
+   poom_23.p8
+   poom_24.p8
+   poom_25.p8
+   poom_e1.p8
+   poom_e2.p8
+   ```
 
-    </details>
+   </details>
 
 4. Unmount your SD Card.
 5. Insert your SD Card into your MinUI device.

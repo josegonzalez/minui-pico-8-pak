@@ -17,6 +17,10 @@
  * startup, so launch.sh always starts it in standard mode and stretching is
  * done here by redirecting the copy pico-8 draws each frame with.
  *
+ * Select + Menu quits pico-8 from a game, Splore or its command prompt by
+ * pushing SDL_QUIT, the event closing its window sends. tg5040's controller
+ * mapping reports the Menu button as the pad's Start.
+ *
  * Every SDL call goes through dlsym, like sdl-nosensor.c, so this builds without
  * SDL headers and asks glibc for nothing newer than that shim does. See
  * shim/Dockerfile.
@@ -44,16 +48,18 @@ typedef struct {
 } SDL_ControllerButtonEvent;
 #define SDL_BLENDMODE_BLEND 0x00000001
 #define SDL_SCALEMODE_LINEAR 1
+#define SDL_QUIT 0x100
 #define SDL_CONTROLLERBUTTONDOWN 0x650
 #define SDL_CONTROLLERBUTTONUP 0x651
 #define SDL_CONTROLLER_BUTTON_BACK 4
+#define SDL_CONTROLLER_BUTTON_START 6
 #define SDL_CONTROLLER_BUTTON_DPAD_UP 11
 #define SDL_CONTROLLER_BUTTON_DPAD_DOWN 12
 #define SDL_CONTROLLER_BUTTON_DPAD_LEFT 13
 #define SDL_CONTROLLER_BUTTON_DPAD_RIGHT 14
 
-/* indexes into the d-pad state below */
-enum { DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN, DIR_COUNT };
+/* indexes into the state of the buttons pressed with Select below */
+enum { DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN, DIR_START, DIR_COUNT };
 
 static const char *const screen_modes[] = {"standard", "stretched"};
 #define SCREEN_MODE_COUNT ((int)(sizeof screen_modes / sizeof *screen_modes))
@@ -63,6 +69,7 @@ static struct {
   void (*RenderPresent)(void *);
   void (*DestroyRenderer)(void *);
   int (*PollEvent)(void *);
+  int (*PushEvent)(void *);
   void *(*GameControllerOpen)(int);
   void (*GameControllerClose)(void *);
   uint8_t (*GameControllerGetButton)(void *, int);
@@ -129,6 +136,7 @@ static int resolve_sdl(void)
   RESOLVE(GameControllerOpen);
   RESOLVE(GameControllerClose);
   RESOLVE(GameControllerGetButton);
+  RESOLVE(PushEvent);
   /* wrapped for every frame pico-8 draws, so it must resolve even if the overlay cannot */
   RESOLVE(RenderCopy);
   /* SDL 2.0.12 and up only, and only cosmetic, so its absence is not fatal */
@@ -308,15 +316,29 @@ static void cycle_screen_mode(int step)
   write_line(screen_mode_path, screen_modes[screen_mode]);
 }
 
+static void request_quit(void)
+{
+  /* SDL_Event is a 56 byte union and SDL_QUIT needs only its type */
+  uint32_t event[14] = {SDL_QUIT};
+
+  if (sdl.PushEvent == NULL) {
+    LOG("this SDL2 has no SDL_PushEvent, cannot quit pico-8\n");
+    return;
+  }
+
+  LOG("Select + Menu pressed, quitting pico-8\n");
+  sdl.PushEvent(event);
+}
+
 /* Left and Right are only taken from pico-8 when there are overlays to pick. */
 static int has_action(int direction)
 {
-  return direction == DIR_UP || direction == DIR_DOWN || overlay_count > 0;
+  return direction != DIR_LEFT && direction != DIR_RIGHT ? 1 : overlay_count > 0;
 }
 
 /*
- * Reads Select and the d-pad straight from the pad. A direction counts once per
- * press, and calling this again in the same frame changes nothing.
+ * Reads Select and the buttons pressed with it straight from the pad. A button
+ * counts once per press, and calling this again in the same frame changes nothing.
  */
 static void update_combo(void)
 {
@@ -325,6 +347,7 @@ static void update_combo(void)
       SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
       SDL_CONTROLLER_BUTTON_DPAD_UP,
       SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+      SDL_CONTROLLER_BUTTON_START,
   };
   static int was_down[DIR_COUNT];
   int direction, down;
@@ -339,7 +362,9 @@ static void update_combo(void)
     down = sdl.GameControllerGetButton(controller, buttons[direction]);
     if (down && !was_down[direction] && select_held && has_action(direction)) {
       consumed[direction] = 1;
-      if (direction == DIR_LEFT || direction == DIR_RIGHT) {
+      if (direction == DIR_START) {
+        request_quit();
+      } else if (direction == DIR_LEFT || direction == DIR_RIGHT) {
         cycle_overlay(direction == DIR_RIGHT ? 1 : -1);
       } else {
         cycle_screen_mode(direction == DIR_DOWN ? 1 : -1);
@@ -363,6 +388,8 @@ static int direction_of(int button)
     return DIR_UP;
   case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
     return DIR_DOWN;
+  case SDL_CONTROLLER_BUTTON_START:
+    return DIR_START;
   default:
     return -1;
   }
@@ -614,7 +641,7 @@ void *SDL_GameControllerOpen(int index)
   opened = sdl.GameControllerOpen(index);
   if (opened != NULL) {
     controller = opened;
-    LOG("watching controller %d for Select + d-pad\n", index);
+    LOG("watching controller %d for Select combos\n", index);
   }
 
   return opened;
