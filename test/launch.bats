@@ -345,68 +345,68 @@ setup() {
 }
 
 # called without run so the exports survive
-@test "setup_overlay_preload preloads the shim when there is an overlay" {
+@test "setup_display_preload preloads the shim when there is an overlay" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
   mkdir -p "$PAK_DIR/lib/tg5040" "$SDCARD_PATH/Overlays/PICO"
-  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
+  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
   : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
 
   PLATFORM=tg5040
   LD_PRELOAD=
-  setup_overlay_preload
+  setup_display_preload
 
-  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
   [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
   [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
   [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
 }
 
 # the shim also switches the screen mode in game, which needs no overlay
-@test "setup_overlay_preload preloads the shim without any overlays" {
+@test "setup_display_preload preloads the shim without any overlays" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
   mkdir -p "$PAK_DIR/lib/tg5040"
-  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
+  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
 
   PLATFORM=tg5040
   LD_PRELOAD=
-  setup_overlay_preload
+  setup_display_preload
 
-  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
 }
 
-@test "setup_overlay_preload preloads the shim in stretched mode" {
+@test "setup_display_preload preloads the shim in stretched mode" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
   mkdir -p "$PAK_DIR/lib/tg5040"
-  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
+  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
 
   PLATFORM=tg5040
   LD_PRELOAD=
-  setup_overlay_preload
+  setup_display_preload
 
-  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
 }
 
-@test "setup_overlay_preload says so when the pak ships no shim" {
+@test "setup_display_preload says so when the pak ships no shim" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
   mkdir -p "$PAK_DIR" "$SDCARD_PATH/Overlays/PICO"
   : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
 
   PLATFORM=tg5050
   LD_PRELOAD=
-  run setup_overlay_preload
+  run setup_display_preload
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"No overlay shim at"* ]]
+  [[ "$output" == *"No display shim at"* ]]
 }
 
-@test "setup_overlay_preload is quiet without a shim or overlays" {
+@test "setup_display_preload is quiet without a shim or overlays" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
   mkdir -p "$PAK_DIR"
 
   PLATFORM=tg5050
   LD_PRELOAD=
-  run setup_overlay_preload
+  run setup_display_preload
 
   [ "$status" -eq 1 ]
   [ "$output" = "" ]
@@ -1644,10 +1644,10 @@ setup() {
   grep -qx "pico8 LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
 }
 
-@test "launch.sh leaves stretching to the overlay shim when it is loaded" {
+@test "launch.sh leaves stretching to the display shim when it is loaded" {
   pak_dir="$(make_pak)"
   mkdir -p "$pak_dir/lib/tg5040"
-  : >"$pak_dir/lib/tg5040/sdl-overlay.so"
+  : >"$pak_dir/lib/tg5040/sdl-display.so"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
 
   make_bios
@@ -1664,12 +1664,12 @@ setup() {
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 0 ]
-  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-overlay.so" "$LOGS_PATH/PICO.txt"
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-display.so" "$LOGS_PATH/PICO.txt"
   grep -q "^pico8 ARGS=" "$LOGS_PATH/PICO.txt"
   ! grep -q "^pico8 ARGS=.*-draw_rect" "$LOGS_PATH/PICO.txt"
 }
 
-@test "launch.sh stretches pico-8 itself without the overlay shim" {
+@test "launch.sh stretches pico-8 itself without the display shim" {
   pak_dir="$(make_pak)"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
 

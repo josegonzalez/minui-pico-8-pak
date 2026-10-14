@@ -1,5 +1,5 @@
 # Builds the SDL sensor shim for h700, which is always a 64-bit userland, and
-# the overlay shim for tg5040, which is too.
+# the display shim for tg5040, which is too.
 #
 # The base image is the one detail that has to be right, and the ceiling matters
 # more than the floor: glibc 2.34 folded libdl into libc, so anything built on a
@@ -17,20 +17,21 @@ ARG BASE_IMAGE=gcc:10-bullseye
 FROM --platform=linux/arm64 ${BASE_IMAGE} AS build-arm64
 
 COPY sdl-nosensor.c /src/sdl-nosensor.c
-COPY sdl-overlay.c /src/sdl-overlay.c
+COPY sdl-display.c /src/sdl-display.c
 
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
   -o /out.so /src/sdl-nosensor.c -ldl
 
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
-  -o /overlay.so /src/sdl-overlay.c -ldl
+  -o /display.so /src/sdl-display.c -ldl
 
-RUN readelf -V /overlay.so | grep -q 'GLIBC_2.17' \
-  && ! readelf -V /overlay.so | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])' \
-  && readelf --dyn-syms /overlay.so | grep -q ' SDL_RenderPresent$' \
-  && readelf --dyn-syms /overlay.so | grep -q ' SDL_PollEvent$' \
-  && readelf -W --dyn-syms /overlay.so | grep -q ' SDL_GameControllerGetButton$' \
-  && readelf --dyn-syms /overlay.so | grep -q ' SDL_DestroyRenderer$'
+RUN readelf -V /display.so | grep -q 'GLIBC_2.17' \
+  && ! readelf -V /display.so | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_RenderPresent$' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_RenderCopy$' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_PollEvent$' \
+  && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetButton$' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_DestroyRenderer$'
 
 # The object has to ask for nothing newer than the base glibc version, or a
 # device with an older libc drops the preload with only a line in the log, and
@@ -45,4 +46,4 @@ RUN readelf -V /out.so | grep -q 'GLIBC_2.17' \
 
 FROM scratch AS export
 COPY --from=build-arm64 /out.so /h700/sdl-nosensor.so
-COPY --from=build-arm64 /overlay.so /tg5040/sdl-overlay.so
+COPY --from=build-arm64 /display.so /tg5040/sdl-display.so

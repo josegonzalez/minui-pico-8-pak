@@ -111,7 +111,7 @@ static int screen_mode;
 /* the biggest rect pico-8 has drawn to, which is its own standard screen */
 static SDL_Rect game_rect;
 
-#define LOG(...) fprintf(stderr, "sdl-overlay: " __VA_ARGS__)
+#define LOG(...) fprintf(stderr, "sdl-display: " __VA_ARGS__)
 
 #define RESOLVE(name) (sdl.name = dlsym(RTLD_NEXT, "SDL_" #name))
 

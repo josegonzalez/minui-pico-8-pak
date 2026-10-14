@@ -34,13 +34,13 @@ clean:
 	rm -f bin/*/pico8-data-extractor || true
 	rm -f bin/minui-power-control || true
 	rm -f lib/h700/sdl-nosensor.so || true
-	rm -f lib/tg5040/sdl-overlay.so || true
+	rm -f lib/tg5040/sdl-display.so || true
 
-build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control lib/h700/sdl-nosensor.so lib/tg5040/sdl-overlay.so
+build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control lib/h700/sdl-nosensor.so lib/tg5040/sdl-display.so
 
 # unlike the downloads above this is built from source in this repo, so it has
 # to name its prerequisites or a stale object survives every edit to them
-lib/h700/sdl-nosensor.so lib/tg5040/sdl-overlay.so: shim/sdl-nosensor.c shim/sdl-overlay.c shim/Dockerfile
+lib/h700/sdl-nosensor.so lib/tg5040/sdl-display.so: shim/sdl-nosensor.c shim/sdl-display.c shim/Dockerfile
 	docker buildx build --build-arg BASE_IMAGE=$(SHIM_IMAGE) \
 		--target export --file shim/Dockerfile --output "type=local,dest=lib" shim
 
