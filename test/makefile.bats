@@ -127,6 +127,24 @@ pak_platforms() {
   [[ "$output" == *"export-ignore: set"* ]]
 }
 
+@test "the overlay shim is injected into the release archive" {
+  grep -qx "lib/tg5040/sdl-overlay.so" "$REPO_ROOT/.gitarchiveinclude"
+}
+
+@test "the overlay shim is built rather than committed" {
+  run sh -c "cd '$REPO_ROOT' && git ls-files --error-unmatch lib/tg5040/sdl-overlay.so"
+  [ "$status" -ne 0 ]
+
+  run sh -c "cd '$REPO_ROOT' && git check-ignore -q lib/tg5040/sdl-overlay.so"
+  [ "$status" -eq 0 ]
+}
+
+@test "the overlay shim source ships with the pak" {
+  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/sdl-overlay.c"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"export-ignore: unspecified"* ]]
+}
+
 # glibc 2.34 folded libdl into libc, so a newer base records dlsym@GLIBC_2.34
 # and the shim stops loading on the device
 @test "the sdl shim base image is pinned below the libdl merge" {

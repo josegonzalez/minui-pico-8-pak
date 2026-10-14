@@ -245,6 +245,14 @@ Please note that using `stretched` mode may look unnatural for games with circul
 
 `stretched` mode needs to know the size of your screen. It reads that from `fbset` where the device provides one, and otherwise falls back to the panel size for your model, which is known for every `h700` device. On the RG28XX, NextUI rotates the display for applications, so both screen modes look the same there as they do on the other models.
 
+### Overlay
+
+On `tg5040`, a PNG in the `/Overlays/PICO` folder on your SD card is drawn over the game, for a bezel or border. This is the folder NextUI uses for its own emulators' overlays.
+
+While a game is running, hold `Select` and press `Left` or `Right` to step through every PNG in the folder, in name order, and an option with no overlay at all. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
+
+The image is stretched to fill the screen, so it should match the screen's shape, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left. No overlay is drawn in `stretched` mode, where the game fills the screen.
+
 ### Sleep Mode
 
 Built-in MinUI cores have support for turning off the display and eventually shutting down when the power button is pressed. Standalone emulators do not have this functionality due to needing support inside of the console for this. At this time, this pak does not implement sleep mode.

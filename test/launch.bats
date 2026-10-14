@@ -328,6 +328,65 @@ setup() {
   [ "$LD_PRELOAD" = "" ]
 }
 
+@test "has_overlays finds a png in Overlays/PICO" {
+  mkdir -p "$SDCARD_PATH/Overlays/PICO"
+  : >"$SDCARD_PATH/Overlays/PICO/a.png"
+
+  run has_overlays
+  [ "$status" -eq 0 ]
+}
+
+@test "has_overlays finds nothing without a png" {
+  mkdir -p "$SDCARD_PATH/Overlays/PICO"
+  : >"$SDCARD_PATH/Overlays/PICO/._a.png.txt"
+
+  run has_overlays
+  [ "$status" -eq 1 ]
+}
+
+# called without run so the exports survive
+@test "setup_overlay_preload preloads the shim when there is an overlay" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/tg5040" "$SDCARD_PATH/Overlays/PICO"
+  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
+  : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
+
+  PLATFORM=tg5040
+  LD_PRELOAD=
+  setup_overlay_preload
+
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
+  [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
+  [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
+}
+
+@test "setup_overlay_preload draws nothing in stretched mode" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/tg5040" "$SDCARD_PATH/Overlays/PICO"
+  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
+  : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
+  echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+
+  PLATFORM=tg5040
+  LD_PRELOAD=
+  setup_overlay_preload
+
+  [ "$LD_PRELOAD" = "" ]
+}
+
+@test "setup_overlay_preload says so when the pak ships no shim" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR" "$SDCARD_PATH/Overlays/PICO"
+  : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
+
+  PLATFORM=tg5050
+  LD_PRELOAD=
+  run setup_overlay_preload
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No overlay shim at"* ]]
+}
+
 @test "get_controller_file returns one mapping for every h700 device" {
   for device in '' rg28xx rg34xx rg34xxsp rg35xxh rg35xxplus rg35xxpro \
     rg35xxsp rg40xxh rg40xxv rgcubexx rgsp; do

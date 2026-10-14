@@ -349,6 +349,46 @@ setup_sdl_preload() {
   export LD_PRELOAD="$sdl_shim${LD_PRELOAD:+:$LD_PRELOAD}"
 }
 
+# pico-8 cannot draw a bezel itself, so the shim draws one over every frame.
+# Overlays live where NextUI keeps them for its libretro cores.
+get_overlay_dir() {
+  echo "$SDCARD_PATH/Overlays/$PAK_NAME"
+}
+
+has_overlays() {
+  for overlay_file in "$(get_overlay_dir)"/*.png; do
+    if [ -f "$overlay_file" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+setup_overlay_preload() {
+  overlay_dir="$(get_overlay_dir)"
+  if ! has_overlays; then
+    return 0
+  fi
+
+  # a stretched game fills the screen, so any bezel would cover it
+  if [ "$(get_screen_mode)" = "stretched" ]; then
+    echo "Screen mode is stretched, not drawing overlays from $overlay_dir" 1>&2
+    return 0
+  fi
+
+  overlay_shim="$PAK_DIR/lib/$PLATFORM/sdl-overlay.so"
+  if [ ! -f "$overlay_shim" ]; then
+    echo "No overlay shim at $overlay_shim, starting pico-8 without overlays from $overlay_dir" 1>&2
+    return 0
+  fi
+
+  # the shim picks the overlay and saves the Select + Left/Right choice itself
+  export PICO_PAK_OVERLAY_DIR="$overlay_dir"
+  export PICO_PAK_OVERLAY_CHOICE="$USERDATA_PATH/Pico-8-native/overlay"
+  export LD_PRELOAD="$overlay_shim${LD_PRELOAD:+:$LD_PRELOAD}"
+}
+
 # Whole word match against a space separated list. The platform checks used to
 # be `echo "$list" | grep -q "$PLATFORM"`, which also accepted every substring,
 # so rg35xx and tg50 both passed as supported platforms.
@@ -630,6 +670,7 @@ launch_cart() {
   # the current directory, which main has already cd'd to $PAK_DIR.
   export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   setup_sdl_preload
+  setup_overlay_preload
 
   # pico-8 is supplied by the user and links against whatever the device has, so
   # record that in the log: a library it cannot find is otherwise a silent
