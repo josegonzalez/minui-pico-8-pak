@@ -358,20 +358,33 @@ setup() {
   [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
   [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
   [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
+  [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
 }
 
-@test "setup_overlay_preload draws nothing in stretched mode" {
+# the shim also switches the screen mode in game, which needs no overlay
+@test "setup_overlay_preload preloads the shim without any overlays" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
-  mkdir -p "$PAK_DIR/lib/tg5040" "$SDCARD_PATH/Overlays/PICO"
+  mkdir -p "$PAK_DIR/lib/tg5040"
   : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
-  : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
+
+  PLATFORM=tg5040
+  LD_PRELOAD=
+  setup_overlay_preload
+
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
+}
+
+@test "setup_overlay_preload preloads the shim in stretched mode" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/tg5040"
+  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
 
   PLATFORM=tg5040
   LD_PRELOAD=
   setup_overlay_preload
 
-  [ "$LD_PRELOAD" = "" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
 }
 
 @test "setup_overlay_preload says so when the pak ships no shim" {
@@ -383,8 +396,20 @@ setup() {
   LD_PRELOAD=
   run setup_overlay_preload
 
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [[ "$output" == *"No overlay shim at"* ]]
+}
+
+@test "setup_overlay_preload is quiet without a shim or overlays" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR"
+
+  PLATFORM=tg5050
+  LD_PRELOAD=
+  run setup_overlay_preload
+
+  [ "$status" -eq 1 ]
+  [ "$output" = "" ]
 }
 
 @test "get_controller_file returns one mapping for every h700 device" {
@@ -1617,6 +1642,52 @@ setup() {
 
   [ "$status" -eq 0 ]
   grep -qx "pico8 LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh leaves stretching to the overlay shim when it is loaded" {
+  pak_dir="$(make_pak)"
+  mkdir -p "$pak_dir/lib/tg5040"
+  : >"$pak_dir/lib/tg5040/sdl-overlay.so"
+  echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-overlay.so" "$LOGS_PATH/PICO.txt"
+  grep -q "^pico8 ARGS=" "$LOGS_PATH/PICO.txt"
+  ! grep -q "^pico8 ARGS=.*-draw_rect" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh stretches pico-8 itself without the overlay shim" {
+  pak_dir="$(make_pak)"
+  echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=h700 DEVICE=rg35xxh \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -q "^pico8 ARGS=.*-draw_rect 0,0,640,480" "$LOGS_PATH/PICO.txt"
 }
 
 # the library path used to end in a colon with nothing inherited, which the

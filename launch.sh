@@ -389,27 +389,23 @@ has_overlays() {
   return 1
 }
 
+# The shim also switches the screen mode in game with Select + Up/Down, so it
+# is loaded whenever the platform ships it, overlays or not. Returns non-zero
+# when it is not loaded, so the caller knows to stretch pico-8 itself.
 setup_overlay_preload() {
   overlay_dir="$(get_overlay_dir)"
-  if ! has_overlays; then
-    return 0
-  fi
-
-  # a stretched game fills the screen, so any bezel would cover it
-  if [ "$(get_screen_mode)" = "stretched" ]; then
-    echo "Screen mode is stretched, not drawing overlays from $overlay_dir" 1>&2
-    return 0
-  fi
-
   overlay_shim="$PAK_DIR/lib/$PLATFORM/sdl-overlay.so"
   if [ ! -f "$overlay_shim" ]; then
-    echo "No overlay shim at $overlay_shim, starting pico-8 without overlays from $overlay_dir" 1>&2
-    return 0
+    if has_overlays; then
+      echo "No overlay shim at $overlay_shim, starting pico-8 without overlays from $overlay_dir" 1>&2
+    fi
+    return 1
   fi
 
-  # the shim picks the overlay and saves the Select + Left/Right choice itself
+  # the shim saves the Select + d-pad choices to these files itself
   export PICO_PAK_OVERLAY_DIR="$overlay_dir"
   export PICO_PAK_OVERLAY_CHOICE="$USERDATA_PATH/Pico-8-native/overlay"
+  export PICO_PAK_SCREEN_MODE="$USERDATA_PATH/Pico-8-native/screen-mode"
   export LD_PRELOAD="$overlay_shim${LD_PRELOAD:+:$LD_PRELOAD}"
 }
 
@@ -694,7 +690,10 @@ launch_cart() {
   # the current directory, which main has already cd'd to $PAK_DIR.
   export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   setup_sdl_preload
-  setup_overlay_preload
+  overlay_shim_loaded=false
+  if setup_overlay_preload; then
+    overlay_shim_loaded=true
+  fi
 
   # pico-8 is supplied by the user and links against whatever the device has, so
   # record that in the log: a library it cannot find is otherwise a silent
@@ -708,7 +707,9 @@ launch_cart() {
 
   draw_rect=""
   screen_mode="$(get_screen_mode)"
-  if [ "$screen_mode" = "stretched" ]; then
+  # pico-8 only reads its draw rect at startup, so with the shim loaded it
+  # always starts in standard mode and the shim does any stretching
+  if [ "$screen_mode" = "stretched" ] && [ "$overlay_shim_loaded" = false ]; then
     resolution="$(get_screen_resolution)"
     # a platform with neither fbset nor a known panel falls back to unstretched
     # rather than passing pico-8 a draw rect with empty dimensions

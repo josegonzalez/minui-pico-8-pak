@@ -227,6 +227,7 @@ make_pak() {
 #!/bin/sh
 echo "pico8 LD_PRELOAD=$LD_PRELOAD"
 echo "pico8 LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+echo "pico8 ARGS=$*"
 STUB
   printf '%s\n' "$body" >>"$pak_dir/pico8/pico8_64"
   chmod +x "$pak_dir/pico8/pico8_64"
