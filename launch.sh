@@ -144,10 +144,11 @@ list_favourite_names() {
 }
 
 # A BBS cart is named for its id or its slug, so a readable name has to come out
-# of the cart itself. pico8-data-extractor prints the cart's lua, and the BBS
-# convention puts the title on the first line as a comment, the same rule
-# parsepico applies for its cartName. Titles are often wrapped in decoration -
-# celeste ships as "-- ~celeste~" - so that is trimmed off.
+# of the cart itself. The BBS convention puts the title in a comment on the first
+# line of code, and pico8-data-extractor --title applies that rule, trimming the
+# decoration around it, and fails when that line holds no title. A comment
+# further down is ordinary code commentary, which is what searching the whole
+# program for one used to pick up.
 get_cart_title() {
   cart_file="$1"
 
@@ -155,14 +156,27 @@ get_cart_title() {
     return 1
   fi
 
-  cart_title="$(pico8-data-extractor "$cart_file" | awk '/^-- /{sub(/^-- /, ""); print; exit}')"
-  cart_title="$(printf '%s' "$cart_title" | sed -e 's/^[~*=+[:space:]]*//' -e 's/[~*=+[:space:]]*$//')"
+  pico8-data-extractor --title "$cart_file"
+}
 
-  if [ -z "$cart_title" ]; then
-    return 1
-  fi
+# Splore saves a cart named by slug as <slug>-<revision>.p8.png, so a cart with
+# no title is named from the slug alone - suika_demake-9.p8.png becomes
+# suika_demake. A cart named by its numeric id has no revision and keeps it all.
+get_cart_filename_title() {
+  cart_base="${1%.p8.png}"
+  cart_revision="${cart_base##*-}"
+  cart_slug="${cart_base%-*}"
 
-  printf '%s\n' "$cart_title"
+  case "$cart_revision" in
+  "$cart_base" | "" | *[!0-9]*) ;;
+  *)
+    if [ -n "$cart_slug" ]; then
+      cart_base="$cart_slug"
+    fi
+    ;;
+  esac
+
+  printf '%s\n' "$cart_base"
 }
 
 copy_carts() {
@@ -266,7 +280,7 @@ copy_carts() {
     fi
 
     if [ -z "$cart_title" ]; then
-      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="${cart_name%.p8.png}"
+      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="$(get_cart_filename_title "$cart_name")"
       cart_title="$(titlecase "$cart_title")"
     fi
 
