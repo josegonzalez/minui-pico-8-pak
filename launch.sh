@@ -214,6 +214,7 @@ copy_carts() {
 
   CARTS_FILE="$COPY_CARTS_TMP/carts.txt"
   COPIED_FILE="$COPY_CARTS_TMP/copied.txt"
+  REPLACED_FILE="$COPY_CARTS_TMP/replaced.txt"
   KEPT_FILE="$COPY_CARTS_TMP/kept.txt"
   FAV_FILE_NAMES="$COPY_CARTS_TMP/favourites.txt"
   MAP_FILE="$ROM_FOLDER/map.txt"
@@ -221,8 +222,20 @@ copy_carts() {
   RES_FOLDER="$ROM_FOLDER/.res"
 
   # the same cart can sit under both bbs roots, and deduplicating the list here
-  # keeps the loop below from spawning a lookup per cart to notice it
-  list_bbs_carts | awk -F/ '!seen[$NF]++' >"$CARTS_FILE"
+  # keeps the loop below from spawning a lookup per cart to notice it. Splore
+  # also keeps the old revision when it downloads an update (issue #39), so only
+  # the newest revision of each cart goes on, in the order they were listed.
+  list_bbs_carts | awk -F/ '!seen[$NF]++' >"$CARTS_FILE.all"
+  awk -F/ '
+    {
+      slug = $NF; revision = -1
+      if (match($NF, /-[0-9]+\.p8\.png$/)) {
+        slug = substr($NF, 1, RSTART - 1)
+        revision = substr($NF, RSTART + 1, RLENGTH - 8) + 0
+      }
+    }
+    NR == FNR { if (!(slug in newest) || revision > newest[slug]) newest[slug] = revision; next }
+    revision == newest[slug] && !printed[slug]++' "$CARTS_FILE.all" "$CARTS_FILE.all" >"$CARTS_FILE"
   if [ ! -s "$CARTS_FILE" ]; then
     echo "No downloaded carts under $HOME/bbs, nothing to copy" 1>&2
     rm -rf "$COPY_CARTS_TMP"
@@ -255,21 +268,23 @@ copy_carts() {
       rm -rf "$COPY_CARTS_TMP"
       return 0
     fi
+
+    # a cart favourited before an update is listed under its old revision, so
+    # favourites are matched by slug and the update is still copied
+    sed 's/-[0-9][0-9]*$//' "$FAV_FILE_NAMES" >"$FAV_FILE_NAMES.slugs"
   fi
 
   true >"$COPIED_FILE"
-
-  # extracting titles and writing to the SD card can take a while after pico-8
-  # exits, and a blank screen in the meantime looks like a hang worth powering
-  # off, which loses both the copy and the log
-  show_message "Copying downloaded carts into the roms folder." forever
+  true >"$REPLACED_FILE"
+  copy_message_shown=false
 
   # read from the file rather than a pipe so the loop does not run in a subshell
   while IFS= read -r bbs_cart; do
     cart_name="${bbs_cart##*/}"
+    cart_slug="$(get_cart_filename_title "$cart_name")"
 
     if [ "$favourites_only" = "true" ]; then
-      if ! grep -Fxq "${cart_name%.p8.png}" "$FAV_FILE_NAMES"; then
+      if ! grep -Fxq "$cart_slug" "$FAV_FILE_NAMES.slugs"; then
         continue
       fi
     fi
@@ -281,15 +296,51 @@ copy_carts() {
       cart_title="$(awk -F'\t' -v name="$cart_name" '$1 == name { print $2; exit }' "$MAP_FILE")"
     fi
 
-    if [ -z "$cart_title" ]; then
-      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="$(get_cart_filename_title "$cart_name")"
-      cart_title="$(titlecase "$cart_title")"
+    # an older revision copied on an earlier exit is replaced by this one, and
+    # its name carries over so one the user edited is kept. Only files with a row
+    # in map.txt are touched, since those are the ones this function wrote.
+    if [ "$cart_slug" != "${cart_name%.p8.png}" ] && [ -f "$MAP_FILE" ]; then
+      for old_cart in "$ROM_FOLDER/$cart_slug"-*.p8.png; do
+        old_name="${old_cart##*/}"
+        if [ ! -f "$old_cart" ] || [ "$old_name" = "$cart_name" ] ||
+          [ "$(get_cart_filename_title "$old_name")" != "$cart_slug" ]; then
+          continue
+        fi
+
+        old_title="$(awk -F'\t' -v name="$old_name" '$1 == name { print $2; exit }' "$MAP_FILE")"
+        if [ -z "$old_title" ]; then
+          continue
+        fi
+
+        if [ -z "$cart_title" ]; then
+          cart_title="$old_title"
+        fi
+        rm -f "$old_cart" "$MEDIA_FOLDER/${old_name%.*}.png" "$RES_FOLDER/$old_name.png"
+        printf '%s\n' "$old_name" >>"$REPLACED_FILE"
+        echo "Replaced $old_name with $cart_name in $ROM_FOLDER" 1>&2
+      done
     fi
 
     # NextUI drops the cart's last extension and MinUI keeps the whole name, so
     # the two artwork folders need different filenames for the same cart
     media_name="${cart_name%.*}.png"
     res_name="$cart_name.png"
+
+    # extracting titles and writing to the SD card can take a while after pico-8
+    # exits, and a blank screen in the meantime looks like a hang worth powering
+    # off, which loses both the copy and the log. A cart copied on an earlier
+    # exit needs neither, so the message waits for one that does.
+    if [ "$copy_message_shown" = "false" ] &&
+      { [ -z "$cart_title" ] || [ ! -f "$ROM_FOLDER/$cart_name" ] ||
+        [ ! -f "$MEDIA_FOLDER/$media_name" ] || [ ! -f "$RES_FOLDER/$res_name" ]; }; then
+      show_message "Copying downloaded carts into the roms folder." forever
+      copy_message_shown=true
+    fi
+
+    if [ -z "$cart_title" ]; then
+      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="$cart_slug"
+      cart_title="$(titlecase "$cart_title")"
+    fi
 
     mkdir -p "$MEDIA_FOLDER" "$RES_FOLDER"
 
@@ -324,10 +375,11 @@ copy_carts() {
 
   # map.txt is the display name file MinUI and NextUI read, and a user may have
   # written rows for carts of their own, so only the rows for the carts copied
-  # here are replaced instead of the whole file being truncated
+  # or replaced here are rewritten instead of the whole file being truncated
   if [ -f "$MAP_FILE" ]; then
-    awk -F'\t' 'NR == FNR { copied[$1] = 1; next } !($1 in copied)' \
-      "$COPIED_FILE" "$MAP_FILE" >"$KEPT_FILE"
+    # ENVIRON rather than awk -v, which would process backslash escapes in a path
+    MAP_PATH="$MAP_FILE" awk -F'\t' 'FILENAME != ENVIRON["MAP_PATH"] { drop[$1] = 1; next } !($1 in drop)' \
+      "$COPIED_FILE" "$REPLACED_FILE" "$MAP_FILE" >"$KEPT_FILE"
     cat "$KEPT_FILE" >>"$COPIED_FILE"
   fi
 

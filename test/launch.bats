@@ -1071,6 +1071,70 @@ setup() {
   [ -f "$rom_folder/15133.p8.png" ]
 }
 
+# issue #39: Splore keeps exterra-1 beside the exterra-2 an update downloads
+@test "copy_carts copies only the newest revision of a cart" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/exterra-1.p8.png"
+  make_bbs_cart "bbs/carts/exterra-2.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/exterra-2.p8.png" ]
+  [ ! -f "$rom_folder/exterra-1.p8.png" ]
+  [ "$(cut -f1 "$rom_folder/map.txt")" = "exterra-2.p8.png" ]
+}
+
+@test "copy_carts replaces an older revision it copied before and keeps its name" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/exterra-1.p8.png"
+  make_bbs_cart "bbs/carts/exterra-2.p8.png"
+  mkdir -p "$rom_folder/.media" "$rom_folder/.res"
+  : >"$rom_folder/exterra-1.p8.png"
+  : >"$rom_folder/.media/exterra-1.p8.png"
+  : >"$rom_folder/.res/exterra-1.p8.png.png"
+  printf 'exterra-1.p8.png\tExTerra\nmy_game.p8\tMy Game\n' >"$rom_folder/map.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/exterra-2.p8.png" ]
+  [ ! -f "$rom_folder/exterra-1.p8.png" ]
+  [ ! -f "$rom_folder/.media/exterra-1.p8.png" ]
+  [ ! -f "$rom_folder/.res/exterra-1.p8.png.png" ]
+  grep -qx "exterra-2.p8.png	ExTerra" "$rom_folder/map.txt"
+  grep -qx "my_game.p8	My Game" "$rom_folder/map.txt"
+  [ "$(grep -c "^exterra-1" "$rom_folder/map.txt")" -eq 0 ]
+}
+
+# a file with no row in map.txt was not written by copy_carts
+@test "copy_carts leaves an older revision alone without a map.txt row" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/exterra-2.p8.png"
+  : >"$rom_folder/exterra-1.p8.png"
+  printf 'my_game.p8\tMy Game\n' >"$rom_folder/map.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/exterra-1.p8.png" ]
+  [ -f "$rom_folder/exterra-2.p8.png" ]
+}
+
+@test "copy_carts copies the update of a cart favourited before it" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/exterra-1.p8.png"
+  make_bbs_cart "bbs/carts/exterra-2.p8.png"
+  printf '|exterra-1   |exterra   |0   |someone   |   |exterra\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/exterra-2.p8.png" ]
+  [ ! -f "$rom_folder/exterra-1.p8.png" ]
+}
+
 @test "copy_carts leaves the favourites file untouched" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
@@ -1179,6 +1243,34 @@ setup() {
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
   [[ "$output" != *"Copying downloaded carts"* ]]
+}
+
+# every exit runs copy_carts, and a message flashed when nothing is copied just
+# delays getting back to the game list
+@test "copy_carts shows no copying message when every cart is already copied" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  copy_carts "$rom_folder" >/dev/null 2>&1
+  [ -f "$rom_folder/freecell.p8.png" ]
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Copying downloaded carts"* ]]
+  [ "$(cut -f1 "$rom_folder/map.txt")" = "freecell.p8.png" ]
+}
+
+@test "copy_carts shows the copying message when one cart is new" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  copy_carts "$rom_folder" >/dev/null 2>&1
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Copying downloaded carts"* ]]
+  [ -f "$rom_folder/tetris.p8.png" ]
 }
 
 @test "copy_carts says why it stops with no downloaded carts" {
