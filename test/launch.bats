@@ -1181,6 +1181,34 @@ setup() {
   [[ "$output" != *"Copying downloaded carts"* ]]
 }
 
+# every exit runs copy_carts, and a message flashed when nothing is copied just
+# delays getting back to the game list
+@test "copy_carts shows no copying message when every cart is already copied" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  copy_carts "$rom_folder" >/dev/null 2>&1
+  [ -f "$rom_folder/freecell.p8.png" ]
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Copying downloaded carts"* ]]
+  [ "$(cut -f1 "$rom_folder/map.txt")" = "freecell.p8.png" ]
+}
+
+@test "copy_carts shows the copying message when one cart is new" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  copy_carts "$rom_folder" >/dev/null 2>&1
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Copying downloaded carts"* ]]
+  [ -f "$rom_folder/tetris.p8.png" ]
+}
+
 @test "copy_carts says why it stops with no downloaded carts" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"

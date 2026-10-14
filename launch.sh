@@ -258,11 +258,7 @@ copy_carts() {
   fi
 
   true >"$COPIED_FILE"
-
-  # extracting titles and writing to the SD card can take a while after pico-8
-  # exits, and a blank screen in the meantime looks like a hang worth powering
-  # off, which loses both the copy and the log
-  show_message "Copying downloaded carts into the roms folder." forever
+  copy_message_shown=false
 
   # read from the file rather than a pipe so the loop does not run in a subshell
   while IFS= read -r bbs_cart; do
@@ -281,15 +277,26 @@ copy_carts() {
       cart_title="$(awk -F'\t' -v name="$cart_name" '$1 == name { print $2; exit }' "$MAP_FILE")"
     fi
 
-    if [ -z "$cart_title" ]; then
-      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="$(get_cart_filename_title "$cart_name")"
-      cart_title="$(titlecase "$cart_title")"
-    fi
-
     # NextUI drops the cart's last extension and MinUI keeps the whole name, so
     # the two artwork folders need different filenames for the same cart
     media_name="${cart_name%.*}.png"
     res_name="$cart_name.png"
+
+    # extracting titles and writing to the SD card can take a while after pico-8
+    # exits, and a blank screen in the meantime looks like a hang worth powering
+    # off, which loses both the copy and the log. A cart copied on an earlier
+    # exit needs neither, so the message waits for one that does.
+    if [ "$copy_message_shown" = "false" ] &&
+      { [ -z "$cart_title" ] || [ ! -f "$ROM_FOLDER/$cart_name" ] ||
+        [ ! -f "$MEDIA_FOLDER/$media_name" ] || [ ! -f "$RES_FOLDER/$res_name" ]; }; then
+      show_message "Copying downloaded carts into the roms folder." forever
+      copy_message_shown=true
+    fi
+
+    if [ -z "$cart_title" ]; then
+      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="$(get_cart_filename_title "$cart_name")"
+      cart_title="$(titlecase "$cart_title")"
+    fi
 
     mkdir -p "$MEDIA_FOLDER" "$RES_FOLDER"
 
