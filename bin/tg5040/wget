@@ -2,4 +2,10 @@
 
 # the tg5040 doesn't have up to date certificates
 # so we need to disable certificate checking
-wget-original --no-check-certificate "$@"
+#
+# wget-original links against libraries the pak ships in lib/tg5040, which
+# launch.sh only puts on LD_LIBRARY_PATH for pico-8 itself, so add them here
+# for this process alone. The path is not cd-resolved so a missing directory
+# cannot collapse it to an empty element, which would mean the current one.
+bin_dir="$(cd "$(dirname "$0")" && pwd)"
+LD_LIBRARY_PATH="$bin_dir/../../lib/tg5040${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$bin_dir/wget-original" --no-check-certificate "$@"

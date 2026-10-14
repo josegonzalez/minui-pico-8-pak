@@ -121,10 +121,12 @@ Earlier versions of this pak saved to `/.userdata/shared/Pico-8-native/cdata`. T
 
 The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png` for NextUI and `.res/Splore.p8.png` for MinUI, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI.
 
-Before Splore starts, the pak checks that the device has a network connection and then downloads a small file from `lexaloffle.com` to confirm the Splore servers are reachable. If either check fails, a message is displayed and waits for you to choose:
+Before Splore starts, the pak checks that the device has a network connection and then downloads the `lexaloffle.com` homepage to confirm the Splore servers are reachable. If either check fails, a message is displayed and waits for you to choose:
 
 - `CONTINUE` starts Splore anyway. Carts you have already downloaded stay browsable, but new carts cannot be fetched.
 - `EXIT` returns to MinUI without starting Splore.
+
+If the download could not be attempted at all, for example because the `wget` the pak ships could not start, the message says the check could not run and points to the log file instead of reporting the servers as unreachable.
 
 This check only runs for the Splore cart. Ordinary carts start without touching the network.
 

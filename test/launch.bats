@@ -1050,7 +1050,7 @@ setup() {
   stub_wget reachable
 
   is_internet_reachable
-  grep -q "https://www.lexaloffle.com/robots.txt" "$WGET_LOG"
+  grep -q "https://www.lexaloffle.com/" "$WGET_LOG"
 }
 
 @test "is_internet_reachable obeys the positional shim contract" {
@@ -1076,7 +1076,30 @@ setup() {
 
   run is_internet_reachable
   [ "$status" -eq 0 ]
-  grep -q "^10s wget https://www.lexaloffle.com/robots.txt" "$TIMEOUT_LOG"
+  grep -q "^10s wget https://www.lexaloffle.com/" "$TIMEOUT_LOG"
+}
+
+@test "is_internet_reachable reports a probe that could not run" {
+  stub_wget broken
+
+  run is_internet_reachable
+  [ "$status" -eq 2 ]
+  [ ! -f "$(get_network_probe_file)" ]
+}
+
+@test "is_internet_reachable reports a probe that could not run under timeout" {
+  stub_wget broken
+  stub_timeout
+
+  run is_internet_reachable
+  [ "$status" -eq 2 ]
+}
+
+@test "is_internet_reachable logs the status of a failed probe" {
+  stub_wget unreachable
+
+  ! is_internet_reachable 2>"$BATS_TEST_TMPDIR/stderr"
+  grep -q "https://www.lexaloffle.com/ exited with status 1" "$BATS_TEST_TMPDIR/stderr"
 }
 
 @test "show_confirmation returns zero when the user confirms" {
@@ -1171,6 +1194,27 @@ setup() {
   stub_network up
   stub_presenter 2
   stub_wget unreachable
+
+  run verify_splore_connection "$(make_cart Splore.p8)"
+  [ "$status" -eq 1 ]
+}
+
+@test "verify_splore_connection warns when the connection check could not run" {
+  stub_network up
+  stub_presenter 0
+  stub_wget broken
+
+  run verify_splore_connection "$(make_cart Splore.p8)"
+  [ "$status" -eq 0 ]
+  grep -q "connection check could not run" "$PRESENTER_CONFIRM_LOG"
+  grep -q "$LOGS_PATH/PICO.txt" "$PRESENTER_CONFIRM_LOG"
+  ! grep -q "Lexaloffle servers could not be reached" "$PRESENTER_CONFIRM_LOG"
+}
+
+@test "verify_splore_connection aborts when the user exits the check failure warning" {
+  stub_network up
+  stub_presenter 2
+  stub_wget broken
 
   run verify_splore_connection "$(make_cart Splore.p8)"
   [ "$status" -eq 1 ]

@@ -146,6 +146,8 @@ STUB
 #   unreachable  an empty file is left behind and the fetch fails
 #   empty        an empty file is left behind but the fetch reports success
 #   silent       nothing is written at all and the fetch reports success
+#   broken       nothing is written and the shim exits 127, as it does when the
+#                loader cannot find a library wget needs
 #
 # The output path is read from $4 to match the positional contract of the curl
 # based shims on rg35xxplus and tg5050.
@@ -169,6 +171,9 @@ if [ "$mode" = "empty" ]; then
 fi
 if [ "$mode" = "silent" ]; then
   exit 0
+fi
+if [ "$mode" = "broken" ]; then
+  exit 127
 fi
 : >"$4"
 exit 1
