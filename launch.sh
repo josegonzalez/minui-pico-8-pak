@@ -688,7 +688,9 @@ launch_cart() {
   #
   # The inherited value is appended conditionally because an empty element means
   # the current directory, which main has already cd'd to $PAK_DIR.
+  inherited_library_path="${LD_LIBRARY_PATH:-}"
   export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  inherited_preload="${LD_PRELOAD:-}"
   setup_sdl_preload
   display_shim_loaded=false
   if setup_display_preload; then
@@ -740,6 +742,19 @@ launch_cart() {
       -run "$ROM_PATH" $draw_rect
   fi
   pico_status=$?
+
+  # the library path and preloads are for pico-8 alone: minui-presenter is SDL
+  # too and shows its messages after this, so it needs the device's SDL2 back
+  if [ -n "$inherited_library_path" ]; then
+    export LD_LIBRARY_PATH="$inherited_library_path"
+  else
+    unset LD_LIBRARY_PATH
+  fi
+  if [ -n "$inherited_preload" ]; then
+    export LD_PRELOAD="$inherited_preload"
+  else
+    unset LD_PRELOAD
+  fi
 
   sync
   copy_carts "$ROM_FOLDER"

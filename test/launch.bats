@@ -1666,7 +1666,39 @@ setup() {
   [ "$status" -eq 0 ]
   grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-display.so" "$LOGS_PATH/PICO.txt"
   grep -q "^pico8 ARGS=" "$LOGS_PATH/PICO.txt"
-  ! grep -q "^pico8 ARGS=.*-draw_rect" "$LOGS_PATH/PICO.txt"
+  [ "$(grep -c "^pico8 ARGS=.*-draw_rect" "$LOGS_PATH/PICO.txt")" -eq 0 ]
+}
+
+# minui-presenter shows the messages after pico-8 exits and is SDL too, so it
+# would load the pak's SDL2 and the display shim; sync is the first command run after
+@test "launch.sh restores the loader environment once pico-8 exits" {
+  pak_dir="$(make_pak)"
+  mkdir -p "$pak_dir/lib/tg5040"
+  : >"$pak_dir/lib/tg5040/sdl-display.so"
+  printf '#!/bin/sh\necho "sync LD_PRELOAD=$LD_PRELOAD"\necho "sync LD_LIBRARY_PATH=$LD_LIBRARY_PATH"\n' >"$STUB_BIN/sync"
+  chmod +x "$STUB_BIN/sync"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= LD_LIBRARY_PATH=/inherited \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-display.so" "$LOGS_PATH/PICO.txt"
+  grep -qx "sync LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+  [ "$(grep -c "^sync LD_PRELOAD=.*sdl-display" "$LOGS_PATH/PICO.txt")" -eq 0 ]
+  grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/pico8/lib:$pak_dir/lib/tg5040:$pak_dir/lib/arm64:/inherited" \
+    "$LOGS_PATH/PICO.txt"
+  [ "$(grep -c "^sync LD_LIBRARY_PATH=.*$pak_dir" "$LOGS_PATH/PICO.txt")" -eq 0 ]
+  grep -qx "sync LD_LIBRARY_PATH=/inherited" "$LOGS_PATH/PICO.txt"
 }
 
 @test "launch.sh stretches pico-8 itself without the display shim" {
