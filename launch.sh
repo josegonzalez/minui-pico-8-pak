@@ -214,23 +214,39 @@ copy_carts() {
   fi
 
   if [ "$favourites_only" = "true" ]; then
-    FAV_FILE="$HOME/favourites.txt"
-    if [ ! -f "$FAV_FILE" ]; then
-      FAV_FILE="$HOME/.lexaloffle/pico-8/favourites.txt"
-    fi
+    # favourites.txt sits beside bbs, so it is looked for under the same two
+    # roots, and both are read because taking the first one that existed let an
+    # empty or stale copy hide the one pico-8 was actually writing to. They are
+    # read into scratch rather than rewriting the file pico-8 owns, which is what
+    # the line stripping carriage returns here used to do.
+    fav_found=false
+    true >"$FAV_FILE_NAMES"
+    for FAV_FILE in "$HOME/favourites.txt" "$HOME/.lexaloffle/pico-8/favourites.txt"; do
+      [ -f "$FAV_FILE" ] || continue
+      fav_found=true
+      echo "Reading favourites from $FAV_FILE" 1>&2
+      list_favourite_names "$FAV_FILE" >>"$FAV_FILE_NAMES"
+    done
 
-    if [ ! -f "$FAV_FILE" ]; then
+    if [ "$fav_found" = "false" ]; then
       echo "$copy_marker asks for favourites only but no favourites.txt exists, nothing to copy" 1>&2
       rm -rf "$COPY_CARTS_TMP"
       return 0
     fi
 
-    # read into scratch rather than rewriting the file pico-8 owns, which is
-    # what the line stripping carriage returns here used to do
-    list_favourite_names "$FAV_FILE" >"$FAV_FILE_NAMES"
+    if [ ! -s "$FAV_FILE_NAMES" ]; then
+      echo "$copy_marker asks for favourites only but favourites.txt lists no carts, nothing to copy" 1>&2
+      rm -rf "$COPY_CARTS_TMP"
+      return 0
+    fi
   fi
 
   true >"$COPIED_FILE"
+
+  # extracting titles and writing to the SD card can take a while after pico-8
+  # exits, and a blank screen in the meantime looks like a hang worth powering
+  # off, which loses both the copy and the log
+  show_message "Copying downloaded carts into the roms folder." forever
 
   # read from the file rather than a pipe so the loop does not run in a subshell
   while IFS= read -r bbs_cart; do
@@ -274,8 +290,16 @@ copy_carts() {
     printf "%s\t%s\n" "$cart_name" "$cart_title" >>"$COPIED_FILE"
   done <"$CARTS_FILE"
 
+  killall minui-presenter >/dev/null 2>&1 || true
+
   if [ ! -s "$COPIED_FILE" ]; then
-    echo "No downloaded carts matched, nothing to copy into $ROM_FOLDER" 1>&2
+    # the favourite names are not counted because list_favourite_names emits
+    # every field of a row, not one name per favourite
+    if [ "$favourites_only" = "true" ]; then
+      echo "No favourite in favourites.txt matches any of the $(grep -c '' "$CARTS_FILE") downloaded carts, nothing to copy into $ROM_FOLDER" 1>&2
+    else
+      echo "No downloaded carts matched, nothing to copy into $ROM_FOLDER" 1>&2
+    fi
     rm -rf "$COPY_CARTS_TMP"
     return 0
   fi

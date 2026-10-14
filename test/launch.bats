@@ -969,6 +969,90 @@ setup() {
   [[ "$output" == *"no favourites.txt exists"* ]]
 }
 
+# The case in issue #113: the first favourites.txt that existed was the only one
+# read, so an empty one at the top level hid the favourites in the nested one.
+@test "copy_carts reads the nested favourites.txt when the top level one is empty" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  : >"$HOME/favourites.txt"
+  mkdir -p "$HOME/.lexaloffle/pico-8"
+  printf '|freecell   |freecell   |1   |someone   |   |freecell\n' >"$HOME/.lexaloffle/pico-8/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  grep -q "^freecell.p8.png	" "$rom_folder/map.txt"
+}
+
+@test "copy_carts merges favourites from both favourites.txt files" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart "bbs/carts/celeste.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf '|freecell   |freecell\n' >"$HOME/favourites.txt"
+  mkdir -p "$HOME/.lexaloffle/pico-8"
+  printf '|celeste    |celeste\n' >"$HOME/.lexaloffle/pico-8/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ -f "$rom_folder/celeste.p8.png" ]
+  [ ! -f "$rom_folder/tetris.p8.png" ]
+}
+
+@test "copy_carts says why it stops when favourites.txt lists no carts" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  : >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/freecell.p8.png" ]
+  [ ! -f "$rom_folder/map.txt" ]
+  [[ "$output" == *"favourites.txt lists no carts"* ]]
+}
+
+@test "copy_carts says why it stops when no favourite was downloaded" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf '|freecell   |freecell\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$rom_folder/tetris.p8.png" ]
+  [ ! -f "$rom_folder/map.txt" ]
+  [[ "$output" == *"No favourite in favourites.txt matches any of the 1 downloaded carts"* ]]
+}
+
+# show_message echoes what it puts on screen, and the presenter it starts is
+# backgrounded, so the output is asserted on rather than a presenter log.
+@test "copy_carts shows a message while copying carts" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Copying downloaded carts"* ]]
+}
+
+@test "copy_carts shows no copying message without downloaded carts" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Copying downloaded carts"* ]]
+}
+
 @test "copy_carts says why it stops with no downloaded carts" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
