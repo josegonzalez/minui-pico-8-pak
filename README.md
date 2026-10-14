@@ -93,7 +93,7 @@ MinUI Power Control does not support `h700`, so the power button keeps its defau
 
 ### CPU speed
 
-On `rg35xxplus` and `tg5040`, the pak raises the CPU clock to 1.6 GHz while PICO-8 runs, but only when the OS uses the `userspace` CPU governor, as MinUI does. NextUI manages the clock itself, so the pak leaves it alone there and notes the governor in its log.
+On `rg35xxplus` and `tg5040`, the pak raises the CPU clock to 1.6 GHz while PICO-8 runs, but only when the OS uses the `userspace` CPU governor, as MinUI does. NextUI already switches to its `performance` governor before starting any pak, which runs the CPU at full speed, so the pak leaves the clock alone there and notes the governor in its log.
 
 ### SDL compatibility
 
