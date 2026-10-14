@@ -81,9 +81,8 @@ On `h700`, NextUI v6.14.0-rc11 or newer is needed for the buttons to map correct
 
 To exit a game:
 
-- press the `Start` button
-- select `Options`
-- select `shutdown Pico-8`
+- Press the `Start` button
+- Select `shutdown`
 
 ### Deep Sleep & Shutdown
 
