@@ -503,18 +503,22 @@ is_network_link_up() {
   return 1
 }
 
+# Returns 0 when the servers responded, 1 when they could not be reached, and 2
+# when the check itself could not run, such as a wget shim whose libraries are
+# missing, so the two failures can be told apart on screen.
 is_internet_reachable() {
-  probe_url="https://www.lexaloffle.com/robots.txt"
+  probe_url="https://www.lexaloffle.com/"
   probe_file="$(get_network_probe_file)"
   rm -f "$probe_file"
 
   # every platform ships its own wget shim, and two of them are curl wrappers
   # that read only the url and the output path, so no timeout flag survives
   if command -v timeout >/dev/null 2>&1; then
-    timeout 10s wget "$probe_url" -q -O "$probe_file" || true
+    timeout 10s wget "$probe_url" -q -O "$probe_file"
   else
-    wget "$probe_url" -q -O "$probe_file" || true
+    wget "$probe_url" -q -O "$probe_file"
   fi
+  probe_status=$?
 
   # a failed fetch leaves an empty file behind on every platform
   if [ -s "$probe_file" ]; then
@@ -523,6 +527,14 @@ is_internet_reachable() {
   fi
 
   rm -f "$probe_file"
+  echo "Connectivity probe of $probe_url exited with status $probe_status" 1>&2
+
+  # 126 and 127 are the shell's and the loader's codes for a program that could
+  # not be executed at all, and timeout passes them through unchanged
+  if [ "$probe_status" -eq 126 ] || [ "$probe_status" -eq 127 ]; then
+    return 2
+  fi
+
   return 1
 }
 
@@ -742,7 +754,11 @@ verify_splore_connection() {
     splore_message="No network connection was detected. Use Wifi.pak to connect. Splore can still browse the carts already downloaded to this device."
   else
     show_message "Checking the connection to the Splore servers." forever
-    if ! is_internet_reachable; then
+    is_internet_reachable
+    splore_probe_status=$?
+    if [ "$splore_probe_status" -eq 2 ]; then
+      splore_message="The Splore connection check could not run. See $LOGS_PATH/$PAK_NAME.txt for details. Splore can still browse the carts already downloaded to this device."
+    elif [ "$splore_probe_status" -ne 0 ]; then
       splore_message="The Lexaloffle servers could not be reached. Check your connection. Splore can still browse the carts already downloaded to this device."
     fi
     killall minui-presenter >/dev/null 2>&1 || true

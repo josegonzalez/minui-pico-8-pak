@@ -5,4 +5,7 @@
 # pico-8 dlopens libcurl and falls back to `wget "$url" -q -O "$path"` when it
 # cannot find one, which is the same shape the pak's own connectivity probe
 # uses, so only $1 and $4 are ever read.
-curl -s -L -k "$1" -q -o "$4"
+#
+# -f makes an http error fail and write no body, as wget does, rather than
+# saving the error page as if it were the download.
+curl -f -s -L -k "$1" -q -o "$4"
