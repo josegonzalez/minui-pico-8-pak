@@ -262,12 +262,20 @@ STUB
 
 # Creates a writable fake cpufreq policy directory and points launch.sh at it.
 # scaling_setspeed starts empty so a test can tell "not written" from "written".
+# The governor defaults to userspace, as on MinUI; pass an empty string to leave
+# scaling_governor out altogether.
 stub_cpufreq() {
+  local governor="${1-userspace}"
+
   PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/cpufreq"
   export PICO_PAK_CPUFREQ_DIR
 
+  rm -rf "$PICO_PAK_CPUFREQ_DIR"
   mkdir -p "$PICO_PAK_CPUFREQ_DIR"
   : >"$PICO_PAK_CPUFREQ_DIR/scaling_setspeed"
+  if [ -n "$governor" ]; then
+    echo "$governor" >"$PICO_PAK_CPUFREQ_DIR/scaling_governor"
+  fi
 }
 
 # Puts an fbset reporting the given geometry on PATH, so the panel lookup can be

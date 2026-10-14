@@ -578,6 +578,26 @@ setup() {
   done
 }
 
+@test "set_cpu_speed leaves the clock alone under any other governor" {
+  for platform in rg35xxplus tg5040; do
+    for governor in ondemand schedutil performance; do
+      stub_cpufreq "$governor"
+      PLATFORM="$platform" run set_cpu_speed
+      [ "$status" -eq 0 ]
+      [ "$output" = "cpufreq governor is $governor, leaving the clock speed to the OS" ]
+      [ ! -s "$PICO_PAK_CPUFREQ_DIR/scaling_setspeed" ]
+    done
+  done
+}
+
+@test "set_cpu_speed leaves the clock alone when the governor cannot be read" {
+  stub_cpufreq ""
+  PLATFORM=tg5040 run set_cpu_speed
+  [ "$status" -eq 0 ]
+  [ "$output" = "cpufreq governor is unknown, leaving the clock speed to the OS" ]
+  [ ! -s "$PICO_PAK_CPUFREQ_DIR/scaling_setspeed" ]
+}
+
 @test "set_cpu_speed tolerates a device with no cpufreq node" {
   PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" PLATFORM=tg5040 run set_cpu_speed
   [ "$status" -eq 0 ]
