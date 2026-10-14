@@ -901,6 +901,48 @@ setup() {
   [ -f "$rom_folder/15133.p8.png" ]
 }
 
+# The bug in issue #111: pico-8 pads every field with spaces to line up the
+# columns, and the padding kept any favourite from matching a downloaded cart.
+@test "list_favourite_names trims padding from each field" {
+  printf '|clockwise_knight-4   |clockwise_knight     |1794   |benjamin_soule   |                     |clockwise_knight\n' >"$HOME/favourites.txt"
+  printf '|picodriller-0        |picodriller          |1794   |johanp           |                     |picodriller\n' >>"$HOME/favourites.txt"
+
+  run list_favourite_names "$HOME/favourites.txt"
+  [ "$status" -eq 0 ]
+
+  printf '%s\n' "$output" | grep -Fxq "clockwise_knight-4"
+  printf '%s\n' "$output" | grep -Fxq "picodriller-0"
+  [ "$(printf '%s\n' "$output" | grep -cE '^[[:space:]]|[[:space:]]$')" -eq 0 ]
+}
+
+@test "copy_carts matches favourites padded with spaces" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/clockwise_knight-4.p8.png"
+  make_bbs_cart "bbs/carts/picodriller-0.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf '|clockwise_knight-4   |clockwise_knight     |1794   |benjamin_soule   |                     |clockwise_knight\n' >"$HOME/favourites.txt"
+  printf '|picodriller-0        |picodriller          |1794   |johanp           |                     |picodriller\n' >>"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/clockwise_knight-4.p8.png" ]
+  [ -f "$rom_folder/picodriller-0.p8.png" ]
+  [ ! -f "$rom_folder/tetris.p8.png" ]
+}
+
+@test "copy_carts matches a padded favourite written as a bbs path" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/1/15133.p8.png"
+  printf '|0   |bbs/1/15133.p8.png   |15134  \r\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/15133.p8.png" ]
+}
+
 @test "copy_carts leaves the favourites file untouched" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
