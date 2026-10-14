@@ -134,11 +134,13 @@ list_bbs_carts() {
 # favourites.txt has changed shape across pico-8 releases - some builds write a
 # bare cart name, others a path such as bbs/1/15133.p8.png - so it is read as a
 # set of cart names rather than by field position, which is what the parser this
-# replaced got wrong.
+# replaced got wrong. pico-8 also pads every field with spaces to line up the
+# columns, so each field is trimmed before its path and extension come off.
 list_favourite_names() {
   tr -d '\r' <"$1" |
     tr '|' '\n' |
-    sed -e 's#.*/##' -e 's#\.p8\.png$##' -e 's#\.p8$##' -e '/^[[:space:]]*$/d'
+    sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+      -e 's#.*/##' -e 's#\.p8\.png$##' -e 's#\.p8$##' -e '/^$/d'
 }
 
 # A BBS cart is named for its id or its slug, so a readable name has to come out
