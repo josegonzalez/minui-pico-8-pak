@@ -117,6 +117,13 @@ jobs:
             exit 1
           fi
 
+      - name: Validate overlay shim is bundled
+        run: |
+          if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "lib/tg5040/sdl-overlay.so"; then
+            echo "sdl-overlay.so is missing from the artifact"
+            exit 1
+          fi
+
       - name: Validate cart title extractor is bundled
         run: |
           for architecture in arm arm64; do
