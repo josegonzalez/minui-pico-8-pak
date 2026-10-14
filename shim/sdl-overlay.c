@@ -69,6 +69,8 @@ static struct {
   int (*RenderIsClipEnabled)(void *);
   void (*RenderGetClipRect)(void *, SDL_Rect *);
   int (*RenderSetClipRect)(void *, const SDL_Rect *);
+  int (*GetRendererOutputSize)(void *, int *, int *);
+  int (*QueryTexture)(void *, uint32_t *, int *, int *, int *);
 } sdl;
 
 static void *overlay_renderer;
@@ -118,7 +120,8 @@ static int resolve_sdl(void)
                      RESOLVE(RenderSetLogicalSize) && RESOLVE(RenderGetViewport) &&
                      RESOLVE(RenderSetViewport) && RESOLVE(RenderGetScale) &&
                      RESOLVE(RenderSetScale) && RESOLVE(RenderIsClipEnabled) &&
-                     RESOLVE(RenderGetClipRect) && RESOLVE(RenderSetClipRect)
+                     RESOLVE(RenderGetClipRect) && RESOLVE(RenderSetClipRect) &&
+                     RESOLVE(GetRendererOutputSize) && RESOLVE(QueryTexture)
                  ? 1
                  : -1;
 
@@ -360,6 +363,32 @@ static void *load_overlay(void *renderer, const char *name)
 }
 
 /*
+ * Scales the overlay to fit the screen and centres it, keeping its shape, so a
+ * 4:3 bezel on tg5040's 16:9 Smart Pro gets side bars rather than distortion.
+ */
+static int fit_overlay(void *renderer, SDL_Rect *dst)
+{
+  int screen_w, screen_h, image_w, image_h;
+
+  if (sdl.GetRendererOutputSize(renderer, &screen_w, &screen_h) != 0 ||
+      sdl.QueryTexture(overlay_texture, NULL, NULL, &image_w, &image_h) != 0 ||
+      image_w <= 0 || image_h <= 0) {
+    return 0;
+  }
+
+  if ((long)screen_w * image_h > (long)screen_h * image_w) {
+    dst->h = screen_h;
+    dst->w = image_w * screen_h / image_h;
+  } else {
+    dst->w = screen_w;
+    dst->h = image_h * screen_w / image_w;
+  }
+  dst->x = (screen_w - dst->w) / 2;
+  dst->y = (screen_h - dst->h) / 2;
+  return 1;
+}
+
+/*
  * pico-8 may letterbox with a logical size, viewport, scale or clip rect, and
  * any of those would squeeze the overlay into the game's square. They are
  * cleared for the one copy and put back so pico-8's next frame is unaffected.
@@ -368,7 +397,7 @@ static void draw_overlay(void *renderer)
 {
   int logical_w, logical_h, clip_enabled;
   float scale_x, scale_y;
-  SDL_Rect viewport, clip;
+  SDL_Rect viewport, clip, fitted;
 
   if (overlay_broken || !resolve_sdl()) {
     return;
@@ -409,7 +438,7 @@ static void draw_overlay(void *renderer)
   sdl.RenderSetViewport(renderer, NULL);
   sdl.RenderSetClipRect(renderer, NULL);
 
-  sdl.RenderCopy(renderer, overlay_texture, NULL, NULL);
+  sdl.RenderCopy(renderer, overlay_texture, NULL, fit_overlay(renderer, &fitted) ? &fitted : NULL);
 
   if (logical_w > 0 && logical_h > 0) {
     sdl.RenderSetLogicalSize(renderer, logical_w, logical_h);

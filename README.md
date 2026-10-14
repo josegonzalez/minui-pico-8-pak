@@ -251,7 +251,7 @@ On `tg5040`, a PNG in the `/Overlays/PICO` folder on your SD card is drawn over 
 
 While a game is running, hold `Select` and press `Left` or `Right` to step through every PNG in the folder, in name order, and an option with no overlay at all. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
 
-The image is stretched to fill the screen, so it should match the screen's shape, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left. No overlay is drawn in `stretched` mode, where the game fills the screen.
+The image is scaled to fit the screen without changing its shape and centred, leaving any space around it uncovered, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left, so a 4:3 image fills the screen. The Trimui Smart Pro also uses the `tg5040` build, and its 1280x720 screen is 16:9, so a 4:3 image there has bars at the sides and a 16:9 image fills it. No overlay is drawn in `stretched` mode, where the game fills the screen.
 
 ### Sleep Mode
 
