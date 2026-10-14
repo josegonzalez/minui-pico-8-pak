@@ -27,7 +27,9 @@ SUPPORTED_PLATFORMS="h700 rg35xxplus tg5040 tg5050"
 POWER_CONTROL_PLATFORMS="miyoomini my355 rg35xxplus tg5040 tg5050"
 
 # scaling_setspeed only takes effect under the userspace governor and the value
-# is a per SoC frequency, so the write is opt in per platform.
+# is a per SoC frequency, so the write is opt in per platform. NextUI manages the
+# clock itself, which is why h700 and tg5050 are absent and why set_cpu_speed
+# also checks the governor on the platforms MinUI and NextUI share.
 CPU_SETSPEED_PLATFORMS="rg35xxplus tg5040"
 
 titlecase() {
@@ -458,6 +460,16 @@ set_cpu_speed() {
   fi
 
   if [ ! -w "$cpufreq_dir/scaling_setspeed" ]; then
+    return 0
+  fi
+
+  # the node is writable whatever the governor, but the kernel refuses the write
+  # with EINVAL unless the userspace governor is active, as it is under NextUI
+  # on the TrimUI Brick. Switching governor is not ours to do: it was never put
+  # back when the pak tried that before.
+  governor="$(cat "$cpufreq_dir/scaling_governor" 2>/dev/null || true)"
+  if [ "$governor" != "userspace" ]; then
+    echo "cpufreq governor is ${governor:-unknown}, leaving the clock speed to the OS" 1>&2
     return 0
   fi
 

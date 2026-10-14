@@ -91,6 +91,10 @@ Deep sleep is supported on compatible devices. Click the power button to enter d
 
 MinUI Power Control does not support `h700`, so the power button keeps its default behaviour on those devices. The pak notes this in its log and starts PICO-8 as usual.
 
+### CPU speed
+
+On `rg35xxplus` and `tg5040`, the pak raises the CPU clock to 1.6 GHz while PICO-8 runs, but only when the OS uses the `userspace` CPU governor, as MinUI does. NextUI manages the clock itself, so the pak leaves it alone there and notes the governor in its log.
+
 ### SDL compatibility
 
 PICO-8 asks SDL to start every subsystem it knows about and refuses to run when one of them will not start. NextUI builds SDL2 without sensor support, so on `h700` PICO-8 used to stop before drawing anything, leaving only this in the log:
