@@ -76,9 +76,10 @@ make_bbs_cart() {
 # Stands in for pico8-data-extractor, which is not stubbed by default: the real
 # binary lands in bin/arm64 once `make build` has run, and launch.sh puts that
 # folder ahead of $STUB_BIN on PATH, so a test that wants a known answer has to
-# say so. Pass a title to print a cart whose first line is that title, or "fail"
-# to exit non-zero the way a cart that will not decode does. Every call is
-# logged to $EXTRACTOR_LOG so a test can assert the binary was never reached.
+# say so. Pass a title to print it the way --title prints a cart's title, or
+# "fail" to exit non-zero the way --title does for a cart with no title or one
+# that will not decode. Every call is logged to $EXTRACTOR_LOG so a test can
+# assert the flags it was given, or that the binary was never reached.
 stub_extractor() {
   local title="$1"
 
@@ -89,7 +90,7 @@ stub_extractor() {
   if [ "$title" = "fail" ]; then
     printf '#!/bin/sh\necho "$@" >>"%s"\nexit 1\n' "$EXTRACTOR_LOG" >"$STUB_BIN/pico8-data-extractor"
   else
-    printf '#!/bin/sh\necho "$@" >>"%s"\nprintf -- "-- %s\\n-- by nobody\\n"\n' \
+    printf '#!/bin/sh\necho "$@" >>"%s"\nprintf -- "%%s\\n" "%s"\n' \
       "$EXTRACTOR_LOG" "$title" >"$STUB_BIN/pico8-data-extractor"
   fi
 

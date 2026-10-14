@@ -98,7 +98,7 @@ pak_platforms() {
 
 @test "the cart title extractor version is pinned" {
   mk PICO8_DATA_EXTRACTOR_VERSION
-  [ "$output" = "0.1.0" ]
+  [ "$output" = "0.1.1" ]
 }
 
 @test "the sdl shim is injected into the release archive" {

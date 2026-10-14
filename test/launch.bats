@@ -773,6 +773,27 @@ setup() {
   [ "$output" = "King-of-the-Hill" ]
 }
 
+@test "get_cart_filename_title drops the revision after a slug" {
+  run get_cart_filename_title "suika_demake-9.p8.png"
+  [ "$status" -eq 0 ]
+  [ "$output" = "suika_demake" ]
+}
+
+@test "get_cart_filename_title keeps a numeric cart id whole" {
+  run get_cart_filename_title "42000.p8.png"
+  [ "$output" = "42000" ]
+}
+
+@test "get_cart_filename_title keeps a slug with no revision" {
+  run get_cart_filename_title "freecell.p8.png"
+  [ "$output" = "freecell" ]
+}
+
+@test "get_cart_filename_title keeps a name that is only a revision" {
+  run get_cart_filename_title "-5.p8.png"
+  [ "$output" = "-5" ]
+}
+
 @test "copy_carts does nothing without a marker" {
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
   make_bbs_cart "bbs/carts/freecell.p8.png"
@@ -857,7 +878,9 @@ setup() {
   [[ "$output" == *"No downloaded carts"* ]]
 }
 
-@test "copy_carts names a cart from the title in its lua header" {
+# the first-line title rule lives in the extractor, so the pak only has to ask
+# for it with --title rather than read the cart's lua itself
+@test "copy_carts names a cart from the title the extractor reports" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   stub_extractor "freecell classic"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
@@ -866,19 +889,20 @@ setup() {
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
   grep -q "^42000.p8.png	Freecell Classic$" "$rom_folder/map.txt"
+  grep -q -- "^--title .*42000.p8.png$" "$EXTRACTOR_LOG"
 }
 
-# celeste ships its title as "-- ~celeste~", and the decoration should not reach
-# the game list.
-@test "copy_carts strips the decoration around a cart title" {
+# kalikan_menu-6 starts with code rather than a title, and its name used to keep
+# the revision Splore puts after the slug.
+@test "copy_carts drops the bbs revision when the cart has no title" {
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
-  stub_extractor "~celeste~"
+  stub_extractor fail
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  make_bbs_cart "bbs/carts/celeste.p8.png"
+  make_bbs_cart "bbs/carts/kalikan_menu-6.p8.png"
 
   run copy_carts "$rom_folder"
   [ "$status" -eq 0 ]
-  grep -q "^celeste.p8.png	Celeste$" "$rom_folder/map.txt"
+  grep -q "^kalikan_menu-6.p8.png	Kalikan Menu$" "$rom_folder/map.txt"
 }
 
 @test "copy_carts falls back to the filename when the extractor fails" {

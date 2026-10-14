@@ -12,7 +12,7 @@ ARCHITECTURES := arm arm64
 PLATFORMS := h700 rg35xxplus tg5040 tg5050
 MINUI_PRESENTER_VERSION := 0.13.0
 MINUI_POWER_CONTROL_VERSION := 3.0.0
-PICO8_DATA_EXTRACTOR_VERSION := 0.1.0
+PICO8_DATA_EXTRACTOR_VERSION := 0.1.1
 
 # The image the sdl sensor shim is compiled in. Pinned below glibc 2.34,
 # which folded libdl into libc: a newer base records dlsym@GLIBC_2.34 and the
