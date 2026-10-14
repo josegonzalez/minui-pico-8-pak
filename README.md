@@ -245,6 +245,8 @@ Please note that using `stretched` mode may look unnatural for games with circul
 
 `stretched` mode needs to know the size of your screen. It reads that from `fbset` where the device provides one, and otherwise falls back to the panel size for your model, which is known for every `h700` device. On the RG28XX, NextUI rotates the display for applications, so both screen modes look the same there as they do on the other models.
 
+On `tg5040`, you can also switch between the two while a game is running: hold `Select` and press `Up` or `Down`. The mode you switch to is saved to the `screen-mode` file, so the next game starts in it too.
+
 ### Overlay
 
 On `tg5040`, a PNG in the `/Overlays/PICO` folder on your SD card is drawn over the game, for a bezel or border. This is the folder NextUI uses for its own emulators' overlays.

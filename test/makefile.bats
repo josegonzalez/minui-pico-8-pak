@@ -127,20 +127,20 @@ pak_platforms() {
   [[ "$output" == *"export-ignore: set"* ]]
 }
 
-@test "the overlay shim is injected into the release archive" {
-  grep -qx "lib/tg5040/sdl-overlay.so" "$REPO_ROOT/.gitarchiveinclude"
+@test "the display shim is injected into the release archive" {
+  grep -qx "lib/tg5040/sdl-display.so" "$REPO_ROOT/.gitarchiveinclude"
 }
 
-@test "the overlay shim is built rather than committed" {
-  run sh -c "cd '$REPO_ROOT' && git ls-files --error-unmatch lib/tg5040/sdl-overlay.so"
+@test "the display shim is built rather than committed" {
+  run sh -c "cd '$REPO_ROOT' && git ls-files --error-unmatch lib/tg5040/sdl-display.so"
   [ "$status" -ne 0 ]
 
-  run sh -c "cd '$REPO_ROOT' && git check-ignore -q lib/tg5040/sdl-overlay.so"
+  run sh -c "cd '$REPO_ROOT' && git check-ignore -q lib/tg5040/sdl-display.so"
   [ "$status" -eq 0 ]
 }
 
-@test "the overlay shim source ships with the pak" {
-  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/sdl-overlay.c"
+@test "the display shim source ships with the pak" {
+  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/sdl-display.c"
   [ "$status" -eq 0 ]
   [[ "$output" == *"export-ignore: unspecified"* ]]
 }

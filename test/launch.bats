@@ -345,46 +345,71 @@ setup() {
 }
 
 # called without run so the exports survive
-@test "setup_overlay_preload preloads the shim when there is an overlay" {
+@test "setup_display_preload preloads the shim when there is an overlay" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
   mkdir -p "$PAK_DIR/lib/tg5040" "$SDCARD_PATH/Overlays/PICO"
-  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
+  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
   : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
 
   PLATFORM=tg5040
   LD_PRELOAD=
-  setup_overlay_preload
+  setup_display_preload
 
-  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-overlay.so" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
   [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
   [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
+  [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
 }
 
-@test "setup_overlay_preload draws nothing in stretched mode" {
+# the shim also switches the screen mode in game, which needs no overlay
+@test "setup_display_preload preloads the shim without any overlays" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
-  mkdir -p "$PAK_DIR/lib/tg5040" "$SDCARD_PATH/Overlays/PICO"
-  : >"$PAK_DIR/lib/tg5040/sdl-overlay.so"
-  : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
+  mkdir -p "$PAK_DIR/lib/tg5040"
+  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
+
+  PLATFORM=tg5040
+  LD_PRELOAD=
+  setup_display_preload
+
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
+}
+
+@test "setup_display_preload preloads the shim in stretched mode" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/tg5040"
+  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
 
   PLATFORM=tg5040
   LD_PRELOAD=
-  setup_overlay_preload
+  setup_display_preload
 
-  [ "$LD_PRELOAD" = "" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
 }
 
-@test "setup_overlay_preload says so when the pak ships no shim" {
+@test "setup_display_preload says so when the pak ships no shim" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
   mkdir -p "$PAK_DIR" "$SDCARD_PATH/Overlays/PICO"
   : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
 
   PLATFORM=tg5050
   LD_PRELOAD=
-  run setup_overlay_preload
+  run setup_display_preload
 
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"No overlay shim at"* ]]
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"No display shim at"* ]]
+}
+
+@test "setup_display_preload is quiet without a shim or overlays" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR"
+
+  PLATFORM=tg5050
+  LD_PRELOAD=
+  run setup_display_preload
+
+  [ "$status" -eq 1 ]
+  [ "$output" = "" ]
 }
 
 @test "get_controller_file returns one mapping for every h700 device" {
@@ -1617,6 +1642,84 @@ setup() {
 
   [ "$status" -eq 0 ]
   grep -qx "pico8 LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh leaves stretching to the display shim when it is loaded" {
+  pak_dir="$(make_pak)"
+  mkdir -p "$pak_dir/lib/tg5040"
+  : >"$pak_dir/lib/tg5040/sdl-display.so"
+  echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-display.so" "$LOGS_PATH/PICO.txt"
+  grep -q "^pico8 ARGS=" "$LOGS_PATH/PICO.txt"
+  [ "$(grep -c "^pico8 ARGS=.*-draw_rect" "$LOGS_PATH/PICO.txt")" -eq 0 ]
+}
+
+# minui-presenter shows the messages after pico-8 exits and is SDL too, so it
+# would load the pak's SDL2 and the display shim; sync is the first command run after
+@test "launch.sh restores the loader environment once pico-8 exits" {
+  pak_dir="$(make_pak)"
+  mkdir -p "$pak_dir/lib/tg5040"
+  : >"$pak_dir/lib/tg5040/sdl-display.so"
+  printf '#!/bin/sh\necho "sync LD_PRELOAD=$LD_PRELOAD"\necho "sync LD_LIBRARY_PATH=$LD_LIBRARY_PATH"\n' >"$STUB_BIN/sync"
+  chmod +x "$STUB_BIN/sync"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= LD_LIBRARY_PATH=/inherited \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-display.so" "$LOGS_PATH/PICO.txt"
+  grep -qx "sync LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+  [ "$(grep -c "^sync LD_PRELOAD=.*sdl-display" "$LOGS_PATH/PICO.txt")" -eq 0 ]
+  grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/pico8/lib:$pak_dir/lib/tg5040:$pak_dir/lib/arm64:/inherited" \
+    "$LOGS_PATH/PICO.txt"
+  [ "$(grep -c "^sync LD_LIBRARY_PATH=.*$pak_dir" "$LOGS_PATH/PICO.txt")" -eq 0 ]
+  grep -qx "sync LD_LIBRARY_PATH=/inherited" "$LOGS_PATH/PICO.txt"
+}
+
+@test "launch.sh stretches pico-8 itself without the display shim" {
+  pak_dir="$(make_pak)"
+  echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=h700 DEVICE=rg35xxh \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -q "^pico8 ARGS=.*-draw_rect 0,0,640,480" "$LOGS_PATH/PICO.txt"
 }
 
 # the library path used to end in a colon with nothing inherited, which the

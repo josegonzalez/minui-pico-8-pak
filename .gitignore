@@ -13,4 +13,4 @@ res/fonts/*
 
 # built by `make build`, never committed: see shim/sdl-nosensor.c
 lib/h700
-lib/tg5040/sdl-overlay.so
+lib/tg5040/sdl-display.so

@@ -6,12 +6,16 @@
  * finished frame just before it reaches the screen. The image is stretched to
  * the whole screen and needs a transparent window where the game shows through.
  *
- * launch.sh only preloads this when the overlay folder holds a PNG, and passes
- * the folder in PICO_PAK_OVERLAY_DIR. Select + Left/Right steps through every
- * PNG there and a disabled state, and the choice is saved by name to the file
- * in PICO_PAK_OVERLAY_CHOICE for the next launch. pico-8 reads the pad with
- * SDL_GameControllerGetButton rather than from events, so the combo is read
- * the same way and hidden from those calls.
+ * launch.sh passes the overlay folder in PICO_PAK_OVERLAY_DIR. Select +
+ * Left/Right steps through every PNG there and a disabled state, and the choice
+ * is saved by name to the file in PICO_PAK_OVERLAY_CHOICE for the next launch.
+ * pico-8 reads the pad with SDL_GameControllerGetButton rather than from
+ * events, so the combo is read the same way and hidden from those calls.
+ *
+ * Select + Up/Down switches between the standard and stretched screen modes,
+ * saved to the file in PICO_PAK_SCREEN_MODE. pico-8 only takes its draw rect at
+ * startup, so launch.sh always starts it in standard mode and stretching is
+ * done here by redirecting the copy pico-8 draws each frame with.
  *
  * Every SDL call goes through dlsym, like sdl-nosensor.c, so this builds without
  * SDL headers and asks glibc for nothing newer than that shim does. See
@@ -43,8 +47,17 @@ typedef struct {
 #define SDL_CONTROLLERBUTTONDOWN 0x650
 #define SDL_CONTROLLERBUTTONUP 0x651
 #define SDL_CONTROLLER_BUTTON_BACK 4
+#define SDL_CONTROLLER_BUTTON_DPAD_UP 11
+#define SDL_CONTROLLER_BUTTON_DPAD_DOWN 12
 #define SDL_CONTROLLER_BUTTON_DPAD_LEFT 13
 #define SDL_CONTROLLER_BUTTON_DPAD_RIGHT 14
+
+/* indexes into the d-pad state below */
+enum { DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN, DIR_COUNT };
+
+static const char *const screen_modes[] = {"standard", "stretched"};
+#define SCREEN_MODE_COUNT ((int)(sizeof screen_modes / sizeof *screen_modes))
+#define SCREEN_MODE_STRETCHED 1
 
 static struct {
   void (*RenderPresent)(void *);
@@ -90,9 +103,15 @@ static int loaded = -2;
 static void *controller;
 static int select_held;
 /* a direction pressed with Select stays hidden from pico-8 until released */
-static int consumed[2];
+static int consumed[DIR_COUNT];
 
-#define LOG(...) fprintf(stderr, "sdl-overlay: " __VA_ARGS__)
+static const char *screen_mode_path;
+/* an index into screen_modes */
+static int screen_mode;
+/* the biggest rect pico-8 has drawn to, which is its own standard screen */
+static SDL_Rect game_rect;
+
+#define LOG(...) fprintf(stderr, "sdl-display: " __VA_ARGS__)
 
 #define RESOLVE(name) (sdl.name = dlsym(RTLD_NEXT, "SDL_" #name))
 
@@ -110,6 +129,8 @@ static int resolve_sdl(void)
   RESOLVE(GameControllerOpen);
   RESOLVE(GameControllerClose);
   RESOLVE(GameControllerGetButton);
+  /* wrapped for every frame pico-8 draws, so it must resolve even if the overlay cannot */
+  RESOLVE(RenderCopy);
   /* SDL 2.0.12 and up only, and only cosmetic, so its absence is not fatal */
   RESOLVE(SetTextureScaleMode);
 
@@ -173,22 +194,45 @@ static void scan_overlays(void)
   qsort(overlay_names, overlay_count, sizeof *overlay_names, compare_names);
 }
 
-/* Nothing is drawn until an overlay has been chosen, or after its file is gone. */
-static int read_choice(void)
+static void read_line(const char *path, char *line, size_t size)
 {
-  char line[256] = "";
-  FILE *file;
-  int i;
+  FILE *file = path != NULL ? fopen(path, "r") : NULL;
 
-  file = choice_path != NULL ? fopen(choice_path, "r") : NULL;
+  line[0] = '\0';
   if (file != NULL) {
-    if (fgets(line, sizeof line, file) == NULL) {
+    if (fgets(line, size, file) == NULL) {
       line[0] = '\0';
     }
     fclose(file);
   }
   line[strcspn(line, "\r\n")] = '\0';
+}
 
+static void write_line(const char *path, const char *line)
+{
+  FILE *file;
+
+  if (path == NULL || *path == '\0') {
+    return;
+  }
+
+  file = fopen(path, "w");
+  if (file == NULL) {
+    LOG("cannot save %s to %s\n", line, path);
+    return;
+  }
+
+  fprintf(file, "%s\n", line);
+  fclose(file);
+}
+
+/* Nothing is drawn until an overlay has been chosen, or after its file is gone. */
+static int read_choice(void)
+{
+  char line[256];
+  int i;
+
+  read_line(choice_path, line, sizeof line);
   for (i = 0; i < overlay_count; i++) {
     if (strcmp(overlay_names[i], line) == 0) {
       return i;
@@ -198,30 +242,27 @@ static int read_choice(void)
   return -1;
 }
 
+static int read_screen_mode(void)
+{
+  char line[64];
+  int i;
+
+  read_line(screen_mode_path, line, sizeof line);
+  for (i = 0; i < SCREEN_MODE_COUNT; i++) {
+    if (strcmp(screen_modes[i], line) == 0) {
+      return i;
+    }
+  }
+
+  return 0;
+}
+
 static const char *current_name(void)
 {
   return current < 0 ? "disabled" : overlay_names[current];
 }
 
-static void save_choice(void)
-{
-  FILE *file;
-
-  if (choice_path == NULL || *choice_path == '\0') {
-    return;
-  }
-
-  file = fopen(choice_path, "w");
-  if (file == NULL) {
-    LOG("cannot save the choice to %s\n", choice_path);
-    return;
-  }
-
-  fprintf(file, "%s\n", current_name());
-  fclose(file);
-}
-
-static void init_overlays(void)
+static void init_display(void)
 {
   static int done;
 
@@ -229,6 +270,10 @@ static void init_overlays(void)
     return;
   }
   done = 1;
+
+  screen_mode_path = getenv("PICO_PAK_SCREEN_MODE");
+  screen_mode = read_screen_mode();
+  LOG("starting in %s screen mode\n", screen_modes[screen_mode]);
 
   overlay_dir = getenv("PICO_PAK_OVERLAY_DIR");
   choice_path = getenv("PICO_PAK_OVERLAY_CHOICE");
@@ -252,7 +297,21 @@ static void cycle_overlay(int step)
   current = slot == overlay_count ? -1 : slot;
 
   LOG("switched to %s\n", current_name());
-  save_choice();
+  write_line(choice_path, current_name());
+}
+
+static void cycle_screen_mode(int step)
+{
+  screen_mode = (screen_mode + step + SCREEN_MODE_COUNT) % SCREEN_MODE_COUNT;
+
+  LOG("switched to %s screen mode\n", screen_modes[screen_mode]);
+  write_line(screen_mode_path, screen_modes[screen_mode]);
+}
+
+/* Left and Right are only taken from pico-8 when there are overlays to pick. */
+static int has_action(int direction)
+{
+  return direction == DIR_UP || direction == DIR_DOWN || overlay_count > 0;
 }
 
 /*
@@ -261,43 +320,57 @@ static void cycle_overlay(int step)
  */
 static void update_combo(void)
 {
-  static const int directions[2] = {SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT};
-  static int was_down[2];
-  int side, down;
+  static const int buttons[DIR_COUNT] = {
+      SDL_CONTROLLER_BUTTON_DPAD_LEFT,
+      SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+      SDL_CONTROLLER_BUTTON_DPAD_UP,
+      SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+  };
+  static int was_down[DIR_COUNT];
+  int direction, down;
 
-  if (controller == NULL || sdl.GameControllerGetButton == NULL || overlay_count == 0) {
+  if (controller == NULL || sdl.GameControllerGetButton == NULL) {
     return;
   }
 
   select_held = sdl.GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_BACK);
 
-  for (side = 0; side < 2; side++) {
-    down = sdl.GameControllerGetButton(controller, directions[side]);
-    if (down && !was_down[side] && select_held) {
-      consumed[side] = 1;
-      cycle_overlay(side ? 1 : -1);
+  for (direction = 0; direction < DIR_COUNT; direction++) {
+    down = sdl.GameControllerGetButton(controller, buttons[direction]);
+    if (down && !was_down[direction] && select_held && has_action(direction)) {
+      consumed[direction] = 1;
+      if (direction == DIR_LEFT || direction == DIR_RIGHT) {
+        cycle_overlay(direction == DIR_RIGHT ? 1 : -1);
+      } else {
+        cycle_screen_mode(direction == DIR_DOWN ? 1 : -1);
+      }
     }
     if (!down) {
-      consumed[side] = 0;
+      consumed[direction] = 0;
     }
-    was_down[side] = down;
+    was_down[direction] = down;
   }
 }
 
-static int direction_side(int button)
+static int direction_of(int button)
 {
-  if (button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) {
-    return 0;
+  switch (button) {
+  case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+    return DIR_LEFT;
+  case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+    return DIR_RIGHT;
+  case SDL_CONTROLLER_BUTTON_DPAD_UP:
+    return DIR_UP;
+  case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+    return DIR_DOWN;
+  default:
+    return -1;
   }
-  if (button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
-    return 1;
-  }
-  return -1;
 }
 
-static int is_hidden(int side)
+static int is_hidden(int direction)
 {
-  return side >= 0 && (select_held || consumed[side]);
+  return direction >= 0 && has_action(direction) && (select_held || consumed[direction]);
 }
 
 /* Covers pico-8 reading the d-pad from events as well as from button state. */
@@ -310,7 +383,33 @@ static int swallow_event(const void *event)
   }
 
   update_combo();
-  return is_hidden(direction_side(button->button));
+  return is_hidden(direction_of(button->button));
+}
+
+/*
+ * Maps a rect pico-8 draws to from its standard screen onto the whole output.
+ * The screen is learned as the biggest rect drawn to, which is the game itself.
+ */
+static int stretch_rect(void *renderer, const SDL_Rect *dst, SDL_Rect *out)
+{
+  int width, height;
+
+  if ((long)dst->w * dst->h > (long)game_rect.w * game_rect.h) {
+    game_rect = *dst;
+    LOG("pico-8 draws its screen at %d,%d %dx%d\n", dst->x, dst->y, dst->w, dst->h);
+  }
+
+  if (screen_mode != SCREEN_MODE_STRETCHED || game_rect.w <= 0 || game_rect.h <= 0 ||
+      sdl.GetRendererOutputSize == NULL ||
+      sdl.GetRendererOutputSize(renderer, &width, &height) != 0) {
+    return 0;
+  }
+
+  out->x = (dst->x - game_rect.x) * width / game_rect.w;
+  out->y = (dst->y - game_rect.y) * height / game_rect.h;
+  out->w = dst->w * width / game_rect.w;
+  out->h = dst->h * height / game_rect.h;
+  return 1;
 }
 
 static void *load_overlay(void *renderer, const char *name)
@@ -402,8 +501,13 @@ static void draw_overlay(void *renderer)
   if (overlay_broken || !resolve_sdl()) {
     return;
   }
-  init_overlays();
+  init_display();
   update_combo();
+
+  /* a stretched game fills the screen, so any bezel would cover it */
+  if (screen_mode == SCREEN_MODE_STRETCHED) {
+    return;
+  }
 
   if (renderer != overlay_renderer) {
     overlay_renderer = renderer;
@@ -459,6 +563,23 @@ void SDL_RenderPresent(void *renderer)
   sdl.RenderPresent(renderer);
 }
 
+int SDL_RenderCopy(void *renderer, void *texture, const SDL_Rect *src, const SDL_Rect *dst)
+{
+  SDL_Rect stretched;
+
+  resolve_sdl();
+  if (sdl.RenderCopy == NULL) {
+    return -1;
+  }
+
+  init_display();
+  if (dst != NULL && stretch_rect(renderer, dst, &stretched)) {
+    dst = &stretched;
+  }
+
+  return sdl.RenderCopy(renderer, texture, src, dst);
+}
+
 int SDL_PollEvent(void *event)
 {
   int got;
@@ -469,14 +590,14 @@ int SDL_PollEvent(void *event)
   }
 
   /* a NULL event only asks whether one is pending, so nothing can be dropped */
-  if (event == NULL || overlay_broken) {
+  if (event == NULL) {
     return sdl.PollEvent(event);
   }
 
-  init_overlays();
+  init_display();
   do {
     got = sdl.PollEvent(event);
-  } while (got && overlay_count > 0 && swallow_event(event));
+  } while (got && swallow_event(event));
 
   return got;
 }
@@ -491,9 +612,9 @@ void *SDL_GameControllerOpen(int index)
   }
 
   opened = sdl.GameControllerOpen(index);
-  if (opened != NULL && !overlay_broken) {
+  if (opened != NULL) {
     controller = opened;
-    LOG("watching controller %d for Select + Left/Right\n", index);
+    LOG("watching controller %d for Select + d-pad\n", index);
   }
 
   return opened;
@@ -519,10 +640,10 @@ uint8_t SDL_GameControllerGetButton(void *pad, int button)
     return 0;
   }
 
-  if (pad == controller && pad != NULL && direction_side(button) >= 0) {
-    init_overlays();
+  if (pad == controller && pad != NULL && direction_of(button) >= 0) {
+    init_display();
     update_combo();
-    if (overlay_count > 0 && is_hidden(direction_side(button))) {
+    if (is_hidden(direction_of(button))) {
       return 0;
     }
   }

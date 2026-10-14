@@ -117,10 +117,10 @@ jobs:
             exit 1
           fi
 
-      - name: Validate overlay shim is bundled
+      - name: Validate display shim is bundled
         run: |
-          if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "lib/tg5040/sdl-overlay.so"; then
-            echo "sdl-overlay.so is missing from the artifact"
+          if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "lib/tg5040/sdl-display.so"; then
+            echo "sdl-display.so is missing from the artifact"
             exit 1
           fi
 
