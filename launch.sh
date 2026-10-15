@@ -842,7 +842,13 @@ launch_cart() {
   fi
 
   sync
+  # each traced command is its own write to the SD card, seconds over a cart scan
+  case $- in *x*) copy_traced=true ;; *) copy_traced=false ;; esac
+  set +x
   copy_carts "$ROM_FOLDER"
+  if [ "$copy_traced" = "true" ]; then
+    set -x
+  fi
 
   # minui-power-control ends a session by signalling pico-8, and a status above
   # 128 is a signal, so neither that nor a power button shutdown is a failure
