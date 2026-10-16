@@ -758,6 +758,37 @@ setup() {
   [ "$output" = "The Legend of the Sword" ]
 }
 
+@test "tidy_title drops a trailing version number" {
+  run tidy_title "pico world race 1.2"
+  [ "$output" = "pico world race" ]
+  run tidy_title "peak of empires v1.2"
+  [ "$output" = "peak of empires" ]
+  run tidy_title "baba is you demake (v1.4.3)"
+  [ "$output" = "baba is you demake" ]
+  run tidy_title "dank tomb 1.1b"
+  [ "$output" = "dank tomb" ]
+  run tidy_title "Rocket - V2"
+  [ "$output" = "Rocket" ]
+}
+
+@test "tidy_title drops trailing dashes" {
+  run tidy_title "beam--"
+  [ "$output" = "beam" ]
+  run tidy_title "gate runner --"
+  [ "$output" = "gate runner" ]
+}
+
+@test "tidy_title keeps a number that is part of the name" {
+  run tidy_title "celeste 2"
+  [ "$output" = "celeste 2" ]
+  run tidy_title "2048"
+  [ "$output" = "2048" ]
+  run tidy_title "v1.2"
+  [ "$output" = "v1.2" ]
+  run tidy_title "pico-8 tutorial"
+  [ "$output" = "pico-8 tutorial" ]
+}
+
 @test "titlecase splits on separators and expands the acronyms it knows" {
   run titlecase "pico-8_rpg demo"
   [ "$output" = "PICO-8 RPG Demo" ]
@@ -961,6 +992,124 @@ setup() {
 
   grep -q "^freecell.p8.png	The Name I Chose$" "$rom_folder/map.txt"
   [ ! -s "$EXTRACTOR_LOG" ]
+}
+
+# issue #123: suika_demake's first line is the author's own label, while Splore
+# shows the BBS title
+@test "copy_carts names a cart from the title Splore recorded for it" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "watermelon game for pico8"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/suika_demake-9.p8.png"
+  make_bbs_cart "bbs/5/56576.p8.png"
+  printf '|suika_demake-9   |suika_demake   |1794   |spoike     |   |suika game demake\n' >"$HOME/favourites.txt"
+  printf "|56576            |56575          |1794   |krystman   |   |mai-chan's sweet buns\n" >>"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^suika_demake-9.p8.png	Suika Game Demake$" "$rom_folder/map.txt"
+  grep -q "^56576.p8.png	Mai-Chan's Sweet Buns$" "$rom_folder/map.txt"
+  [ ! -s "$EXTRACTOR_LOG" ]
+}
+
+@test "copy_carts uses the Splore title of an earlier revision for its update" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "ppwr engine"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/ppwr-6.p8.png"
+  printf '|ppwr-5   |ppwr   |1794   |someone   |   |pico world race 1.2\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^ppwr-6.p8.png	Pico World Race$" "$rom_folder/map.txt"
+}
+
+# Splore shows the slug for a cart with no BBS title, and picodriller's own
+# title comment reads better than that
+@test "copy_carts prefers the cart's title to a Splore title that is only the slug" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "pico driller"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/picodriller-0.p8.png"
+  printf '|picodriller-0   |picodriller   |1794   |johanp   |   |picodriller\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^picodriller-0.p8.png	Pico Driller$" "$rom_folder/map.txt"
+}
+
+# marble_merger has no BBS label, and its first line is a code label
+@test "copy_carts names from the slug when the cart's title is a code label" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "main structure"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/marble_merger-5.p8.png"
+  printf '|marble_merger-5   |marble_merger   |1794   |2darray   |   |marble_merger\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^marble_merger-5.p8.png	Marble Merger$" "$rom_folder/map.txt"
+}
+
+# many slugs are random words, so a title unlike the slug is still the best name
+@test "copy_carts keeps a cart's title that looks nothing like its slug" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "clanker pup"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/diwubuzoyi-0.p8.png"
+  printf '|diwubuzoyi-0   |diwubuzoyi   |1794   |someone   |   |diwubuzoyi\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^diwubuzoyi-0.p8.png	Clanker Pup$" "$rom_folder/map.txt"
+}
+
+@test "is_code_label matches only titles that name a section of code" {
+  run is_code_label "main--"
+  [ "$status" -eq 0 ]
+  run is_code_label "Global Variables"
+  [ "$status" -eq 0 ]
+  run is_code_label "grid shift puzzle poker"
+  [ "$status" -eq 1 ]
+  run is_code_label "main street"
+  [ "$status" -eq 1 ]
+}
+
+# Splore lists a favourite with no metadata by its id, which says nothing
+@test "copy_carts keeps the cart's title for a numeric cart Splore lists by id" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "mai-chan's sweet buns"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/5/56576.p8.png"
+  printf '|56576   |56575   |1794   |krystman   |   |56576\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^56576.p8.png	Mai-Chan's Sweet Buns$" "$rom_folder/map.txt"
+}
+
+@test "copy_carts takes a Splore title that only adds spaces to the slug" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor fail
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/puzzlesofthepaladin-3.p8.png"
+  printf '|puzzlesofthepaladin-3   |puzzlesofthepaladin   |1794   |someone   |   |puzzles of the paladin\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^puzzlesofthepaladin-3.p8.png	Puzzles of the Paladin$" "$rom_folder/map.txt"
+}
+
+@test "copy_carts falls back to the cart's title when favourites.txt has no title" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  stub_extractor "freecell classic"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/1/15133.p8.png"
+  printf '|0|bbs/1/15133.p8.png|15133\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  grep -q "^15133.p8.png	Freecell Classic$" "$rom_folder/map.txt"
 }
 
 # map.txt used to be truncated on every launch, which threw away the display
