@@ -1016,6 +1016,26 @@ setup() {
   [ ! -f "$rom_folder/tetris.p8.png" ]
 }
 
+# Splore caches every cart it shows, so in favourites mode the rest of the cache
+# is dropped before the per-cart work instead of being looked at one by one.
+@test "copy_carts does no per-cart work for carts that are not favourites" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favourites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  make_bbs_cart "bbs/carts/snake-3.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+  get_cart_filename_title() {
+    printf '%s\n' "$1" >>"$BATS_TEST_TMPDIR/looked-at"
+    printf '%s\n' "${1%.p8.png}"
+  }
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ "$(cat "$BATS_TEST_TMPDIR/looked-at")" = "freecell.p8.png" ]
+}
+
 # pico-8 has written favourites as a bare name and as a path across releases,
 # so the file is read as a set of names rather than by field position.
 @test "copy_carts matches a favourite written as a bbs path" {

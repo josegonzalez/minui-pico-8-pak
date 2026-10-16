@@ -242,6 +242,7 @@ copy_carts() {
     return 0
   fi
 
+  loop_file="$CARTS_FILE"
   if [ "$favourites_only" = "true" ]; then
     # favourites.txt sits beside bbs, so it is looked for under the same two
     # roots, and both are read because taking the first one that existed let an
@@ -272,6 +273,18 @@ copy_carts() {
     # a cart favourited before an update is listed under its old revision, so
     # favourites are matched by slug and the update is still copied
     sed 's/-[0-9][0-9]*$//' "$FAV_FILE_NAMES" >"$FAV_FILE_NAMES.slugs"
+
+    # Splore caches every cart it shows, so the cache is filtered in one pass
+    # here rather than spending two commands per cached cart in the loop
+    awk -F/ '
+      NR == FNR { fav[$0] = 1; next }
+      {
+        slug = $NF
+        sub(/\.p8\.png$/, "", slug)
+        if (match(slug, /-[0-9]+$/) && RSTART > 1) slug = substr(slug, 1, RSTART - 1)
+      }
+      slug in fav' "$FAV_FILE_NAMES.slugs" "$CARTS_FILE" >"$CARTS_FILE.favourites"
+    loop_file="$CARTS_FILE.favourites"
   fi
 
   true >"$COPIED_FILE"
@@ -282,12 +295,6 @@ copy_carts() {
   while IFS= read -r bbs_cart; do
     cart_name="${bbs_cart##*/}"
     cart_slug="$(get_cart_filename_title "$cart_name")"
-
-    if [ "$favourites_only" = "true" ]; then
-      if ! grep -Fxq "$cart_slug" "$FAV_FILE_NAMES.slugs"; then
-        continue
-      fi
-    fi
 
     # a row already in map.txt is both the name the user sees and the reason the
     # extractor does not run again for a cart that was named on an earlier launch
@@ -355,7 +362,7 @@ copy_carts() {
     fi
 
     printf "%s\t%s\n" "$cart_name" "$cart_title" >>"$COPIED_FILE"
-  done <"$CARTS_FILE"
+  done <"$loop_file"
 
   killall minui-presenter >/dev/null 2>&1 || true
 
@@ -835,7 +842,13 @@ launch_cart() {
   fi
 
   sync
+  # each traced command is its own write to the SD card, seconds over a cart scan
+  case $- in *x*) copy_traced=true ;; *) copy_traced=false ;; esac
+  set +x
   copy_carts "$ROM_FOLDER"
+  if [ "$copy_traced" = "true" ]; then
+    set -x
+  fi
 
   # minui-power-control ends a session by signalling pico-8, and a status above
   # 128 is a signal, so neither that nor a power button shutdown is a failure
