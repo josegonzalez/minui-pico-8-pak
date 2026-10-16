@@ -32,6 +32,28 @@ POWER_CONTROL_PLATFORMS="miyoomini my355 rg35xxplus tg5040 tg5050"
 # also checks the governor on the platforms MinUI and NextUI share.
 CPU_SETSPEED_PLATFORMS="rg35xxplus tg5040"
 
+# A trailing 1.2, v3 or (v1.4.3) names an upload, not the game, and trailing
+# dashes are decoration. A bare number such as the 2 in "celeste 2" stays.
+tidy_title() {
+  tidied="$(printf '%s\n' "$1" | sed -E \
+    -e 's/[[:space:]]*-+[[:space:]]*$//' \
+    -e 's/[[:space:]]+[-([]?[[:space:]]*([vV][0-9]+(\.[0-9]+)*|[0-9]+(\.[0-9]+)+)[a-zA-Z]?[])]?$//')"
+  printf '%s\n' "${tidied:-$1}"
+}
+
+# First-line comments that name a section of code rather than the game, all seen
+# in a Splore cache of 263 carts.
+is_code_label() {
+  case "$(printf '%s\n' "$1" | awk '{ sub(/[[:space:]-]+$/, ""); print tolower($0) }')" in
+  main | init | grid | points | variables | "global variables" | "helper functions" | \
+    "control functions" | "state machine" | "main loop" | "main game" | \
+    "main structure" | "game title here")
+    return 0
+    ;;
+  esac
+  return 1
+}
+
 titlecase() {
   input="$1"
   exceptions="a an the and but or nor for so yet at by in of on to up off out over with as"
@@ -159,6 +181,33 @@ get_cart_title() {
   fi
 
   pico8-data-extractor --title "$cart_file"
+}
+
+# Splore records each favourite's BBS title in favourites.txt. Builds that write
+# the |name-rev |slug |id |author |... |title layout put it in the seventh field;
+# the other layouts list_favourite_names handles have no title and yield nothing.
+list_splore_titles() {
+  for fav_file in "$HOME/favourites.txt" "$HOME/.lexaloffle/pico-8/favourites.txt"; do
+    [ -f "$fav_file" ] || continue
+
+    tr -d '\r' <"$fav_file" | awk -F'|' '
+      function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+      NF >= 7 {
+        slug = trim($2)
+        sub(/.*\//, "", slug)
+        sub(/\.p8(\.png)?$/, "", slug)
+        if (match(slug, /-[0-9]+$/) && RSTART > 1) slug = substr(slug, 1, RSTART - 1)
+        title = trim($7)
+        if (slug != "" && title != "") print slug "\t" title
+      }'
+  done
+}
+
+# The BBS title beats the cart's own first-line comment, which is often a code
+# label or an older version. Splore shows the slug itself when a cart has no
+# title, though, and the cart's comment is better than that.
+get_splore_title() {
+  awk -F'\t' -v slug="$1" '$1 == slug && tolower($2) != tolower(slug) { print $2; exit }' "$2"
 }
 
 # Splore saves a cart named by slug as <slug>-<revision>.p8.png, so a cart with
@@ -289,6 +338,8 @@ copy_carts() {
 
   true >"$COPIED_FILE"
   true >"$REPLACED_FILE"
+  SPLORE_TITLES="$COPY_CARTS_TMP/splore-titles.txt"
+  list_splore_titles >"$SPLORE_TITLES"
   copy_message_shown=false
 
   # read from the file rather than a pipe so the loop does not run in a subshell
@@ -345,8 +396,14 @@ copy_carts() {
     fi
 
     if [ -z "$cart_title" ]; then
-      cart_title="$(get_cart_title "$bbs_cart")" || cart_title="$cart_slug"
-      cart_title="$(titlecase "$cart_title")"
+      cart_title="$(get_splore_title "$cart_slug" "$SPLORE_TITLES")"
+      if [ -z "$cart_title" ]; then
+        cart_title="$(get_cart_title "$bbs_cart")" || cart_title=""
+        if [ -z "$cart_title" ] || is_code_label "$cart_title"; then
+          cart_title="$cart_slug"
+        fi
+      fi
+      cart_title="$(titlecase "$(tidy_title "$cart_title")")"
     fi
 
     mkdir -p "$MEDIA_FOLDER" "$RES_FOLDER"
