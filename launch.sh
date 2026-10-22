@@ -972,9 +972,8 @@ launch_cart() {
   fi
 
   # minui-power-control ends a session by signalling pico-8, and a status above
-  # 128 is a signal, so neither that nor a power button shutdown is a failure
-  # worth putting on screen
-  if [ "$pico_status" -gt 128 ] || [ -f /tmp/shutdown_from_pak ]; then
+  # 128 is a signal, so it is not a failure worth putting on screen
+  if [ "$pico_status" -gt 128 ]; then
     return 0
   fi
 
@@ -1187,26 +1186,11 @@ main() {
     return 1
   fi
 
+  # minui-power-control also powers the device off on a long press, so there is
+  # no shutdown left for the pak to handle once pico-8 exits
   start_power_control
 
-  # the status is held rather than returned on the spot: a pico-8 killed by the
-  # power button still has the shutdown handling below to run
   launch_cart "$ROM_PATH"
-  launch_status=$?
-
-  # handle the power-button pressed event
-  if [ -f /tmp/shutdown_from_pak ]; then
-    AUTO_RESUME_FILE="$SHARED_USERDATA_PATH/.minui/auto_resume.txt"
-    echo "$ROM_PATH" >"$AUTO_RESUME_FILE"
-    sync
-    rm /tmp/minui_exec
-    shutdown
-    while :; do
-      sleep 1
-    done
-  fi
-
-  return "$launch_status"
 }
 
 if [ -z "$PICO_PAK_SOURCE_ONLY" ]; then
