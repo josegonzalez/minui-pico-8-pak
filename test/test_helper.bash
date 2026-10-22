@@ -61,6 +61,12 @@ make_cart() {
   printf '%s' "$path"
 }
 
+# Writes a cart at the given path that starts with the png signature, followed
+# by an optional body so two carts can be told apart.
+make_png_cart() {
+  printf '\211PNG\r\n\032\n%s' "${2:-cart}" >"$1"
+}
+
 # Creates a roms folder under the fake SD card and echoes its path.
 make_rom_folder() {
   local path="$SDCARD_PATH/Roms/$1"

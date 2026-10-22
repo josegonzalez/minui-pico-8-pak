@@ -89,11 +89,11 @@ On `tg5040`, you can also hold `Select` and press `Menu` to quit straight away, 
 
 ### Game switcher
 
-NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so when you exit a cart on NextUI, the pak gives the switcher the cart's artwork instead. It uses the cart's image in the `.media` folder if there is one, and otherwise the cart itself when it ends in `.png`. The image and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card, and refreshed each time you exit the cart.
+NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so when you exit a cart on NextUI, the pak gives the switcher the cart's artwork instead. It uses the cart's image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The image and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card, and refreshed each time you exit the cart.
 
 Because NextUI treats that as a save state, the switcher labels the `A` button `RESUME` and the game list offers `X` to resume the cart. Both start the cart from the beginning. Press `Y` in the switcher to remove a cart from it.
 
-A `.p8` cart with no image in the `.media` folder still shows no picture. See [Artwork](#artwork) for where to put one. MinUI reads the same files to offer resuming a game, so nothing is written there.
+A cart saved as plain text, rather than as an image, still shows no picture unless it has an image in the `.media` folder. See [Artwork](#artwork) for where to put one. MinUI reads the same files to offer resuming a game, so nothing is written there.
 
 ### Deep Sleep & Shutdown
 

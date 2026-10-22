@@ -816,6 +816,12 @@ install_splore_cart() {
   return 0
 }
 
+# Every png starts with the byte 0x89 followed by PNG, and a text cart starts
+# with its pico-8 cartridge header instead.
+is_png_file() {
+  [ "$(dd if="$1" bs=1 skip=1 count=3 2>/dev/null)" = "PNG" ]
+}
+
 # NextUI's game switcher lists every recent game but only draws a preview, and
 # only offers to remove one, when <rom>.txt names a save slot and <rom>.<slot>.bmp
 # holds its screenshot. pico-8 has no save states, so the cart's artwork stands in
@@ -845,13 +851,11 @@ write_switcher_preview() {
     switcher_art="$switcher_folder/.media/${switcher_name%.*}.png"
   fi
 
-  # a .p8.png cart is itself an image of its label
-  if [ -z "$switcher_art" ]; then
-    case "$1" in
-    *.png | *.PNG)
-      switcher_art="$1"
-      ;;
-    esac
+  # a cart is usually itself an image of its label, whether it is named .p8.png
+  # or only .p8, so its signature decides rather than its name. A text cart
+  # would leave NextUI a slot whose preview it cannot load.
+  if [ -z "$switcher_art" ] && is_png_file "$1"; then
+    switcher_art="$1"
   fi
 
   if [ -z "$switcher_art" ]; then
