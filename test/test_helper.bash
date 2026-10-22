@@ -35,6 +35,10 @@ setup_launch() {
   export PICO_PAK_NET_DIR
   mkdir -p "$PICO_PAK_NET_DIR"
 
+  # NextUI exports this to every pak, so a shell started on a NextUI device would
+  # otherwise turn on the game switcher preview in every test
+  unset IS_NEXT
+
   export PICO_PAK_SOURCE_ONLY=1
   # shellcheck source=/dev/null
   . "$REPO_ROOT/launch.sh"
@@ -55,6 +59,12 @@ make_cart() {
   local path="$CARTS/$1"
   : >"$path"
   printf '%s' "$path"
+}
+
+# Writes a cart at the given path that starts with the png signature, followed
+# by an optional body so two carts can be told apart.
+make_png_cart() {
+  printf '\211PNG\r\n\032\n%s' "${2:-cart}" >"$1"
 }
 
 # Creates a roms folder under the fake SD card and echoes its path.

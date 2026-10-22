@@ -1165,6 +1165,36 @@ setup() {
   [ ! -f "$rom_folder/tetris.p8.png" ]
 }
 
+# The case in issue #126: a marker spelled the American way was not recognised,
+# so nothing was copied at all.
+@test "copy_carts copies only favourites when the copy-carts-favorites marker is set" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favorites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ ! -f "$rom_folder/tetris.p8.png" ]
+}
+
+@test "copy_carts reads the copy-carts-favorites marker from the shared folder" {
+  : >"$SHARED_USERDATA_PATH/Pico-8-native/copy-carts-favorites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ ! -f "$rom_folder/tetris.p8.png" ]
+}
+
 # Splore caches every cart it shows, so in favourites mode the rest of the cache
 # is dropped before the per-cart work instead of being looked at one by one.
 @test "copy_carts does no per-cart work for carts that are not favourites" {
@@ -1471,6 +1501,129 @@ setup() {
   copy_carts "$rom_folder" 2>/dev/null
 
   [ "$cart_name" = "freecell.p8.png" ]
+}
+
+# MinUI reads the same slot files to offer a resume pico-8 cannot do.
+@test "write_switcher_preview does nothing outside NextUI" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'cart' >"$rom_folder/freecell.p8.png"
+
+  run write_switcher_preview "$rom_folder/freecell.p8.png"
+  [ "$status" -eq 0 ]
+
+  [ ! -e "$SHARED_USERDATA_PATH/.minui" ]
+}
+
+# The case in issue #126: NextUI only draws a preview for a game with a save
+# slot, so every pico-8 cart in the game switcher was blank.
+@test "write_switcher_preview gives NextUI a slot and the cart's artwork" {
+  export IS_NEXT=yes
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  : >"$rom_folder/Freecell.p8"
+  mkdir -p "$rom_folder/.media"
+  printf 'art' >"$rom_folder/.media/Freecell.png"
+
+  run write_switcher_preview "$rom_folder/Freecell.p8"
+  [ "$status" -eq 0 ]
+
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt")" = "0" ]
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.0.bmp")" = "art" ]
+}
+
+@test "write_switcher_preview uses the artwork copy_carts writes" {
+  export IS_NEXT=yes
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'cart' >"$rom_folder/freecell-3.p8.png"
+  mkdir -p "$rom_folder/.media"
+  printf 'art' >"$rom_folder/.media/freecell-3.p8.png"
+
+  run write_switcher_preview "$rom_folder/freecell-3.p8.png"
+  [ "$status" -eq 0 ]
+
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/freecell-3.p8.png.0.bmp")" = "art" ]
+}
+
+@test "write_switcher_preview falls back to a png cart itself" {
+  export IS_NEXT=yes
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_png_cart "$rom_folder/freecell.p8.png"
+
+  run write_switcher_preview "$rom_folder/freecell.p8.png"
+  [ "$status" -eq 0 ]
+
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/freecell.p8.png.txt")" = "0" ]
+  cmp -s "$rom_folder/freecell.p8.png" "$SHARED_USERDATA_PATH/.minui/PICO/freecell.p8.png.0.bmp"
+}
+
+# Splore.p8 and most carts named .p8 are png images under another name
+@test "write_switcher_preview falls back to a p8 cart that is a png" {
+  export IS_NEXT=yes
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_png_cart "$rom_folder/Freecell.p8"
+
+  run write_switcher_preview "$rom_folder/Freecell.p8"
+  [ "$status" -eq 0 ]
+
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt")" = "0" ]
+  cmp -s "$rom_folder/Freecell.p8" "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.0.bmp"
+}
+
+# a slot whose image NextUI cannot load would only turn the blank preview into
+# a resume prompt
+@test "write_switcher_preview writes no slot for a text cart without artwork" {
+  export IS_NEXT=yes
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'pico-8 cartridge // http://www.pico-8.com\nversion 41\n' >"$rom_folder/Freecell.p8"
+
+  run write_switcher_preview "$rom_folder/Freecell.p8"
+  [ "$status" -eq 0 ]
+
+  [ ! -e "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt" ]
+  [[ "$output" == *"No artwork for Freecell.p8"* ]]
+}
+
+@test "is_png_file tells a png from a text cart and an empty file" {
+  make_png_cart "$CARTS/image.p8"
+  printf 'pico-8 cartridge // http://www.pico-8.com\n' >"$CARTS/text.p8"
+  : >"$CARTS/empty.p8"
+
+  run is_png_file "$CARTS/image.p8"
+  [ "$status" -eq 0 ]
+
+  run is_png_file "$CARTS/text.p8"
+  [ "$status" -ne 0 ]
+
+  run is_png_file "$CARTS/empty.p8"
+  [ "$status" -ne 0 ]
+}
+
+@test "write_switcher_preview names a multi-cart game after its m3u" {
+  export IS_NEXT=yes
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$rom_folder/Poom" "$rom_folder/.media"
+  : >"$rom_folder/Poom/poom_0.p8"
+  printf 'poom_0.p8\n' >"$rom_folder/Poom/Poom.m3u"
+  printf 'art' >"$rom_folder/.media/Poom.png"
+
+  run write_switcher_preview "$rom_folder/Poom/poom_0.p8"
+  [ "$status" -eq 0 ]
+
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Poom.m3u.txt")" = "0" ]
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Poom.m3u.0.bmp")" = "art" ]
+  [ ! -e "$SHARED_USERDATA_PATH/.minui/PICO/poom_0.p8.txt" ]
+}
+
+@test "write_switcher_preview refreshes artwork that changed" {
+  export IS_NEXT=yes
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_png_cart "$rom_folder/freecell.p8.png" old
+  write_switcher_preview "$rom_folder/freecell.p8.png"
+  make_png_cart "$rom_folder/freecell.p8.png" new
+
+  run write_switcher_preview "$rom_folder/freecell.p8.png"
+  [ "$status" -eq 0 ]
+
+  cmp -s "$rom_folder/freecell.p8.png" "$SHARED_USERDATA_PATH/.minui/PICO/freecell.p8.png.0.bmp"
 }
 
 @test "is_network_link_up detects an interface that is up" {
@@ -2116,6 +2269,43 @@ setup() {
 
   [ "$status" -eq 1 ]
   [ -f "$rom_folder/freecell.p8.png" ]
+}
+
+@test "launch.sh gives NextUI's game switcher a preview once pico-8 exits" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  make_png_cart "$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= IS_NEXT=yes \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt")" = "0" ]
+  cmp -s "$cart" "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.0.bmp"
+}
+
+@test "launch.sh writes no game switcher preview under MinUI" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/freecell.p8.png"
+  printf 'cart' >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$SHARED_USERDATA_PATH/.minui/PICO" ]
 }
 
 # minui-power-control ends a session by signalling pico-8, so a status above 128

@@ -243,11 +243,14 @@ copy_carts() {
     fi
 
     # the favourites marker turns the copy on by itself, so creating only that
-    # file is not another silent no-op
-    if [ -f "$marker_dir/copy-carts-favourites" ]; then
-      copy_marker="$marker_dir/copy-carts-favourites"
-      favourites_only=true
-    fi
+    # file is not another silent no-op. A marker spelled the American way used
+    # to be ignored as well, so both spellings are accepted.
+    for favourites_marker in copy-carts-favourites copy-carts-favorites; do
+      if [ -f "$marker_dir/$favourites_marker" ]; then
+        copy_marker="$marker_dir/$favourites_marker"
+        favourites_only=true
+      fi
+    done
   done
 
   if [ -z "$copy_marker" ]; then
@@ -813,6 +816,63 @@ install_splore_cart() {
   return 0
 }
 
+# Every png starts with the byte 0x89 followed by PNG, and a text cart starts
+# with its pico-8 cartridge header instead.
+is_png_file() {
+  [ "$(dd if="$1" bs=1 skip=1 count=3 2>/dev/null)" = "PNG" ]
+}
+
+# NextUI's game switcher lists every recent game but only draws a preview, and
+# only offers to remove one, when <rom>.txt names a save slot and <rom>.<slot>.bmp
+# holds its screenshot. pico-8 has no save states, so the cart's artwork stands in
+# for the screenshot. NextUI loads the image by its content rather than its name,
+# so a png under a .bmp name works. MinUI reads the same files to offer a resume,
+# which is why this only runs under NextUI.
+write_switcher_preview() {
+  if [ "$IS_NEXT" != "yes" ]; then
+    return 0
+  fi
+
+  switcher_folder="$(dirname "$1")"
+  switcher_name="$(basename "$1")"
+  switcher_art=""
+
+  # NextUI keys a multi-cart game by its m3u, and draws the folder entry with
+  # artwork from the folder above it
+  switcher_m3u="$switcher_folder/${switcher_folder##*/}.m3u"
+  if [ -f "$switcher_m3u" ]; then
+    switcher_name="${switcher_m3u##*/}"
+    if [ -f "${switcher_folder%/*}/.media/${switcher_folder##*/}.png" ]; then
+      switcher_art="${switcher_folder%/*}/.media/${switcher_folder##*/}.png"
+    fi
+  fi
+
+  if [ -z "$switcher_art" ] && [ -f "$switcher_folder/.media/${switcher_name%.*}.png" ]; then
+    switcher_art="$switcher_folder/.media/${switcher_name%.*}.png"
+  fi
+
+  # a cart is usually itself an image of its label, whether it is named .p8.png
+  # or only .p8, so its signature decides rather than its name. A text cart
+  # would leave NextUI a slot whose preview it cannot load.
+  if [ -z "$switcher_art" ] && is_png_file "$1"; then
+    switcher_art="$1"
+  fi
+
+  if [ -z "$switcher_art" ]; then
+    echo "No artwork for $switcher_name, the game switcher will show no preview" 1>&2
+    return 0
+  fi
+
+  switcher_dir="$SHARED_USERDATA_PATH/.minui/$PAK_NAME"
+  if ! mkdir -p "$switcher_dir" ||
+    ! cp -f "$switcher_art" "$switcher_dir/$switcher_name.0.bmp" ||
+    ! echo 0 >"$switcher_dir/$switcher_name.txt"; then
+    echo "Unable to write a game switcher preview for $switcher_name to $switcher_dir" 1>&2
+  fi
+
+  return 0
+}
+
 launch_cart() {
   ROM_PATH="$1"
   ROM_FOLDER="$(dirname "$ROM_PATH")"
@@ -897,6 +957,10 @@ launch_cart() {
   else
     unset LD_PRELOAD
   fi
+
+  # NextUI added the cart to its recents before starting the pak, whether or
+  # not pico-8 went on to run it
+  write_switcher_preview "$ROM_PATH"
 
   sync
   # each traced command is its own write to the SD card, seconds over a cart scan

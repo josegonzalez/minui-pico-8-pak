@@ -87,6 +87,14 @@ To exit a game:
 
 On `tg5040`, you can also hold `Select` and press `Menu` to quit straight away, from a game, Splore, or PICO-8's command prompt.
 
+### Game switcher
+
+NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so when you exit a cart on NextUI, the pak gives the switcher the cart's artwork instead. It uses the cart's image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The image and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card, and refreshed each time you exit the cart.
+
+Because NextUI treats that as a save state, the switcher labels the `A` button `RESUME` and the game list offers `X` to resume the cart. Both start the cart from the beginning. Press `Y` in the switcher to remove a cart from it.
+
+A cart saved as plain text, rather than as an image, still shows no picture unless it has an image in the `.media` folder. See [Artwork](#artwork) for where to put one. MinUI reads the same files to offer resuming a game, so nothing is written there.
+
 ### Deep Sleep & Shutdown
 
 Deep sleep is supported on compatible devices. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. **Note:** Shutdown does not save or resume the game and any unsaved progress will be lost. For more information and issues, see [MinUI Power Control](https://github.com/ben16w/minui-power-control).
@@ -151,7 +159,7 @@ You may wish to rename the cart to `1) Splore.p8` to move it to the top of the g
 
 Carts downloaded via Splore are only available via Splore. To copy them into your roms folder as well, create a file named `copy-carts` in either the `/.userdata/$PLATFORM/Pico-8-native` or the `/.userdata/shared/Pico-8-native` folder on your SD card. The file can be empty, and it needs no extension - if your computer hides extensions, check on a terminal that it is not really named `copy-carts.txt`.
 
-Every cart Splore has downloaded is copied, whether or not you favourited it. To copy only your favourites, name the file `copy-carts-favourites` instead. Either file on its own turns the copying on. Favourites are read from the `favourites.txt` PICO-8 writes in `/.userdata/shared/Pico-8-native`, and from `.lexaloffle/pico-8/favourites.txt` under that folder if it exists. If no cart is favourited, nothing is copied.
+Every cart Splore has downloaded is copied, whether or not you favourited it. To copy only your favourites, name the file `copy-carts-favourites` instead, or `copy-carts-favorites` if you prefer that spelling. Either file on its own turns the copying on. Favourites are read from the `favourites.txt` PICO-8 writes in `/.userdata/shared/Pico-8-native`, and from `.lexaloffle/pico-8/favourites.txt` under that folder if it exists. If no cart is favourited, nothing is copied.
 
 The copy runs when you exit a cart, into the roms folder that cart was launched from. A message is shown while carts are being copied - do not turn the device off until it goes away. Like the Splore cart itself, the new games will not appear until you leave the folder and enter it again.
 
