@@ -35,6 +35,10 @@ setup_launch() {
   export PICO_PAK_NET_DIR
   mkdir -p "$PICO_PAK_NET_DIR"
 
+  # NextUI exports this to every pak, so a shell started on a NextUI device would
+  # otherwise turn on the game switcher preview in every test
+  unset IS_NEXT
+
   export PICO_PAK_SOURCE_ONLY=1
   # shellcheck source=/dev/null
   . "$REPO_ROOT/launch.sh"
