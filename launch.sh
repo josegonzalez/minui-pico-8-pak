@@ -243,11 +243,14 @@ copy_carts() {
     fi
 
     # the favourites marker turns the copy on by itself, so creating only that
-    # file is not another silent no-op
-    if [ -f "$marker_dir/copy-carts-favourites" ]; then
-      copy_marker="$marker_dir/copy-carts-favourites"
-      favourites_only=true
-    fi
+    # file is not another silent no-op. A marker spelled the American way used
+    # to be ignored as well, so both spellings are accepted.
+    for favourites_marker in copy-carts-favourites copy-carts-favorites; do
+      if [ -f "$marker_dir/$favourites_marker" ]; then
+        copy_marker="$marker_dir/$favourites_marker"
+        favourites_only=true
+      fi
+    done
   done
 
   if [ -z "$copy_marker" ]; then

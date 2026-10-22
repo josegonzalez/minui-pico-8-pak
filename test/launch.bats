@@ -1165,6 +1165,36 @@ setup() {
   [ ! -f "$rom_folder/tetris.p8.png" ]
 }
 
+# The case in issue #126: a marker spelled the American way was not recognised,
+# so nothing was copied at all.
+@test "copy_carts copies only favourites when the copy-carts-favorites marker is set" {
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts-favorites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ ! -f "$rom_folder/tetris.p8.png" ]
+}
+
+@test "copy_carts reads the copy-carts-favorites marker from the shared folder" {
+  : >"$SHARED_USERDATA_PATH/Pico-8-native/copy-carts-favorites"
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
+  make_bbs_cart "bbs/carts/tetris.p8.png"
+  printf 'x|freecell|x|x|x|x|freecell classic\n' >"$HOME/favourites.txt"
+
+  run copy_carts "$rom_folder"
+  [ "$status" -eq 0 ]
+
+  [ -f "$rom_folder/freecell.p8.png" ]
+  [ ! -f "$rom_folder/tetris.p8.png" ]
+}
+
 # Splore caches every cart it shows, so in favourites mode the rest of the cache
 # is dropped before the per-cart work instead of being looked at one by one.
 @test "copy_carts does no per-cart work for carts that are not favourites" {

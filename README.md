@@ -151,7 +151,7 @@ You may wish to rename the cart to `1) Splore.p8` to move it to the top of the g
 
 Carts downloaded via Splore are only available via Splore. To copy them into your roms folder as well, create a file named `copy-carts` in either the `/.userdata/$PLATFORM/Pico-8-native` or the `/.userdata/shared/Pico-8-native` folder on your SD card. The file can be empty, and it needs no extension - if your computer hides extensions, check on a terminal that it is not really named `copy-carts.txt`.
 
-Every cart Splore has downloaded is copied, whether or not you favourited it. To copy only your favourites, name the file `copy-carts-favourites` instead. Either file on its own turns the copying on. Favourites are read from the `favourites.txt` PICO-8 writes in `/.userdata/shared/Pico-8-native`, and from `.lexaloffle/pico-8/favourites.txt` under that folder if it exists. If no cart is favourited, nothing is copied.
+Every cart Splore has downloaded is copied, whether or not you favourited it. To copy only your favourites, name the file `copy-carts-favourites` instead, or `copy-carts-favorites` if you prefer that spelling. Either file on its own turns the copying on. Favourites are read from the `favourites.txt` PICO-8 writes in `/.userdata/shared/Pico-8-native`, and from `.lexaloffle/pico-8/favourites.txt` under that folder if it exists. If no cart is favourited, nothing is copied.
 
 The copy runs when you exit a cart, into the roms folder that cart was launched from. A message is shown while carts are being copied - do not turn the device off until it goes away. Like the Splore cart itself, the new games will not appear until you leave the folder and enter it again.
 
