@@ -2026,6 +2026,54 @@ teardown() {
   [ -d "$SDCARD_PATH/Saves/PICO" ]
 }
 
+@test "launch.sh starts power control on my355" {
+  pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  mkdir -p "$pak_dir/pico8"
+  ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
+  ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+  ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
+  ln -s "$REPO_ROOT/config" "$pak_dir/config"
+  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
+  chmod +x "$pak_dir/pico8/pico8_64"
+  : >"$pak_dir/pico8/pico8.dat"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  # power control bundles no presenter, so it has to find the one the pak
+  # ships for the platform ahead of any other
+  mkdir -p "$pak_dir/bin/my355"
+  cp "$STUB_BIN/minui-presenter" "$pak_dir/bin/my355/minui-presenter"
+  presenter_log="$BATS_TEST_TMPDIR/power-control-presenter"
+  cat >"$STUB_BIN/minui-power-control" <<STUB
+#!/bin/sh
+command -v minui-presenter >"$presenter_log"
+STUB
+  chmod +x "$STUB_BIN/minui-power-control"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=my355 DEVICE=my355 IS_NEXT=yes \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -q "Freecell.p8" "$LOGS_PATH/PICO.txt"
+  ! grep -q "does not support my355" "$LOGS_PATH/PICO.txt"
+  grep -q "minui-power-control pico8_64 .*Freecell.p8" "$LOGS_PATH/PICO.txt"
+
+  for _ in $(seq 1 100); do
+    [ -s "$presenter_log" ] && break
+    sleep 0.02
+  done
+  [ "$(cat "$presenter_log")" = "$pak_dir/bin/my355/minui-presenter" ]
+  cmp -s "$REPO_ROOT/controllers/my355.txt" "$SHARED_USERDATA_PATH/Pico-8-native/sdl_controllers.txt"
+}
+
 @test "launch.sh moves an existing save into the saves folder" {
   pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
   mkdir -p "$pak_dir/pico8"
