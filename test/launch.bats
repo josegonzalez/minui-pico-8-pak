@@ -5,6 +5,14 @@ setup() {
   setup_launch
 }
 
+# the shutdown marker lives at a fixed path on the host, so only a marker a test
+# created is removed, and a failed assertion still cleans it up
+teardown() {
+  if [ -f "$BATS_TEST_TMPDIR/created-shutdown-marker" ]; then
+    rm -f /tmp/shutdown_from_pak
+  fi
+}
+
 @test "verify_cart accepts a p8 cart" {
   run verify_cart "$(make_cart Game.p8)"
   [ "$status" -eq 0 ]
@@ -2327,4 +2335,40 @@ setup() {
 
   [ "$status" -eq 0 ]
   ! grep -q "PICO-8 exited with an error" "$PRESENTER_LOG"
+}
+
+# minui-power-control powers the device off itself, on MinUI and NextUI alike,
+# so the pak must not act on the marker its old power button script left
+@test "launch.sh never shuts the device down itself" {
+  pak_dir="$(make_pak 'kill -TERM $$')"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+  mkdir -p "$SHARED_USERDATA_PATH/.minui"
+
+  # main traps TERM, so only KILL stops a launcher that went on to its sleep loop
+  cat >"$STUB_BIN/shutdown" <<STUB
+#!/bin/sh
+echo shutdown >"$BATS_TEST_TMPDIR/shutdown.log"
+kill -KILL \$PPID
+STUB
+  chmod +x "$STUB_BIN/shutdown"
+
+  if [ ! -e /tmp/shutdown_from_pak ]; then
+    : >/tmp/shutdown_from_pak
+    : >"$BATS_TEST_TMPDIR/created-shutdown-marker"
+  fi
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= IS_NEXT=yes \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/shutdown.log" ]
+  [ ! -e "$SHARED_USERDATA_PATH/.minui/auto_resume.txt" ]
 }
