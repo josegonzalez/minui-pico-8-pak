@@ -11,7 +11,9 @@ PUSH_PLATFORM ?= tg5040
 ARCHITECTURES := arm arm64
 PLATFORMS := h700 rg35xxplus tg5040 tg5050
 MINUI_PRESENTER_VERSION := 0.13.0
-MINUI_POWER_CONTROL_VERSION := 3.0.0
+# upstream does not support h700 yet, so the pak pins a fork that does
+MINUI_POWER_CONTROL_REPO := josegonzalez/minui-power-control
+MINUI_POWER_CONTROL_VERSION := 3.1.0
 PICO8_DATA_EXTRACTOR_VERSION := 0.1.1
 
 # The image the sdl sensor shim is compiled in. Pinned below glibc 2.34,
@@ -56,7 +58,7 @@ bin/%/minui-presenter:
 
 bin/minui-power-control:
 	mkdir -p bin
-	curl -f -o bin/minui-power-control -sSL https://github.com/ben16w/minui-power-control/releases/download/$(MINUI_POWER_CONTROL_VERSION)/minui-power-control
+	curl -f -o bin/minui-power-control -sSL https://github.com/$(MINUI_POWER_CONTROL_REPO)/releases/download/$(MINUI_POWER_CONTROL_VERSION)/minui-power-control
 	chmod +x bin/minui-power-control
 
 release: build

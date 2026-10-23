@@ -97,9 +97,11 @@ A cart saved as plain text, rather than as an image, still shows no picture unle
 
 ### Deep Sleep & Shutdown
 
-Deep sleep is supported on compatible devices. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. **Note:** Shutdown does not save or resume the game and any unsaved progress will be lost. For more information and issues, see [MinUI Power Control](https://github.com/ben16w/minui-power-control).
+Deep sleep is supported on compatible devices, including the `h700` devices running NextUI. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. **Note:** Shutdown does not save the game and any unsaved progress will be lost.
 
-MinUI Power Control does not support `h700`, so the power button keeps its default behaviour on those devices. The pak notes this in its log and starts PICO-8 as usual.
+On devices without deep sleep, which includes every device running MinUI, clicking the power button pauses the game and turns the screen off instead, and clicking again resumes it. A device left like that for two minutes, while not charging, shuts down, and starts the same cart again the next time it is turned on. The cart starts from the beginning, as PICO-8 has no save states.
+
+The power button is handled by [MinUI Power Control](https://github.com/ben16w/minui-power-control). The pak uses [a fork](https://github.com/josegonzalez/minui-power-control) that adds `h700` support, until that support is part of the original. See either for more information and known issues.
 
 ### CPU speed
 
@@ -268,10 +270,6 @@ On `tg5040`, a PNG in the `/Overlays/PICO` folder on your SD card is drawn over 
 While a game is running, hold `Select` and press `Left` or `Right` to step through every PNG in the folder, in name order, and an option with no overlay at all. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
 
 The image is scaled to fit the screen without changing its shape and centred, leaving any space around it uncovered, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left, so a 4:3 image fills the screen. The Trimui Smart Pro also uses the `tg5040` build, and its 1280x720 screen is 16:9, so a 4:3 image there has bars at the sides and a 16:9 image fills it. No overlay is drawn in `stretched` mode, where the game fills the screen.
-
-### Sleep Mode
-
-Built-in MinUI cores have support for turning off the display and eventually shutting down when the power button is pressed. Standalone emulators do not have this functionality due to needing support inside of the console for this. At this time, this pak does not implement sleep mode.
 
 ### Debug Logging
 
