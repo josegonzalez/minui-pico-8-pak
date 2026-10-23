@@ -79,7 +79,7 @@ STUB
 @test "curl based wget shims fail on http errors" {
   stub_curl
 
-  for platform in h700 rg35xxplus tg5050; do
+  for platform in h700 my355 rg35xxplus tg5050; do
     PATH="$FAKE_BIN:$PATH" run "$REPO_ROOT/bin/$platform/wget" https://example.com/ -q -O /tmp/out
     [ "$status" -eq 0 ]
 
@@ -93,7 +93,7 @@ STUB
 @test "curl based wget shims propagate the exit status of curl" {
   stub_curl 22
 
-  for platform in h700 rg35xxplus tg5050; do
+  for platform in h700 my355 rg35xxplus tg5050; do
     PATH="$FAKE_BIN:$PATH" run "$REPO_ROOT/bin/$platform/wget" https://example.com/ -q -O /tmp/out
     [ "$status" -eq 22 ]
   done

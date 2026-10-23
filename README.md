@@ -7,6 +7,7 @@ A pak wrapping PICO-8, a fantasy video game console.
 This pak is designed and tested on the following MinUI Platforms and devices:
 
 - `h700`: Anbernic RG28XX, RG34XX, RG34XX SP, RG35XX (Plus and 2024), RG35XX H, RG35XX Pro, RG35XX SP, RG40XX H, RG40XX V, RG CubeXX and RGSP, running NextUI
+- `my355`: Miyoo Flip, running NextUI
 - `rg35xxplus`: the same Anbernic handhelds, running MinUI
 - `tg5040`: Trimui Brick (formerly `tg3040`) and Trimui Smart Pro
 - `tg5050`: Trimui Smart Pro S
@@ -134,6 +135,8 @@ Earlier versions of this pak saved to `/.userdata/shared/Pico-8-native/cdata`. T
 
 > [!NOTE]
 > On `h700`, NextUI ships `curl` but no `libcurl`, so PICO-8 falls back to downloading through a `wget` script the pak provides, which wraps that `curl`. Uploading a cart to the BBS is not supported through this route.
+>
+> On `my355`, the Miyoo Flip's `wget` cannot make HTTPS requests, so the pak provides a `wget` script backed by `curl` for the connection check before Splore.
 
 The first time you launch any game, the pak creates a `Splore.p8` cart, along with matching artwork at `.media/Splore.png` for NextUI and `.res/Splore.p8.png` for MinUI, in every roms folder tagged `(PICO)` on your SD card. Choosing this game in MinUI will launch the Splore UI.
 

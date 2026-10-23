@@ -19,7 +19,7 @@ export SCREENSHOT_DIR="$SDCARD_PATH/Screenshots"
 
 # The platforms this pak supports. test/makefile.bats asserts this agrees with
 # pak.json and with the Makefile.
-SUPPORTED_PLATFORMS="h700 rg35xxplus tg5040 tg5050"
+SUPPORTED_PLATFORMS="h700 my355 rg35xxplus tg5040 tg5050"
 
 # minui-power-control refuses to start on a platform its own launcher does not
 # list, so calling it elsewhere only logs noise. Keep this in sync with the

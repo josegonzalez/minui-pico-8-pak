@@ -7,6 +7,7 @@
   "release_filename": "PICO.pak.zip",
   "platforms": [
     "h700",
+    "my355",
     "rg35xxplus",
     "tg5040",
     "tg5050"
