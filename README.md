@@ -98,11 +98,13 @@ A cart saved as plain text, rather than as an image, still shows no picture unle
 
 ### Deep Sleep & Shutdown
 
-Deep sleep is supported on compatible devices, including the `h700` devices running NextUI. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. **Note:** Shutdown does not save the game and any unsaved progress will be lost.
+Deep sleep is supported on compatible devices, including the `h700` devices and the Miyoo Flip running NextUI. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. **Note:** Shutdown does not save the game and any unsaved progress will be lost.
+
+On the Miyoo Flip, closing the lid also puts the device to sleep, and opening it resumes the game.
 
 On devices without deep sleep, which includes every device running MinUI, clicking the power button pauses the game and turns the screen off instead, and clicking again resumes it. A device left like that for two minutes, while not charging, shuts down, and starts the same cart again the next time it is turned on. The cart starts from the beginning, as PICO-8 has no save states.
 
-The power button is handled by [MinUI Power Control](https://github.com/ben16w/minui-power-control). The pak uses [a fork](https://github.com/josegonzalez/minui-power-control) that adds `h700` support, until that support is part of the original. See either for more information and known issues.
+The power button is handled by [MinUI Power Control](https://github.com/ben16w/minui-power-control). The pak uses [a fork](https://github.com/josegonzalez/minui-power-control) that adds `h700` support, turns the Miyoo Flip's screen off during deep sleep under NextUI, and sleeps when the Flip's lid closes, until those changes are part of the original. Its messages, such as "Powering off", are shown with the pak's own copy of minui-presenter. See either for more information and known issues.
 
 ### CPU speed
 

@@ -80,12 +80,13 @@ pak_platforms() {
 # the pinned release decides which platforms launch.sh may hand it
 @test "the power control gate matches the pinned release" {
   mk MINUI_POWER_CONTROL_VERSION
-  [ "$output" = "3.1.0" ]
+  [ "$output" = "3.2.0" ]
   [ "$POWER_CONTROL_PLATFORMS" = "h700 miyoomini my355 rg35xxplus tg5040 tg5050" ]
 }
 
-# upstream has no h700 support, so the release comes from the fork that adds it
-@test "power control is pinned to the fork that supports h700" {
+# upstream supports neither h700 nor deep sleep and the lid on a NextUI my355,
+# so the release comes from the fork that adds them
+@test "power control is pinned to the fork that supports h700 and my355" {
   mk MINUI_POWER_CONTROL_REPO
   [ "$output" = "josegonzalez/minui-power-control" ]
 }

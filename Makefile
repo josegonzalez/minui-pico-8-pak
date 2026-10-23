@@ -11,9 +11,10 @@ PUSH_PLATFORM ?= tg5040
 ARCHITECTURES := arm arm64
 PLATFORMS := h700 my355 rg35xxplus tg5040 tg5050
 MINUI_PRESENTER_VERSION := 0.14.0
-# upstream does not support h700 yet, so the pak pins a fork that does
+# upstream does not support h700, or deep sleep and the lid on a NextUI my355,
+# yet, so the pak pins a fork that does
 MINUI_POWER_CONTROL_REPO := josegonzalez/minui-power-control
-MINUI_POWER_CONTROL_VERSION := 3.1.0
+MINUI_POWER_CONTROL_VERSION := 3.2.0
 PICO8_DATA_EXTRACTOR_VERSION := 0.1.1
 
 # The image the sdl sensor shim is compiled in. Pinned below glibc 2.34,
