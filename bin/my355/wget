@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# The Miyoo Flip's busybox wget fails https requests, so shim it onto curl.
+curl -f -s -L -k "$1" -q -o "$4"

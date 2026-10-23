@@ -282,7 +282,7 @@ teardown() {
 # every other platform either ships its own SDL2 or has one with sensors, so
 # there is nothing to preload and nothing to log about
 @test "get_sdl_shim names nothing on the other platforms" {
-  for platform in rg35xxplus tg5040 tg5050; do
+  for platform in my355 rg35xxplus tg5040 tg5050; do
     PLATFORM="$platform" run get_sdl_shim
     [ "$output" = "" ]
   done
@@ -438,6 +438,8 @@ teardown() {
 }
 
 @test "get_controller_file falls back to the platform mapping" {
+  PLATFORM=my355 run get_controller_file
+  [ "$output" = "my355.txt" ]
   PLATFORM=tg5040 run get_controller_file
   [ "$output" = "tg5040.txt" ]
   PLATFORM=tg5050 run get_controller_file
@@ -579,7 +581,7 @@ teardown() {
 }
 
 @test "set_cpu_speed leaves the trimui and nextui governors alone" {
-  for platform in h700 tg5050; do
+  for platform in h700 my355 tg5050; do
     stub_cpufreq
     PLATFORM="$platform" set_cpu_speed
     [ ! -s "$PICO_PAK_CPUFREQ_DIR/scaling_setspeed" ]
@@ -741,7 +743,7 @@ teardown() {
 }
 
 @test "start_power_control runs on the platforms power control supports" {
-  for platform in h700 rg35xxplus tg5040 tg5050; do
+  for platform in h700 my355 rg35xxplus tg5040 tg5050; do
     PLATFORM="$platform" run start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
     [ "$status" -eq 0 ]
     [ -z "$output" ]

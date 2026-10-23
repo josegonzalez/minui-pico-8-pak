@@ -65,12 +65,14 @@ pak_platforms() {
 
 @test "the presenter version is new enough to publish an h700 build" {
   mk MINUI_PRESENTER_VERSION
-  [ "$output" = "0.13.0" ]
+  [ "$output" = "0.14.0" ]
 }
 
-@test "h700 and tg5050 pull the NextUI presenter builds" {
+@test "h700, my355 and tg5050 pull the NextUI presenter builds" {
   mk MINUI_PRESENTER_ASSET_h700
   [ "$output" = "h700-nextui" ]
+  mk MINUI_PRESENTER_ASSET_my355
+  [ "$output" = "my355-nextui" ]
   mk MINUI_PRESENTER_ASSET_tg5050
   [ "$output" = "tg5050-nextui" ]
 }

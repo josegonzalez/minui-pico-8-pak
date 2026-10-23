@@ -9,8 +9,8 @@ PUSH_PLATFORM ?= tg5040
 # puts on PATH: a 32-bit device finding no binary of its own falls back to
 # naming copied carts after their files
 ARCHITECTURES := arm arm64
-PLATFORMS := h700 rg35xxplus tg5040 tg5050
-MINUI_PRESENTER_VERSION := 0.13.0
+PLATFORMS := h700 my355 rg35xxplus tg5040 tg5050
+MINUI_PRESENTER_VERSION := 0.14.0
 # upstream does not support h700 yet, so the pak pins a fork that does
 MINUI_POWER_CONTROL_REPO := josegonzalez/minui-power-control
 MINUI_POWER_CONTROL_VERSION := 3.1.0
@@ -25,9 +25,10 @@ SHIM_IMAGE := gcc:10-bullseye
 # and tg5050 are published only as NextUI builds, while tg5040 and rg35xxplus
 # keep their plain MinUI ones. A platform with no entry here uses its own name.
 MINUI_PRESENTER_ASSET_h700 := h700-nextui
+MINUI_PRESENTER_ASSET_my355 := my355-nextui
 MINUI_PRESENTER_ASSET_tg5050 := tg5050-nextui
 
-SHELL_FILES := launch.sh bin/h700/wget bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
+SHELL_FILES := launch.sh bin/h700/wget bin/my355/wget bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
 
 .PHONY: clean build release bump-version push lint format test print-%
 
