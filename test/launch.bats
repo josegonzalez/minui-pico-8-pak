@@ -733,18 +733,27 @@ teardown() {
   cmp -s "$REPO_ROOT/config/h700.txt" "$REPO_ROOT/config/tg5040.txt"
 }
 
-@test "start_power_control skips the platforms upstream does not support" {
-  PLATFORM=h700 run start_power_control
+# rg35xx is also part of rg35xxplus, which a substring match would accept
+@test "start_power_control skips the platforms power control does not support" {
+  PLATFORM=rg35xx run start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"does not support h700"* ]]
+  [[ "$output" == *"does not support rg35xx"* ]]
 }
 
-@test "start_power_control runs on the platforms upstream supports" {
-  for platform in rg35xxplus tg5040 tg5050; do
-    PLATFORM="$platform" run start_power_control
+@test "start_power_control runs on the platforms power control supports" {
+  for platform in h700 rg35xxplus tg5040 tg5050; do
+    PLATFORM="$platform" run start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
   done
+}
+
+@test "start_power_control hands power control the pico-8 binary and the cart" {
+  stub_power_control
+
+  PLATFORM=h700 start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
+  wait_for_power_control
+  [ "$(cat "$POWER_CONTROL_LOG")" = "pico8_64 $SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8" ]
 }
 
 @test "get_screen_mode defaults to the documented standard mode" {
@@ -1977,7 +1986,7 @@ teardown() {
   grep -q -- "-splore" "$LOGS_PATH/PICO.txt"
 }
 
-@test "launch.sh runs a cart on h700 without starting power control" {
+@test "launch.sh starts power control on h700" {
   pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
   mkdir -p "$pak_dir/pico8"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
@@ -2005,8 +2014,8 @@ teardown() {
   # set -x quotes the cart path because the roms folder name has a space in it
   grep -q -- "-run" "$LOGS_PATH/PICO.txt"
   grep -q "Freecell.p8" "$LOGS_PATH/PICO.txt"
-  grep -q "does not support h700" "$LOGS_PATH/PICO.txt"
-  ! grep -q "minui-power-control pico8_64" "$LOGS_PATH/PICO.txt"
+  ! grep -q "does not support h700" "$LOGS_PATH/PICO.txt"
+  grep -q "minui-power-control pico8_64 .*Freecell.p8" "$LOGS_PATH/PICO.txt"
 
   # the h700 mapping and a config naming this device's card both land in $HOME
   cmp -s "$REPO_ROOT/controllers/h700.txt" "$SHARED_USERDATA_PATH/Pico-8-native/sdl_controllers.txt"

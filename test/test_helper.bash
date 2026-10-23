@@ -209,6 +209,28 @@ STUB
   chmod +x "$STUB_BIN/timeout"
 }
 
+# Replaces the minui-power-control stub with one that logs its arguments.
+# start_power_control backgrounds it, so wait_for_power_control waits for the
+# log rather than racing it.
+stub_power_control() {
+  POWER_CONTROL_LOG="$BATS_TEST_TMPDIR/power-control.log"
+  export POWER_CONTROL_LOG
+
+  cat >"$STUB_BIN/minui-power-control" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$POWER_CONTROL_LOG"
+STUB
+  chmod +x "$STUB_BIN/minui-power-control"
+}
+
+wait_for_power_control() {
+  for _ in $(seq 1 100); do
+    [ -s "$POWER_CONTROL_LOG" ] && return 0
+    sleep 0.02
+  done
+  return 1
+}
+
 # Creates the files install_pico_files requires, so end to end tests reach the
 # checks that run after it.
 make_bios() {

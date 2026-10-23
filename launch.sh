@@ -23,8 +23,8 @@ SUPPORTED_PLATFORMS="h700 rg35xxplus tg5040 tg5050"
 
 # minui-power-control refuses to start on a platform its own launcher does not
 # list, so calling it elsewhere only logs noise. Keep this in sync with the
-# release the Makefile pins.
-POWER_CONTROL_PLATFORMS="miyoomini my355 rg35xxplus tg5040 tg5050"
+# release the Makefile pins, which comes from a fork until upstream takes h700.
+POWER_CONTROL_PLATFORMS="h700 miyoomini my355 rg35xxplus tg5040 tg5050"
 
 # scaling_setspeed only takes effect under the userspace governor and the value
 # is a per SoC frequency, so the write is opt in per platform. NextUI manages the
@@ -1125,13 +1125,15 @@ show_confirmation() {
     --timeout 0
 }
 
+# The cart lets a device without deep sleep, which powers off when left asleep,
+# start the cart again on its next boot.
 start_power_control() {
   if ! platform_in_list "$PLATFORM" "$POWER_CONTROL_PLATFORMS"; then
     echo "minui-power-control does not support $PLATFORM, deep sleep is unavailable" 1>&2
     return 0
   fi
 
-  minui-power-control "$(get_pico_bin)" &
+  minui-power-control "$(get_pico_bin)" "$1" &
 }
 
 cleanup() {
@@ -1188,7 +1190,7 @@ main() {
 
   # minui-power-control also powers the device off on a long press, so there is
   # no shutdown left for the pak to handle once pico-8 exits
-  start_power_control
+  start_power_control "$ROM_PATH"
 
   launch_cart "$ROM_PATH"
 }
