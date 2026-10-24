@@ -652,6 +652,8 @@ setup_display_preload() {
   export PICO_PAK_SCREEN_MODE="$USERDATA_PATH/Pico-8-native/screen-mode"
   export PICO_PAK_COPY_CARTS_DIR="$USERDATA_PATH/Pico-8-native"
   export PICO_PAK_SHARED_COPY_CARTS_DIR="$SHARED_USERDATA_PATH/Pico-8-native"
+  PICO_PAK_SPLORE_ARTWORK="$(get_splore_artwork_file)"
+  export PICO_PAK_SPLORE_ARTWORK
   PICO_PAK_PICO8_CONFIG="$(get_pico8_config_overrides)"
   export PICO_PAK_PICO8_CONFIG
   export PICO_PAK_INSTALLED_CONFIG="$HOME/config.txt"
@@ -913,6 +915,63 @@ rom_folder_has_splore_cart() {
   return 1
 }
 
+# The in-game menu saves the Splore cart's cover here, as standard or fancy
+get_splore_artwork_file() {
+  echo "$USERDATA_PATH/Pico-8-native/splore-artwork"
+}
+
+get_splore_artwork() {
+  splore_artwork_file="$(get_splore_artwork_file)"
+  if [ -f "$splore_artwork_file" ] && [ "$(tr -d '\r' <"$splore_artwork_file")" = "fancy" ]; then
+    echo "$PAK_DIR/splore/Splore-fancy.p8.png"
+    return 0
+  fi
+
+  echo "$PAK_DIR/splore/Splore.p8.png"
+}
+
+is_pak_splore_artwork() {
+  cmp -s "$1" "$PAK_DIR/splore/Splore.p8.png" || cmp -s "$1" "$PAK_DIR/splore/Splore-fancy.p8.png"
+}
+
+# Gives every Splore cart in a roms folder the cover chosen in the in-game menu,
+# under the names both launchers look for, renamed carts included. Artwork that
+# is neither of the pak's covers is the user's own, and is left alone, as is a
+# cart with no artwork at all.
+apply_splore_artwork() {
+  splore_artwork="$(get_splore_artwork)"
+  if [ ! -f "$splore_artwork" ]; then
+    echo "Splore artwork $splore_artwork is missing, leaving the covers alone" 1>&2
+    return 0
+  fi
+  if ! command -v cmp >/dev/null 2>&1; then
+    echo "No cmp on this device, cannot tell the pak's Splore covers from your own" 1>&2
+    return 0
+  fi
+
+  for rom_folder in "$SDCARD_PATH/Roms/"*"($PAK_NAME)"; do
+    [ -d "$rom_folder" ] || continue
+
+    for splore_entry in "$rom_folder"/*; do
+      [ -f "$splore_entry" ] || continue
+      splore_name="${splore_entry##*/}"
+      is_splore_cart "$splore_name" || continue
+
+      for splore_cover in "$rom_folder/.media/${splore_name%.*}.png" "$rom_folder/.res/$splore_name.png"; do
+        if [ ! -f "$splore_cover" ] || ! is_pak_splore_artwork "$splore_cover" ||
+          cmp -s "$splore_artwork" "$splore_cover"; then
+          continue
+        fi
+
+        echo "Using ${splore_artwork##*/} as the cover of $splore_name in $rom_folder" 1>&2
+        cp -f "$splore_artwork" "$splore_cover"
+      done
+    done
+  done
+
+  return 0
+}
+
 install_splore_cart() {
   marker_file="$USERDATA_PATH/Pico-8-native/splore-installed"
   if [ -f "$marker_file" ]; then
@@ -924,6 +983,7 @@ install_splore_cart() {
     echo "Splore cart $source_cart is missing, skipping" 1>&2
     return 0
   fi
+  source_artwork="$(get_splore_artwork)"
 
   seeded=false
   for rom_folder in "$SDCARD_PATH/Roms/"*"($PAK_NAME)"; do
@@ -946,10 +1006,10 @@ install_splore_cart() {
     # the same artwork is written under both folders and both spellings
     mkdir -p "$rom_folder/.media" "$rom_folder/.res"
     if [ ! -f "$rom_folder/.media/Splore.png" ]; then
-      cp -f "$source_cart" "$rom_folder/.media/Splore.png"
+      cp -f "$source_artwork" "$rom_folder/.media/Splore.png"
     fi
     if [ ! -f "$rom_folder/.res/Splore.p8.png" ]; then
-      cp -f "$source_cart" "$rom_folder/.res/Splore.p8.png"
+      cp -f "$source_artwork" "$rom_folder/.res/Splore.p8.png"
     fi
   done
 
@@ -1102,6 +1162,9 @@ launch_cart() {
   else
     unset LD_PRELOAD
   fi
+
+  # before the switcher preview, which copies the Splore cart's cover
+  apply_splore_artwork
 
   # NextUI added the cart to its recents before starting the pak, whether or
   # not pico-8 went on to run it

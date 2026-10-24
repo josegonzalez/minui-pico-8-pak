@@ -14,7 +14,14 @@
  * key was pressed with it, opens the menu from SDL_RenderPresent: the finished
  * frame is read back, dimmed and drawn under the menu, and pico-8's main thread
  * waits there with its audio paused until the menu closes, which pauses the
- * cart. menu.c holds the pages and gfx.c the drawing.
+ * cart. menu.c holds the pages and gfx.c the drawing. Quit fades the menu to
+ * black, and every frame pico-8 presents until it exits is black, so the
+ * screen stays dark while it and launch.sh finish rather than showing the game.
+ *
+ * Nothing else draws the volume and brightness keymon changes over pico-8, so
+ * this reads them from the launcher's own libmsettings and draws minarch's
+ * indicator over the game, or in the menu in place of the battery, while they
+ * change.
  *
  * The menu's Options page sets the overlay, from the PNGs in
  * PICO_PAK_OVERLAY_DIR, and the screen mode, between standard and stretched.
@@ -89,10 +96,24 @@ typedef struct {
 #define SDL_CONTROLLER_BUTTON_DPAD_RIGHT 14
 #define SDL_CONTROLLER_BUTTON_MAX 21
 
-/* how much of the game shows through under the root page, as in minarch */
-#define MENU_DIM 0x80
 /* the most input devices watched for the volume keys */
 #define INPUT_DEVICES 16
+/* how long the volume or brightness stays on screen after it last changed, as in minarch */
+#define INDICATOR_MS 500
+/* the steps the menu fades to black in after Quit, and how long each lasts */
+#define FADE_STEPS 8
+#define FADE_STEP_MS 20
+
+/*
+ * The functions of the launcher's libmsettings the indicator reads. Every
+ * MinUI and NextUI build has the first three, and GetMute is NextUI's.
+ */
+static struct {
+  void (*InitSettings)(void);
+  int (*GetVolume)(void);
+  int (*GetBrightness)(void);
+  int (*GetMute)(void);
+} msettings;
 
 static struct {
   void (*RenderPresent)(void *);
@@ -117,6 +138,8 @@ static struct {
   const char *(*GetError)(void);
   int (*RenderCopy)(void *, void *, const SDL_Rect *, const SDL_Rect *);
   int (*RenderClear)(void *);
+  int (*RenderGetDrawColor)(void *, uint8_t *, uint8_t *, uint8_t *, uint8_t *);
+  int (*RenderSetDrawColor)(void *, uint8_t, uint8_t, uint8_t, uint8_t);
   int (*RenderReadPixels)(void *, const SDL_Rect *, uint32_t, void *, int);
   void (*RenderGetLogicalSize)(void *, int *, int *);
   int (*RenderSetLogicalSize)(void *, int, int);
@@ -164,6 +187,22 @@ static int hidden_count;
 
 static int input_fds[INPUT_DEVICES];
 static int input_count;
+
+/* the setting shown in the top right while it changes, and its value */
+static enum menu_indicator indicator;
+static int indicator_value;
+static uint32_t indicator_at;
+/* the settings as last read, -1 before the first read */
+static int last_volume = -1, last_brightness = -1, last_mute = -1;
+/* the texture the game's indicator is drawn from, and what it last showed */
+static void *indicator_renderer;
+static void *indicator_texture;
+static enum menu_indicator indicator_drawn;
+static int indicator_drawn_value;
+static uint32_t *indicator_pixels;
+
+/* set once Quit is chosen, so every frame until pico-8 exits is black */
+static int quitting;
 
 /* the device pico-8 plays through, paused while the menu is open */
 static uint32_t audio_device;
@@ -218,6 +257,9 @@ static int resolve_sdl(void)
   /* without these the menu still opens, over a game whose sound keeps playing */
   RESOLVE(PauseAudioDevice);
   RESOLVE(GetAudioDeviceStatus);
+  /* without these the frames after Quit show the game rather than black */
+  RESOLVE(RenderGetDrawColor);
+  RESOLVE(RenderSetDrawColor);
 
   resolved = RESOLVE(CreateRGBSurfaceFrom) && RESOLVE(CreateTextureFromSurface) &&
                      RESOLVE(DestroyTexture) &&
@@ -329,12 +371,18 @@ static void open_input_devices(void)
   closedir(dir);
 }
 
-/* reads everything waiting on the input devices, and says if a volume key went down */
-static int volume_key_pressed(void)
+/*
+ * Reads everything waiting on the input devices and returns how many volume
+ * key presses and repeats there have been so far. Both Menu, which a volume
+ * key turns into a brightness chord, and the indicator, which shows a key
+ * pressed at the end of its range, keep their own mark of it to compare with.
+ */
+static unsigned volume_key_presses(void)
 {
+  static unsigned presses;
   struct input_event events[16];
   ssize_t got;
-  int i, pressed = 0;
+  int i;
   size_t e;
 
   for (i = 0; i < input_count; i++) {
@@ -342,13 +390,101 @@ static int volume_key_pressed(void)
       for (e = 0; e < (size_t)got / sizeof *events; e++) {
         if (events[e].type == EV_KEY && events[e].value != 0 &&
             (events[e].code == KEY_VOLUMEUP || events[e].code == KEY_VOLUMEDOWN)) {
-          pressed = 1;
+          presses++;
         }
       }
     }
   }
 
-  return pressed;
+  return presses;
+}
+
+/*
+ * The launcher's own settings library, for the volume and brightness its
+ * keymon changes. It is only opened when keymon has already shared the
+ * settings, as a process that opens them first becomes their owner.
+ */
+static void open_msettings(void)
+{
+  const char *shared = getenv("PICO_PAK_SHARED_SETTINGS");
+  const char *library = getenv("PICO_PAK_MSETTINGS");
+  void *handle;
+
+  if (shared == NULL || *shared == '\0') {
+    shared = "/dev/shm/SharedSettings";
+  }
+  if (library == NULL || *library == '\0') {
+    library = "libmsettings.so";
+  }
+
+  if (access(shared, F_OK) != 0) {
+    LOG("no settings shared at %s, not showing volume or brightness changes\n", shared);
+    return;
+  }
+
+  handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
+  if (handle == NULL) {
+    LOG("cannot open %s, not showing volume or brightness changes: %s\n", library, dlerror());
+    return;
+  }
+
+  msettings.InitSettings = (void (*)(void))dlsym(handle, "InitSettings");
+  msettings.GetVolume = (int (*)(void))dlsym(handle, "GetVolume");
+  msettings.GetBrightness = (int (*)(void))dlsym(handle, "GetBrightness");
+  msettings.GetMute = (int (*)(void))dlsym(handle, "GetMute");
+  if (msettings.InitSettings == NULL || msettings.GetVolume == NULL ||
+      msettings.GetBrightness == NULL) {
+    LOG("%s is missing a function, not showing volume or brightness changes\n", library);
+    msettings.GetVolume = NULL;
+    return;
+  }
+
+  msettings.InitSettings();
+  LOG("showing volume and brightness changes from %s\n", library);
+}
+
+/*
+ * Shows whichever of volume and brightness changed since the last frame, or
+ * the one a volume key is changing when the value is already at its end, and
+ * hides it once nothing has changed for a while, as minarch does. A volume key
+ * pressed with Menu changes the brightness.
+ */
+static int update_indicator(uint32_t now, int menu_held)
+{
+  static unsigned seen_presses;
+  enum menu_indicator was = indicator;
+  int was_value = indicator_value;
+  unsigned presses = volume_key_presses();
+  int volume, brightness, mute;
+
+  if (msettings.GetVolume == NULL) {
+    seen_presses = presses;
+    return 0;
+  }
+
+  volume = msettings.GetVolume();
+  brightness = msettings.GetBrightness();
+  mute = msettings.GetMute != NULL ? msettings.GetMute() : 0;
+
+  if (last_brightness >= 0 && brightness != last_brightness) {
+    indicator = MENU_INDICATOR_BRIGHTNESS;
+    indicator_at = now;
+  } else if (last_volume >= 0 && (volume != last_volume || mute != last_mute)) {
+    indicator = MENU_INDICATOR_VOLUME;
+    indicator_at = now;
+  } else if (presses != seen_presses) {
+    indicator = menu_held ? MENU_INDICATOR_BRIGHTNESS : MENU_INDICATOR_VOLUME;
+    indicator_at = now;
+  } else if (indicator != MENU_INDICATOR_NONE && now - indicator_at >= INDICATOR_MS) {
+    indicator = MENU_INDICATOR_NONE;
+  }
+
+  last_volume = volume;
+  last_brightness = brightness;
+  last_mute = mute;
+  seen_presses = presses;
+  indicator_value = indicator == MENU_INDICATOR_BRIGHTNESS ? brightness : volume;
+  return indicator != was || indicator_value != was_value;
 }
 
 static void init_display(void)
@@ -367,6 +503,7 @@ static void init_display(void)
   settings.overlay_path = getenv("PICO_PAK_OVERLAY_CHOICE");
   settings.copy_carts_dir = getenv("PICO_PAK_COPY_CARTS_DIR");
   settings.shared_copy_carts_dir = getenv("PICO_PAK_SHARED_COPY_CARTS_DIR");
+  settings.splore_artwork_path = getenv("PICO_PAK_SPLORE_ARTWORK");
   settings.pico8_config_path = getenv("PICO_PAK_PICO8_CONFIG");
   settings.installed_config_path = getenv("PICO_PAK_INSTALLED_CONFIG");
   cart_name = getenv("PICO_PAK_CART_NAME");
@@ -375,6 +512,7 @@ static void init_display(void)
     power_supply_dir = "/sys/class/power_supply";
   }
   open_input_devices();
+  open_msettings();
 
   overlay_dir = getenv("PICO_PAK_OVERLAY_DIR");
   if (overlay_dir == NULL || *overlay_dir == '\0') {
@@ -450,6 +588,7 @@ static int other_buttons_down(void)
  */
 static void update_buttons(void)
 {
+  static unsigned presses_at_press;
   int down, button;
 
   if (!menu_available()) {
@@ -459,14 +598,16 @@ static void update_buttons(void)
   down = pad_button(SDL_CONTROLLER_BUTTON_GUIDE);
   if (down && !menu_was_down) {
     /* only a volume key pressed from here on counts against this press */
-    volume_key_pressed();
+    presses_at_press = volume_key_presses();
     menu_spoiled = 0;
   }
-  if (down && !menu_spoiled && (volume_key_pressed() || other_buttons_down())) {
+  if (down && !menu_spoiled &&
+      (volume_key_presses() != presses_at_press || other_buttons_down())) {
     LOG("Menu pressed with another key, not opening the menu\n");
     menu_spoiled = 1;
   }
-  if (!down && menu_was_down && !menu_spoiled) {
+  /* a volume key read only now still went with this press */
+  if (!down && menu_was_down && !menu_spoiled && volume_key_presses() == presses_at_press) {
     menu_requested = 1;
   }
   menu_was_down = down;
@@ -746,10 +887,133 @@ static void show_pixels(void *renderer, void *texture, const uint32_t *pixels, i
   sdl.RenderCopy(renderer, texture, NULL, NULL);
 }
 
+/* the launcher's font and look, read the first time the menu or indicator draws */
+static void load_menu_look(void)
+{
+  if (menu_font == NULL) {
+    menu_font = gfx_font_open(getenv("PICO_PAK_MENU_FONT"));
+    gfx_theme_init(&menu_theme, getenv("PICO_PAK_MENU_STYLE"), getenv("PICO_PAK_MENU_COLORS"));
+  }
+}
+
+/*
+ * Draws the volume or brightness indicator over the game at the top right, as
+ * minarch does, from a texture redrawn only when what it shows changes.
+ */
+static void draw_indicator(void *renderer)
+{
+  static int texture_w, texture_h;
+  struct letterbox saved;
+  gfx_canvas canvas;
+  gfx_metrics m;
+  SDL_Rect dst;
+  int width, height, w, h;
+  uint32_t *pixels;
+
+  if (indicator == MENU_INDICATOR_NONE || overlay_broken || menu_broken ||
+      sdl.GetRendererOutputSize(renderer, &width, &height) != 0) {
+    return;
+  }
+
+  menu_indicator_size(width, height, &w, &h);
+  if (renderer != indicator_renderer || w != texture_w || h != texture_h) {
+    if (indicator_texture != NULL && renderer == indicator_renderer) {
+      sdl.DestroyTexture(indicator_texture);
+    }
+    indicator_renderer = renderer;
+    indicator_texture = NULL;
+    pixels = realloc(indicator_pixels, (size_t)w * h * sizeof *pixels);
+    if (pixels == NULL) {
+      return;
+    }
+    indicator_pixels = pixels;
+    indicator_texture = sdl.CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                                          SDL_TEXTUREACCESS_STREAMING, w, h);
+    if (indicator_texture == NULL) {
+      LOG("cannot make a texture for the volume indicator: %s\n", sdl.GetError());
+      return;
+    }
+    sdl.SetTextureBlendMode(indicator_texture, SDL_BLENDMODE_BLEND);
+    texture_w = w;
+    texture_h = h;
+    indicator_drawn = MENU_INDICATOR_NONE;
+  }
+  if (indicator_texture == NULL) {
+    return;
+  }
+
+  if (indicator != indicator_drawn || indicator_value != indicator_drawn_value) {
+    load_menu_look();
+    canvas.pixels = indicator_pixels;
+    canvas.w = w;
+    canvas.h = h;
+    /* clear rather than black, so the pill's rounded ends show the game */
+    gfx_clear(&canvas, 0);
+    menu_draw_indicator(&canvas, width, height, &menu_theme, 0, 0, indicator, indicator_value);
+    sdl.UpdateTexture(indicator_texture, NULL, indicator_pixels, w * (int)sizeof *indicator_pixels);
+    indicator_drawn = indicator;
+    indicator_drawn_value = indicator_value;
+  }
+
+  m = gfx_metrics_for(width, height);
+  dst.x = width - gfx_u(&m, m.padding) - w;
+  dst.y = gfx_u(&m, m.padding);
+  dst.w = w;
+  dst.h = h;
+  clear_letterbox(renderer, &saved);
+  sdl.RenderCopy(renderer, indicator_texture, NULL, &dst);
+  restore_letterbox(renderer, &saved);
+}
+
+/* clears the whole screen to black, putting pico-8's draw colour back after */
+static void clear_to_black(void *renderer)
+{
+  struct letterbox saved;
+  uint8_t r, g, b, a;
+
+  if (overlay_broken || sdl.RenderClear == NULL || sdl.RenderGetDrawColor == NULL ||
+      sdl.RenderSetDrawColor == NULL) {
+    return;
+  }
+
+  clear_letterbox(renderer, &saved);
+  sdl.RenderGetDrawColor(renderer, &r, &g, &b, &a);
+  sdl.RenderSetDrawColor(renderer, 0, 0, 0, 0xff);
+  sdl.RenderClear(renderer);
+  sdl.RenderSetDrawColor(renderer, r, g, b, a);
+  restore_letterbox(renderer, &saved);
+}
+
+/*
+ * After Quit, pico-8 still has to notice the request and shut down, and
+ * launch.sh still has work to do before the launcher draws again, so the
+ * screen fades from the menu to black rather than going back to the game.
+ */
+static void fade_out(void *renderer, void *texture, gfx_canvas *canvas, int drawn)
+{
+  size_t count = (size_t)canvas->w * canvas->h;
+  int step;
+
+  /* fade from what is on screen, which is the dimmed game if the menu never drew */
+  if (drawn) {
+    memcpy(menu_frame, canvas->pixels, count * sizeof *menu_frame);
+  } else {
+    gfx_dim(canvas, menu_frame, 0x80);
+    memcpy(menu_frame, canvas->pixels, count * sizeof *menu_frame);
+  }
+
+  for (step = 1; step <= FADE_STEPS; step++) {
+    gfx_dim(canvas, menu_frame, 255 * step / FADE_STEPS);
+    show_pixels(renderer, texture, canvas->pixels, canvas->w);
+    sdl.RenderPresent(renderer);
+    sdl.Delay(FADE_STEP_MS);
+  }
+}
+
 /*
  * The cart waits here, in the middle of presenting a frame, until the menu
  * closes. The frame it was presenting is drawn again on the way out, for the
- * SDL_RenderPresent the menu was opened from to show.
+ * SDL_RenderPresent the menu was opened from to show, or black after Quit.
  */
 static void run_menu(void *renderer)
 {
@@ -759,8 +1023,8 @@ static void run_menu(void *renderer)
   gfx_canvas canvas;
   gfx_battery battery;
   uint32_t event[14];
-  unsigned held, was_held;
-  int width, height, paused, button;
+  unsigned held, was_held, pressed, presses_at_menu = 0;
+  int width, height, paused, button, drawn = 0, menu_chord = 0;
   size_t i;
   void *texture;
 
@@ -790,14 +1054,12 @@ static void run_menu(void *renderer)
     menu_frame[i] |= 0xff000000u;
   }
 
-  if (menu_font == NULL) {
-    menu_font = gfx_font_open(getenv("PICO_PAK_MENU_FONT"));
-    gfx_theme_init(&menu_theme, getenv("PICO_PAK_MENU_STYLE"), getenv("PICO_PAK_MENU_COLORS"));
-  }
-
+  load_menu_look();
   paused = pause_audio();
   LOG("opening the menu%s\n", paused ? " and pausing pico-8's audio" : "");
   menu_open(&menu, &settings, cart_name);
+  menu.indicator = indicator;
+  menu.indicator_value = indicator_value;
   battery = gfx_read_battery(power_supply_dir);
   canvas.pixels = menu_pixels;
   canvas.w = width;
@@ -815,29 +1077,58 @@ static void run_menu(void *renderer)
       break;
     }
 
+    /*
+     * Menu closes the menu when it is let go, as it opened it, unless it was
+     * held for the brightness or with another button, as in the game
+     */
     held = read_menu_buttons();
-    result = menu_update(&menu, held & ~was_held, held, sdl.GetTicks());
+    pressed = held & ~was_held & ~(unsigned)MENU_MENU;
+    if (held & MENU_MENU) {
+      if (!(was_held & MENU_MENU)) {
+        presses_at_menu = volume_key_presses();
+        menu_chord = 0;
+      }
+      if (volume_key_presses() != presses_at_menu || other_buttons_down()) {
+        menu_chord = 1;
+      }
+    } else if ((was_held & MENU_MENU) && !menu_chord) {
+      pressed |= MENU_MENU;
+    }
+
+    if (update_indicator(sdl.GetTicks(), (held & MENU_MENU) != 0)) {
+      menu.indicator = indicator;
+      menu.indicator_value = indicator_value;
+      menu.dirty = 1;
+    }
+
+    result = menu_update(&menu, pressed, held, sdl.GetTicks());
     was_held = held;
 
-    if (menu_font != NULL && menu.dirty) {
+    if (menu_font != NULL && menu.dirty && result != MENU_QUIT) {
       menu_draw(&menu, &canvas, menu_frame, menu_font, &menu_theme, &battery);
       show_pixels(renderer, texture, menu_pixels, width);
       sdl.RenderPresent(renderer);
+      drawn = 1;
     }
     if (result == MENU_STAY) {
       sdl.Delay(16);
     }
   }
 
-  show_pixels(renderer, texture, menu_frame, width);
+  if (result == MENU_QUIT) {
+    /* the cart's sound stays paused, and every frame left is black */
+    fade_out(renderer, texture, &canvas, drawn);
+    quitting = 1;
+  } else {
+    show_pixels(renderer, texture, menu_frame, width);
+    if (paused) {
+      sdl.PauseAudioDevice(audio_device, 0);
+    }
+  }
   sdl.DestroyTexture(texture);
   restore_letterbox(renderer, &saved);
 
-  if (paused) {
-    sdl.PauseAudioDevice(audio_device, 0);
-  }
-
-  /* the press that closed the menu is not the cart's, nor is the Menu release after it */
+  /* the press that closed the menu is not the cart's */
   for (button = 0; button < SDL_CONTROLLER_BUTTON_MAX; button++) {
     if (!hidden[button] && pad_button(button)) {
       hidden[button] = 1;
@@ -861,11 +1152,22 @@ EXPORT void SDL_RenderPresent(void *renderer)
   }
 
   init_display();
+  if (quitting) {
+    clear_to_black(renderer);
+    sdl.RenderPresent(renderer);
+    return;
+  }
+
   update_buttons();
+  if (sdl.GetTicks != NULL) {
+    update_indicator(sdl.GetTicks(), menu_was_down);
+  }
   draw_overlay(renderer);
   if (menu_requested) {
     menu_requested = 0;
     run_menu(renderer);
+  } else {
+    draw_indicator(renderer);
   }
   sdl.RenderPresent(renderer);
 }
@@ -1007,6 +1309,10 @@ EXPORT void SDL_DestroyRenderer(void *renderer)
     overlay_renderer = NULL;
     overlay_texture = NULL;
     loaded = -2;
+  }
+  if (renderer == indicator_renderer) {
+    indicator_renderer = NULL;
+    indicator_texture = NULL;
   }
 
   if (sdl.DestroyRenderer != NULL) {

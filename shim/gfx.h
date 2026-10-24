@@ -31,6 +31,8 @@
 #define GFX_BUTTON_PADDING 12
 #define GFX_OPTION_PADDING 8
 #define GFX_SCROLL_HEIGHT 4
+#define GFX_SETTINGS_SIZE 4
+#define GFX_SETTINGS_WIDTH 80
 #define GFX_FONT_LARGE 16
 #define GFX_FONT_MEDIUM 14
 #define GFX_FONT_SMALL 12
@@ -55,6 +57,8 @@ void gfx_circle(gfx_canvas *canvas, int cx, int cy, int r, uint32_t colour);
 /* every pixel whose centre lies inside the three points */
 void gfx_triangle(gfx_canvas *canvas, int x0, int y0, int x1, int y1, int x2, int y2,
                   uint32_t colour);
+/* part of a ring opening to the right of its centre, anti-aliased, for sound waves */
+void gfx_arc(gfx_canvas *canvas, int cx, int cy, int r, int thickness, uint32_t colour);
 /* an isosceles triangle in the box, pointing up or down, for scroll arrows */
 void gfx_arrow(gfx_canvas *canvas, int x, int y, int w, int h, int down, uint32_t colour);
 /* copies frame onto canvas darkened by alpha (0-255), as minarch dims the game */
@@ -108,6 +112,11 @@ uint32_t gfx_group_pill(const gfx_theme *theme);
 uint32_t gfx_hint_text(const gfx_theme *theme);
 uint32_t gfx_option_row(const gfx_theme *theme);
 uint32_t gfx_background(const gfx_theme *theme);
+/* the volume and brightness indicator's pill, icon, bar and the bar's track */
+uint32_t gfx_indicator_pill(const gfx_theme *theme);
+uint32_t gfx_indicator_icon(const gfx_theme *theme);
+uint32_t gfx_indicator_bar(const gfx_theme *theme);
+uint32_t gfx_indicator_track(const gfx_theme *theme);
 /* minarch draws a black copy under every unselected row, NextUI does not */
 int gfx_shadow(const gfx_theme *theme);
 

@@ -72,6 +72,18 @@ struct fake_state {
   uint32_t updated[256];
   int clears;
 
+  /* SDL_GetTicks is this plus 16ms for every SDL_Delay there has ever been */
+  uint32_t ticks;
+  uint32_t all_delays;
+
+  /* the draw colour, and how many clears were black */
+  uint8_t draw_colour[4];
+  int black_clears;
+
+  /* libmsettings, which the shim opens from this same library in the tests */
+  int settings_inits;
+  int volume, brightness, mute;
+
   int audio_opened;
   int audio_status;
   int audio_pauses;

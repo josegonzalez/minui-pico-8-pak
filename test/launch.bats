@@ -175,6 +175,95 @@ teardown() {
   cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.res/Splore.p8.png"
 }
 
+@test "install_splore_cart seeds the cover chosen in the in-game menu" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  echo "fancy" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$rom_folder/.media/Splore.png"
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$rom_folder/.res/Splore.p8.png"
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/Splore.p8"
+}
+
+@test "get_splore_artwork is the standard cover unless fancy was chosen" {
+  run get_splore_artwork
+  [ "$output" = "$PAK_DIR/splore/Splore.p8.png" ]
+
+  printf 'fancy\r\n' >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+  run get_splore_artwork
+  [ "$output" = "$PAK_DIR/splore/Splore-fancy.p8.png" ]
+
+  echo "standard" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+  run get_splore_artwork
+  [ "$output" = "$PAK_DIR/splore/Splore.p8.png" ]
+}
+
+@test "apply_splore_artwork swaps the pak's covers for the one chosen" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  run install_splore_cart
+  echo "fancy" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+
+  run apply_splore_artwork
+  [ "$status" -eq 0 ]
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$rom_folder/.media/Splore.png"
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$rom_folder/.res/Splore.p8.png"
+
+  echo "standard" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+  run apply_splore_artwork
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.media/Splore.png"
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.res/Splore.p8.png"
+}
+
+@test "apply_splore_artwork follows a renamed Splore cart into every tagged folder" {
+  first="$(make_rom_folder "Pico-8 (PICO)")"
+  second="$(make_rom_folder "Extra Pico (PICO)")"
+  mkdir -p "$first/.media" "$first/.res" "$second/.media"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$first/1) Splore.p8"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$first/.media/1) Splore.png"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$first/.res/1) Splore.p8.png"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$second/Splore.p8"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$second/.media/Splore.png"
+  echo "fancy" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+
+  run apply_splore_artwork
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$first/.media/1) Splore.png"
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$first/.res/1) Splore.p8.png"
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$second/.media/Splore.png"
+}
+
+# a cover the user made, or chose not to have, is theirs
+@test "apply_splore_artwork leaves other artwork and missing artwork alone" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$rom_folder/.media"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/Splore.p8"
+  echo "my own cover" >"$rom_folder/.media/Splore.png"
+  echo "fancy" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+
+  run apply_splore_artwork
+  [ "$status" -eq 0 ]
+  [ "$(cat "$rom_folder/.media/Splore.png")" = "my own cover" ]
+  [ ! -e "$rom_folder/.res/Splore.p8.png" ]
+}
+
+@test "apply_splore_artwork leaves the covers alone without cmp" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  run install_splore_cart
+  echo "fancy" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+
+  cmp() { return 127; }
+  command() {
+    [ "$2" = "cmp" ] && return 1
+    builtin command "$@"
+  }
+  run apply_splore_artwork
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No cmp on this device"* ]]
+  unset -f cmp command
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.media/Splore.png"
+}
+
 @test "install_splore_cart seeds every tagged roms folder" {
   first="$(make_rom_folder "Pico-8 (PICO)")"
   second="$(make_rom_folder "Extra Pico (PICO)")"
@@ -522,6 +611,7 @@ teardown() {
   [ "$PICO_PAK_COPY_CARTS_DIR" = "$USERDATA_PATH/Pico-8-native" ]
   [ "$PICO_PAK_SHARED_COPY_CARTS_DIR" = "$SHARED_USERDATA_PATH/Pico-8-native" ]
   [ "$PICO_PAK_PICO8_CONFIG" = "$USERDATA_PATH/Pico-8-native/pico8-config" ]
+  [ "$PICO_PAK_SPLORE_ARTWORK" = "$USERDATA_PATH/Pico-8-native/splore-artwork" ]
   [ "$PICO_PAK_INSTALLED_CONFIG" = "$HOME/config.txt" ]
   [ "$PICO_PAK_CART_NAME" = "Splore" ]
   [ "$PICO_PAK_MENU_STYLE" = "nextui" ]

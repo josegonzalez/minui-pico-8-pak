@@ -2,15 +2,18 @@
  * Plays pico-8's part against sdl-display.so, which is preloaded over the fake
  * libSDL2 in fake-sdl.c, and checks what reached the fake:
  *
- *   LD_PRELOAD=sdl-display.so display-test
+ *   LD_PRELOAD=sdl-display.so display-test [quit-event]
  *
  * The menu holds pico-8 inside SDL_RenderPresent, so each menu is driven by a
  * script of pad states the fake steps through on every SDL_Delay. The shim
- * reads its environment once, so everything runs in one process in order.
- * Prints TAP and exits non-zero on a failure.
+ * reads its environment once, so the tests run in one process in order, apart
+ * from quitting on an SDL_QUIT, which like any quit cannot be undone and so has
+ * a run of its own. Prints TAP and exits non-zero on a failure.
  */
 
 #define _GNU_SOURCE
+#include <dlfcn.h>
+#include <link.h>
 #include <linux/input.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -39,7 +42,7 @@
 #define BIT(button) (1u << (button))
 
 /* the menu's Options rows, in order */
-enum { ROW_SCREEN_MODE, ROW_OVERLAY, ROW_COPY_CARTS, ROW_SHOW_FPS, ROW_VOLUME };
+enum { ROW_SCREEN_MODE, ROW_OVERLAY, ROW_COPY_CARTS, ROW_SPLORE_ARTWORK, ROW_SHOW_FPS, ROW_VOLUME };
 
 /* what pico-8 calls, answered by the shim and passed on to the fake */
 void SDL_RenderPresent(void *renderer);
@@ -59,8 +62,11 @@ static char choice_path[4096];
 static char screen_mode_path[4096];
 static char copy_carts_dir[4096];
 static char pico8_config_path[4096];
+static char splore_artwork_path[4096];
 static char input_path[4096];
 static char renderer_a, renderer_b, game_texture;
+static void *fake_library;
+static struct link_map *fake_map;
 
 static void check(int passed, const char *name)
 {
@@ -266,12 +272,29 @@ static void make_fixtures(void)
   snprintf(path, sizeof path, "%s/power/battery/capacity", dir);
   write_file(path, "50\n", 3);
 
+  /* keymon's shared settings, and the fake standing in for its library */
+  snprintf(path, sizeof path, "%s/SharedSettings", dir);
+  write_file(path, "", 0);
+  setenv("PICO_PAK_SHARED_SETTINGS", path, 1);
+  /* the executable has its own copy of the fake's symbols, so the loader names the library */
+  fake_library = dlopen("libSDL2-2.0.so.0", RTLD_NOW | RTLD_NOLOAD);
+  if (fake_library == NULL || dlinfo(fake_library, RTLD_DI_LINKMAP, &fake_map) != 0 ||
+      fake_map->l_name == NULL || fake_map->l_name[0] != '/') {
+    printf("Bail out! cannot find the fake libSDL2's path\n");
+    exit(2);
+  }
+  setenv("PICO_PAK_MSETTINGS", fake_map->l_name, 1);
+  fake.volume = 10;
+  fake.brightness = 5;
+
   snprintf(path, sizeof path, "%s/overlays", dir);
   setenv("PICO_PAK_OVERLAY_DIR", path, 1);
   setenv("PICO_PAK_OVERLAY_CHOICE", choice_path, 1);
   setenv("PICO_PAK_SCREEN_MODE", screen_mode_path, 1);
   setenv("PICO_PAK_COPY_CARTS_DIR", copy_carts_dir, 1);
   setenv("PICO_PAK_PICO8_CONFIG", pico8_config_path, 1);
+  snprintf(splore_artwork_path, sizeof splore_artwork_path, "%s/splore-artwork", dir);
+  setenv("PICO_PAK_SPLORE_ARTWORK", splore_artwork_path, 1);
   setenv("PICO_PAK_CART_NAME", "Celeste", 1);
   /* no font, so the menu draws with its built-in one */
   unsetenv("PICO_PAK_MENU_FONT");
@@ -505,9 +528,8 @@ static void test_menu(void *pad)
 static void test_menu_closing(void *pad)
 {
   static const uint32_t press_b[] = {BIT(BUTTON_B)};
-  static const uint32_t press_menu[] = {0, BIT(BUTTON_GUIDE)};
-  static const uint32_t quit[] = {BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_DOWN), 0,
-                                  BIT(BUTTON_A)};
+  static const uint32_t tap[] = {0, BIT(BUTTON_GUIDE), 0};
+  static const uint32_t brightness[] = {0, BIT(BUTTON_GUIDE), BIT(BUTTON_GUIDE), 0, BIT(BUTTON_B)};
   int reads;
 
   tap_menu(pad);
@@ -518,38 +540,157 @@ static void test_menu_closing(void *pad)
   SDL_GameControllerGetButton(pad, BUTTON_A);
 
   tap_menu(pad);
-  set_script(press_menu, 2);
+  set_script(tap, 3);
   SDL_RenderPresent(&renderer_b);
-  check(fake.delays == 2 && fake.pushed == 0, "Menu closes the menu");
+  check(fake.delays == 3 && fake.pushed == 0, "a tap of Menu closes the menu once it is let go");
   reads = fake.reads;
-  release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
   SDL_RenderPresent(&renderer_b);
-  check(fake.reads == reads, "releasing the Menu that closed the menu does not open it again");
+  check(fake.reads == reads, "the Menu that closed the menu does not open it again");
 
+  /* the volume key lands while Menu is held, between the second and third delay */
+  tap_menu(pad);
+  set_script(brightness, 5);
+  fake.raw_buttons[17] = 1;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.delays == 5, "Menu held with another button does not close the menu");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+}
+
+/*
+ * Quitting leaves every frame black until pico-8 exits, so it runs last.
+ */
+static void test_quit(void *pad)
+{
+  static const uint32_t quit[] = {BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_DOWN), 0,
+                                  BIT(BUTTON_A)};
+  int resumes = fake.audio_resumes, copies, black_clears;
+
+  fake.updates = 0;
   tap_menu(pad);
   set_script(quit, 5);
   SDL_RenderPresent(&renderer_b);
   check(fake.pushed == 1 && fake.pushed_type == SDL_QUIT,
         "Quit, past the unavailable Save and Load, pushes SDL_QUIT");
+  check(fake.delays == 5 + 8 && fake.updates >= 9 &&
+            fake.updated[fake.updates - 1] == 0xff000000u &&
+            fake.updated[fake.updates - 2] != 0xff000000u,
+        "Quit fades the menu out to black");
+  check(fake.audio_resumes == resumes, "pico-8's audio stays paused after Quit");
+
+  copies = fake.copies;
+  black_clears = fake.black_clears;
+  fake.draw_colour[0] = 0x12;
+  SDL_RenderCopy(&renderer_b, &game_texture, NULL, &(fake_rect){128, 0, 768, 768});
+  SDL_RenderPresent(&renderer_b);
+  check(fake.black_clears == black_clears + 1 && fake.copies == copies + 1,
+        "every frame pico-8 presents after Quit is cleared to black");
+  check(fake.draw_colour[0] == 0x12, "pico-8's draw colour is put back after the black");
+  fake.draw_colour[0] = 0;
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
+}
 
+/*
+ * An SDL_QUIT arriving while the menu is open quits as Quit does. Quitting
+ * cannot be undone, so this runs in a process of its own.
+ */
+static void test_quit_event(void *pad)
+{
+  fake.updates = 0;
   tap_menu(pad);
   memset(fake.queue, 0, sizeof fake.queue);
   fake.queue[0][0] = SDL_QUIT;
   fake.queued = 1;
   fake.queue_head = 0;
   set_script(NULL, 0);
-  SDL_RenderPresent(&renderer_b);
-  check(fake.pushed == 2 && fake.delays == 0, "an SDL_QUIT while the menu is open quits pico-8");
+  SDL_RenderPresent(&renderer_a);
+  check(fake.pushed == 1 && fake.pushed_type == SDL_QUIT,
+        "an SDL_QUIT while the menu is open quits pico-8");
+  check(fake.delays == 8 && fake.updates >= 8 && fake.updated[fake.updates - 1] == 0xff000000u,
+        "it fades out to black from the game, as the menu never drew");
   fake.queued = fake.queue_head = 0;
+}
+
+static void append_volume_key(void)
+{
+  struct input_event key = {.type = EV_KEY, .code = KEY_VOLUMEUP, .value = 1};
+  FILE *input = fopen(input_path, "ab");
+
+  if (input == NULL || fwrite(&key, sizeof key, 1, input) != 1) {
+    perror(input_path);
+    exit(2);
+  }
+  fclose(input);
+}
+
+/*
+ * The indicator is drawn over the game at minarch's place, a 372x90 pill 15
+ * pixels in from the top right of the Brick's 1024x768 screen.
+ */
+static int indicator_drawn(int copies)
+{
+  int i;
+
+  for (i = copies; i < fake.copies; i++) {
+    if (fake.copy[i].has_dst && rect_is(fake.copy[i].dst, 1024 - 15 - 372, 15, 372, 90)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void test_indicator(void)
+{
+  int copies, updates;
+
+  check(fake.settings_inits == 1, "the launcher's settings are opened once");
+
+  copies = fake.copies;
+  SDL_RenderPresent(&renderer_b);
+  check(!indicator_drawn(copies), "nothing is shown while volume and brightness stay put");
+
+  fake.volume = 12;
+  copies = fake.copies;
+  updates = fake.updates;
+  SDL_RenderPresent(&renderer_b);
+  check(indicator_drawn(copies) && fake.updates == updates + 1,
+        "a change of volume shows the indicator over the game");
+  check(fake.copy[fake.copies - 1].clip_enabled == 0 && fake.copy[fake.copies - 1].logical_w == 0,
+        "the indicator is drawn with the letterboxing cleared");
+
+  fake.ticks += 400;
+  copies = fake.copies;
+  updates = fake.updates;
+  SDL_RenderPresent(&renderer_b);
+  check(indicator_drawn(copies) && fake.updates == updates,
+        "it stays a while, without being drawn again");
+
+  fake.ticks += 200;
+  copies = fake.copies;
+  SDL_RenderPresent(&renderer_b);
+  check(!indicator_drawn(copies), "and goes 500ms after the last change");
+
+  fake.brightness = 6;
+  copies = fake.copies;
+  updates = fake.updates;
+  SDL_RenderPresent(&renderer_b);
+  check(indicator_drawn(copies) && fake.updates == updates + 1,
+        "a change of brightness shows it too");
+  fake.ticks += 600;
+  SDL_RenderPresent(&renderer_b);
+
+  append_volume_key();
+  copies = fake.copies;
+  SDL_RenderPresent(&renderer_b);
+  check(indicator_drawn(copies), "a volume key with the volume at its end still shows it");
+  fake.ticks += 600;
+  SDL_RenderPresent(&renderer_b);
 }
 
 static void test_chords(void *pad)
 {
-  struct input_event key = {.type = EV_KEY, .code = KEY_VOLUMEUP, .value = 1};
-  FILE *input;
   int reads = fake.reads;
 
   fake.buttons[BUTTON_GUIDE] = 1;
@@ -563,12 +704,7 @@ static void test_chords(void *pad)
 
   fake.buttons[BUTTON_GUIDE] = 1;
   SDL_GameControllerGetButton(pad, BUTTON_A);
-  input = fopen(input_path, "ab");
-  if (input == NULL || fwrite(&key, sizeof key, 1, input) != 1) {
-    perror(input_path);
-    exit(2);
-  }
-  fclose(input);
+  append_volume_key();
   SDL_GameControllerGetButton(pad, BUTTON_A);
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
@@ -581,6 +717,10 @@ static void test_chords(void *pad)
   check(fake.reads == reads + 1, "the next tap of Menu on its own opens the menu");
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  /* the volume key also showed the indicator, which has to be gone for the tests after */
+  fake.ticks += 1000;
+  SDL_RenderPresent(&renderer_b);
 }
 
 static void test_events(void *pad)
@@ -650,6 +790,9 @@ static void test_settings(void *pad)
   snprintf(path, sizeof path, "%s/copy-carts", copy_carts_dir);
   check(access(path, F_OK) == 0, "Copy Splore Carts writes its marker to the userdata folder");
 
+  change_option(pad, &renderer_b, ROW_SPLORE_ARTWORK, 1);
+  check(file_is(splore_artwork_path, "fancy"), "Splore Artwork saves the fancy cover");
+
   change_option(pad, &renderer_b, ROW_VOLUME, -1);
   check(file_is(pico8_config_path, "volume 192"),
         "Volume steps down from the installed config.txt's value and saves it");
@@ -664,7 +807,7 @@ static void test_closed_pad(void *pad)
   release_all();
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
   void *pad;
 
@@ -675,6 +818,12 @@ int main(void)
   check(SDL_OpenAudioDevice(NULL, 0, NULL, NULL, 0) == FAKE_AUDIO_DEVICE,
         "the audio device pico-8 opens is passed through");
 
+  if (argc > 1 && strcmp(argv[1], "quit-event") == 0) {
+    test_quit_event(pad);
+    printf("1..%d\n", tests);
+    return failures == 0 ? 0 : 1;
+  }
+
   test_select_combos(pad);
   test_overlays(pad);
   test_menu(pad);
@@ -683,6 +832,8 @@ int main(void)
   test_events(pad);
   test_screen_mode(pad);
   test_settings(pad);
+  test_indicator();
+  test_quit(pad);
   test_closed_pad(pad);
 
   printf("1..%d\n", tests);

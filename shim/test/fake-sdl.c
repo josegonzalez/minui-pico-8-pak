@@ -1,7 +1,8 @@
 /*
  * A libSDL2-2.0.so.0 with only the functions sdl-display.c resolves, each
  * recording what it was asked into fake so display-test.c can check what the
- * shim did to the frame, the pad and the event queue.
+ * shim did to the frame, the pad, the audio and the event queue. It also
+ * stands in for the launcher's libmsettings, which the shim opens by path.
  */
 
 #include <stdint.h>
@@ -183,7 +184,51 @@ int SDL_RenderClear(void *renderer)
 {
   (void)renderer;
   fake.clears++;
+  if (fake.draw_colour[0] == 0 && fake.draw_colour[1] == 0 && fake.draw_colour[2] == 0) {
+    fake.black_clears++;
+  }
   return 0;
+}
+
+int SDL_RenderGetDrawColor(void *renderer, uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *a)
+{
+  (void)renderer;
+  *r = fake.draw_colour[0];
+  *g = fake.draw_colour[1];
+  *b = fake.draw_colour[2];
+  *a = fake.draw_colour[3];
+  return 0;
+}
+
+int SDL_RenderSetDrawColor(void *renderer, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+  (void)renderer;
+  fake.draw_colour[0] = r;
+  fake.draw_colour[1] = g;
+  fake.draw_colour[2] = b;
+  fake.draw_colour[3] = a;
+  return 0;
+}
+
+/* libmsettings' own names, as the shim looks them up with dlsym */
+void InitSettings(void)
+{
+  fake.settings_inits++;
+}
+
+int GetVolume(void)
+{
+  return fake.volume;
+}
+
+int GetBrightness(void)
+{
+  return fake.brightness;
+}
+
+int GetMute(void)
+{
+  return fake.mute;
 }
 
 int SDL_RenderReadPixels(void *renderer, const fake_rect *rect, uint32_t format, void *pixels,
@@ -243,6 +288,7 @@ void SDL_Delay(uint32_t ms)
       fake.buttons[button] = (fake.script[fake.delays] >> button) & 1;
     }
   }
+  fake.all_delays++;
   if (++fake.delays > FAKE_MAX_DELAYS) {
     printf("Bail out! the menu never closed\n");
     exit(3);
@@ -251,7 +297,7 @@ void SDL_Delay(uint32_t ms)
 
 uint32_t SDL_GetTicks(void)
 {
-  return (uint32_t)fake.delays * 16;
+  return fake.ticks + fake.all_delays * 16;
 }
 
 uint32_t SDL_OpenAudioDevice(const char *device, int iscapture, const void *desired,

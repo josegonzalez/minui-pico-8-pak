@@ -116,11 +116,12 @@ COPY --from=fonts /BPreplayBold-unhinted.otf /font1.ttf /fonts/
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
   -o /src/test/libSDL2-2.0.so.0 /src/test/fake-sdl.c \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/display-test /src/test/display-test.c \
-  /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test \
+  /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test -ldl \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/menu-test /src/test/menu-test.c \
   /src/menu.c /src/gfx.c -lm
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
+  && LD_PRELOAD=/display.so /src/test/display-test quit-event \
   && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
 
 FROM build-arm AS test-arm
@@ -131,11 +132,12 @@ COPY --from=fonts /BPreplayBold-unhinted.otf /font1.ttf /fonts/
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
   -o /src/test/libSDL2-2.0.so.0 /src/test/fake-sdl.c \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/display-test /src/test/display-test.c \
-  /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test \
+  /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test -ldl \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/menu-test /src/test/menu-test.c \
   /src/menu.c /src/gfx.c -lm
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
+  && LD_PRELOAD=/display.so /src/test/display-test quit-event \
   && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
 
 FROM scratch AS export

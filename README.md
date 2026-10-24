@@ -88,12 +88,18 @@ Press and release `Menu` to pause the game and open the same menu MinUI and Next
 
 The menu has these entries:
 
-- `Continue` closes the menu and carries on with the game. `B` and `Menu` close it too.
+- `Continue` closes the menu and carries on with the game. `B` and a tap of `Menu` close it too.
 - `Save` and `Load` are shown but cannot be chosen yet, as the pak has no save states.
 - `Options` opens the settings below.
-- `Quit` closes PICO-8 and returns to the game list.
+- `Quit` fades the screen to black, closes PICO-8 and returns to the game list. The screen stays black, and the game stays silent, until the launcher has drawn its menu again.
 
 The menu takes its look from the launcher, using NextUI's theme colours and font, or MinUI's font. If neither font is on the SD card, it draws with a small built-in font instead.
+
+### Volume and brightness
+
+Changing the volume or brightness while a game is running, or in the menu, shows the same bar MinUI and NextUI show over their own emulators, in the top right of the screen. It goes away half a second after the last change. In the menu it takes the battery's place until then.
+
+The pak reads the volume and brightness from the launcher's own settings library, `libmsettings.so`, so the bar only appears while the launcher's settings are running, as they always are under MinUI and NextUI.
 
 #### Options
 
@@ -104,13 +110,14 @@ Use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. 
 | Screen Mode        | Standard, Stretched     | When the menu closes        |
 | Overlay            | None, or any overlay    | When the menu closes        |
 | Copy Splore Carts  | Off, All, Favourites    | When you exit the cart      |
+| Splore Artwork     | Standard, Fancy         | When you exit the cart      |
 | Show FPS           | Off, On                 | The next time a game starts |
 | Volume             | 0%, 25%, 50%, 75%, 100% | The next time a game starts |
 | Battery Saver      | Off, On                 | The next time a game starts |
 | Hide Mature Carts  | Off, On                 | The next time a game starts |
 | Check Cart Updates | Off, On                 | The next time a game starts |
 
-See [Screen Mode](#screen-mode), [Overlay](#overlay) and [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) for the first three. The rest are PICO-8's own settings:
+See [Screen Mode](#screen-mode), [Overlay](#overlay), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the first four. The rest are PICO-8's own settings:
 
 - `Show FPS` draws the frame rate in the corner of the screen.
 - `Volume` is PICO-8's own volume, which applies under the device's volume.
@@ -204,7 +211,9 @@ A roms folder that already contains a cart with `Splore` or `splore` in its name
 
 To exit Splore, choose a game and follow the normal process of exiting a game.
 
-You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png` and `.res/1) Splore.p8.png`. The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover you can copy over the generated artwork.
+You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png` and `.res/1) Splore.p8.png`.
+
+The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover. To use it, set `Splore Artwork` in the [in-game menu](#in-game-menu)'s options to `Fancy`, and set it back to `Standard` to return to the usual one. The choice is saved to a file named `splore-artwork` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. When you next exit a cart, the cover of every Splore cart in a roms folder tagged `(PICO)` is changed to match, renamed carts included. Only covers that are still one of the pak's two are changed, so artwork of your own, or a cart with no artwork, is left alone. A Splore cart the pak creates later gets the chosen cover from the start.
 
 ### Copying Splore carts into your roms folder
 
@@ -342,4 +351,4 @@ make test
 
 The build also tests the display shim on both architectures, by loading it into a small program in `shim/test` that stands in for PICO-8, linked against a fake `libSDL2` that records what the shim does to each frame, the controller, the audio and the event queue. The menu's pages, the files its settings write and its drawing are tested on their own by `shim/test/menu-test.c`, with the fonts MinUI and NextUI ship, which the build fetches at a pinned commit for the tests alone. A shim that fails these tests is not written to `lib/`.
 
-Five environment variables exist for the test suites only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to. In the display shim, `PICO_PAK_INPUT_DIR` overrides the `/dev/input` directory watched for the volume buttons, and `PICO_PAK_POWER_SUPPLY_DIR` overrides the `/sys/class/power_supply` directory the menu reads the battery from.
+Seven environment variables exist for the test suites only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to. In the display shim, `PICO_PAK_INPUT_DIR` overrides the `/dev/input` directory watched for the volume buttons, `PICO_PAK_POWER_SUPPLY_DIR` overrides the `/sys/class/power_supply` directory the menu reads the battery from, `PICO_PAK_MSETTINGS` names the settings library to open in place of `libmsettings.so`, and `PICO_PAK_SHARED_SETTINGS` overrides the `/dev/shm/SharedSettings` file that has to exist before it is opened.

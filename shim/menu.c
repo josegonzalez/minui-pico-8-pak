@@ -20,8 +20,10 @@
 #define DISABLED_TEXT GFX_GRAY
 
 const char *const menu_screen_modes[] = {"standard", "stretched"};
+const char *const menu_splore_artworks[] = {"standard", "fancy"};
 
 static const char *const screen_mode_names[] = {"Standard", "Stretched"};
+static const char *const splore_artwork_names[] = {"Standard", "Fancy"};
 static const char *const copy_carts_names[] = {"Off", "All", "Favourites"};
 static const char *const copy_carts_markers[] = {"copy-carts", "copy-carts-favourites",
                                                  "copy-carts-favorites"};
@@ -33,7 +35,8 @@ static const char *const sleep_values[] = {"4", "10"};
 
 static const char *const root_labels[] = {"Continue", "Save", "Load", "Options", "Quit"};
 
-#define NEXT_LAUNCH "Applies the next time PICO-8 starts."
+/* a description's note on when it applies goes on a line of its own */
+#define NEXT_LAUNCH "\nApplies the next time PICO-8 starts."
 
 /*
  * The config.txt keys the menu offers, the names it shows for each value and
@@ -49,26 +52,27 @@ static const struct config_option {
   const char *const *values;
   int fallback;
 } config_options[MENU_CONFIG_COUNT] = {
-    {"Show FPS", "show_fps", "Draws the frame rate in the corner. " NEXT_LAUNCH, 2, off_on,
+    {"Show FPS", "show_fps", "Draws the frame rate in the corner." NEXT_LAUNCH, 2, off_on,
      zero_one, 0},
-    {"Volume", "volume", "PICO-8's own volume, under the device's. " NEXT_LAUNCH, 5, volume_names,
+    {"Volume", "volume", "PICO-8's own volume, under the device's." NEXT_LAUNCH, 5, volume_names,
      volume_values, 4},
     {"Battery Saver", "foreground_sleep_ms",
-     "Sleeps longer between frames to save power. " NEXT_LAUNCH, 2, off_on, sleep_values, 0},
+     "Sleeps longer between frames to save power." NEXT_LAUNCH, 2, off_on, sleep_values, 0},
     {"Hide Mature Carts", "splore_filter",
-     "Hides carts the community tagged as mature in Splore. " NEXT_LAUNCH, 2, off_on, zero_one, 0},
+     "Hides carts the community tagged as mature in Splore." NEXT_LAUNCH, 2, off_on, zero_one, 0},
     {"Check Cart Updates", "check_for_cart_updates",
-     "Checks for a newer version of a BBS cart each time it runs. " NEXT_LAUNCH, 2, off_on,
+     "Checks for a newer version of a BBS cart each time it runs." NEXT_LAUNCH, 2, off_on,
      zero_one, 1},
 };
 
 static const char *const option_labels[MENU_CONFIG_FIRST] = {"Screen Mode", "Overlay",
-                                                             "Copy Splore Carts"};
+                                                             "Copy Splore Carts", "Splore Artwork"};
 
 static const char *const option_descriptions[MENU_CONFIG_FIRST] = {
     "Standard keeps the game square, Stretched fills the screen.",
     "A PNG from /Overlays/PICO drawn over the game in Standard mode.",
-    "Copies the carts Splore downloaded into the roms folder when the cart exits.",
+    "Copies the carts Splore downloaded into the roms folder.\nApplies when the cart exits.",
+    "The cover the Splore cart shows in the game list.\nApplies when the cart exits.",
 };
 
 void menu_read_line(const char *path, char *line, size_t size)
@@ -132,6 +136,21 @@ int menu_read_overlay(const char *path, char *const *names, int count)
   }
 
   return -1;
+}
+
+int menu_read_splore_artwork(const char *path)
+{
+  char line[64];
+  int i;
+
+  menu_read_line(path, line, sizeof line);
+  for (i = 0; i < MENU_SPLORE_ARTWORK_COUNT; i++) {
+    if (strcmp(menu_splore_artworks[i], line) == 0) {
+      return i;
+    }
+  }
+
+  return 0;
 }
 
 static int marker_exists(const char *dir, const char *name)
@@ -304,6 +323,7 @@ void menu_open(struct menu *menu, struct menu_settings *settings, const char *ti
   menu->page = MENU_PAGE_ROOT;
   menu->root_row = MENU_CONTINUE;
   menu->copy_carts = read_copy_carts(settings);
+  menu->splore_artwork = menu_read_splore_artwork(settings->splore_artwork_path);
   for (i = 0; i < MENU_CONFIG_COUNT; i++) {
     menu->config[i] = read_config(settings, i);
   }
@@ -319,6 +339,8 @@ static int choice_count(const struct menu *menu, int row)
     return menu->settings->overlay_count + 1;
   case MENU_COPY_CARTS:
     return MENU_COPY_COUNT;
+  case MENU_SPLORE_ARTWORK:
+    return MENU_SPLORE_ARTWORK_COUNT;
   default:
     return config_options[row - MENU_CONFIG_FIRST].count;
   }
@@ -346,6 +368,9 @@ static void choice_name(const struct menu *menu, int row, int choice, char *out,
   case MENU_COPY_CARTS:
     snprintf(out, size, "%s", copy_carts_names[choice]);
     break;
+  case MENU_SPLORE_ARTWORK:
+    snprintf(out, size, "%s", splore_artwork_names[choice]);
+    break;
   default:
     snprintf(out, size, "%s", config_options[row - MENU_CONFIG_FIRST].names[choice]);
     break;
@@ -361,6 +386,8 @@ static int current_choice(const struct menu *menu, int row)
     return menu->settings->overlay + 1;
   case MENU_COPY_CARTS:
     return menu->copy_carts;
+  case MENU_SPLORE_ARTWORK:
+    return menu->splore_artwork;
   default:
     return menu->config[row - MENU_CONFIG_FIRST];
   }
@@ -393,6 +420,11 @@ static void step_option(struct menu *menu, int row, int step)
     menu->copy_carts = choice;
     LOG("set Copy Splore Carts to %s\n", copy_carts_names[choice]);
     write_copy_carts(settings, choice);
+    break;
+  case MENU_SPLORE_ARTWORK:
+    menu->splore_artwork = choice;
+    LOG("set Splore Artwork to %s\n", menu_splore_artworks[choice]);
+    menu_write_line(settings->splore_artwork_path, menu_splore_artworks[choice]);
     break;
   default:
     menu->config[row - MENU_CONFIG_FIRST] = choice;
@@ -562,6 +594,94 @@ static int draw_battery(gfx_canvas *canvas, const gfx_metrics *m, const gfx_them
   return size;
 }
 
+/* minarch's speaker, 18x16 units, or only its cone when muted */
+static void draw_speaker(gfx_canvas *canvas, const gfx_metrics *m, int x, int y, int muted,
+                         uint32_t colour)
+{
+  gfx_fill(canvas, x, y + gfx_u(m, 5), gfx_u(m, 4), gfx_u(m, 6), colour);
+  gfx_triangle(canvas, x + gfx_u(m, 3), y + gfx_u(m, 5), x + gfx_u(m, 10), y, x + gfx_u(m, 10),
+               y + gfx_u(m, 16), colour);
+  gfx_triangle(canvas, x + gfx_u(m, 3), y + gfx_u(m, 5), x + gfx_u(m, 10), y + gfx_u(m, 16),
+               x + gfx_u(m, 3), y + gfx_u(m, 11), colour);
+  if (!muted) {
+    gfx_arc(canvas, x + gfx_u(m, 10), y + gfx_u(m, 8), gfx_u(m, 4), gfx_u(m, 2), colour);
+    gfx_arc(canvas, x + gfx_u(m, 10), y + gfx_u(m, 8), gfx_u(m, 8), gfx_u(m, 2), colour);
+  }
+}
+
+/* minarch's sun, 19x19 units: a disc and eight dots around it */
+static void draw_sun(gfx_canvas *canvas, const gfx_metrics *m, int x, int y, uint32_t colour)
+{
+  /* the eight directions, in tenths of a unit vector */
+  static const int directions[8][2] = {{10, 0}, {7, 7}, {0, 10}, {-7, 7},
+                                       {-10, 0}, {-7, -7}, {0, -10}, {7, -7}};
+  int cx = x + gfx_u(m, 9.5), cy = y + gfx_u(m, 9.5);
+  int i;
+
+  gfx_circle(canvas, cx, cy, gfx_u(m, 4.5), colour);
+  for (i = 0; i < 8; i++) {
+    gfx_circle(canvas, cx + gfx_u(m, 8) * directions[i][0] / 10,
+               cy + gfx_u(m, 8) * directions[i][1] / 10, gfx_u(m, 1.5), colour);
+  }
+}
+
+void menu_indicator_size(int canvas_w, int canvas_h, int *w, int *h)
+{
+  gfx_metrics m = gfx_metrics_for(canvas_w, canvas_h);
+
+  *w = gfx_u(&m, GFX_PILL_SIZE + GFX_SETTINGS_WIDTH + 14);
+  *h = gfx_u(&m, GFX_PILL_SIZE);
+}
+
+/*
+ * minarch's indicator: a pill holding the setting's icon and a bar filled to
+ * its value. Volume at zero shows the muted speaker and no bar.
+ */
+void menu_draw_indicator(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
+                         int x, int y, enum menu_indicator indicator, int value)
+{
+  gfx_metrics m = gfx_metrics_for(screen_w, screen_h);
+  int max = indicator == MENU_INDICATOR_BRIGHTNESS ? MENU_BRIGHTNESS_MAX : MENU_VOLUME_MAX;
+  int pill = gfx_u(&m, GFX_PILL_SIZE), w, h, bar_x, bar_y, bar_w, bar_h;
+
+  menu_indicator_size(screen_w, screen_h, &w, &h);
+  value = value < 0 ? 0 : value > max ? max : value;
+  gfx_pill(canvas, x, y, w, h, gfx_indicator_pill(theme));
+
+  if (indicator == MENU_INDICATOR_BRIGHTNESS) {
+    draw_sun(canvas, &m, x + (pill - gfx_u(&m, 19)) / 2, y + (pill - gfx_u(&m, 19)) / 2,
+             gfx_indicator_icon(theme));
+  } else {
+    draw_speaker(canvas, &m, x + (pill - gfx_u(&m, value > 0 ? 18 : 10)) / 2,
+                 y + (pill - gfx_u(&m, 16)) / 2, value == 0, gfx_indicator_icon(theme));
+  }
+
+  bar_x = x + pill;
+  bar_y = y + gfx_u(&m, (GFX_PILL_SIZE - GFX_SETTINGS_SIZE) / 2.0);
+  bar_w = gfx_u(&m, GFX_SETTINGS_WIDTH);
+  bar_h = gfx_u(&m, GFX_SETTINGS_SIZE);
+  gfx_pill(canvas, bar_x, bar_y, bar_w, bar_h, gfx_indicator_track(theme));
+  if (value > 0) {
+    gfx_pill(canvas, bar_x, bar_y, bar_w * value / max, bar_h, gfx_indicator_bar(theme));
+  }
+}
+
+/* the battery at the top right, or the indicator while a setting changes */
+static int draw_hardware(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                         const gfx_theme *theme, const gfx_battery *battery)
+{
+  int w, h;
+
+  if (menu->indicator == MENU_INDICATOR_NONE) {
+    return draw_battery(canvas, m, theme, battery);
+  }
+
+  menu_indicator_size(canvas->w, canvas->h, &w, &h);
+  menu_draw_indicator(canvas, canvas->w, canvas->h, theme, canvas->w - gfx_u(m, m->padding) - w,
+                      gfx_u(m, m->padding), menu->indicator, menu->indicator_value);
+  return w;
+}
+
 struct button_hint {
   const char *button;
   const char *hint;
@@ -636,7 +756,7 @@ static void draw_root(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *
     gfx_clear(canvas, GFX_BLACK);
   }
 
-  battery_w = draw_battery(canvas, m, theme, battery);
+  battery_w = draw_hardware(menu, canvas, m, theme, battery);
   draw_title(canvas, m, font, theme, menu->title,
              canvas->w - gfx_u(m, m->padding * 2) - (battery_w ? battery_w + gfx_u(m, m->padding) : 0));
   draw_buttons(canvas, m, font, theme, sleep, 1, 0);
@@ -662,11 +782,23 @@ static void draw_root(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *
   }
 }
 
-/* splits text at a space into up to two lines of at most max_w, cutting the second */
+/*
+ * Splits text into up to two lines of at most max_w, at its line break when it
+ * has one and otherwise at a space, cutting whatever still does not fit.
+ */
 static int wrap_description(const gfx_font *font, int px, const char *text, int max_w,
                             char lines[2][256])
 {
+  const char *newline = strchr(text, '\n');
   size_t cut = strlen(text), space;
+  char first[256];
+
+  if (newline != NULL) {
+    snprintf(first, sizeof first, "%.*s", (int)(newline - text), text);
+    gfx_text_fit(font, px, first, max_w, lines[0], sizeof lines[0]);
+    gfx_text_fit(font, px, newline + 1, max_w, lines[1], sizeof lines[1]);
+    return 2;
+  }
 
   snprintf(lines[0], sizeof lines[0], "%s", text);
   lines[1][0] = '\0';
@@ -734,7 +866,7 @@ static void draw_options(struct menu *menu, gfx_canvas *canvas, const gfx_metric
   }
 
   gfx_clear(canvas, gfx_background(theme));
-  battery_w = draw_battery(canvas, m, theme, battery);
+  battery_w = draw_hardware(menu, canvas, m, theme, battery);
   draw_title(canvas, m, font, theme, "Options",
              canvas->w - margin * 2 - (battery_w ? battery_w + margin : 0));
 

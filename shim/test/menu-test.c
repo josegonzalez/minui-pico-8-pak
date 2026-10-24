@@ -35,7 +35,10 @@ static char screen_mode_path[4096];
 static char overlay_path[4096];
 static char pico8_config_path[4096];
 static char installed_config_path[4096];
+static char splore_artwork_path[4096];
 static char *overlay_names[] = {"a.png", "b.png"};
+
+static gfx_canvas guarded_canvas(int w, int h);
 
 static void check(int passed, const char *name)
 {
@@ -103,6 +106,7 @@ static void make_fixtures(void)
   snprintf(overlay_path, sizeof overlay_path, "%s/overlay", dir);
   snprintf(pico8_config_path, sizeof pico8_config_path, "%s/pico8-config", dir);
   snprintf(installed_config_path, sizeof installed_config_path, "%s/config.txt", dir);
+  snprintf(splore_artwork_path, sizeof splore_artwork_path, "%s/splore-artwork", dir);
 }
 
 static void settings_for_test(struct menu_settings *settings)
@@ -114,6 +118,7 @@ static void settings_for_test(struct menu_settings *settings)
   settings->shared_copy_carts_dir = shared;
   settings->pico8_config_path = pico8_config_path;
   settings->installed_config_path = installed_config_path;
+  settings->splore_artwork_path = splore_artwork_path;
   settings->overlay_names = overlay_names;
   settings->overlay_count = 2;
   settings->overlay = -1;
@@ -291,6 +296,70 @@ static void test_copy_carts(void)
   unlink(path);
 }
 
+static void test_splore_artwork(void)
+{
+  struct menu_settings settings;
+  struct menu menu;
+  char value[64];
+
+  settings_for_test(&settings);
+  menu = open_options(&settings);
+  menu_option_value(&menu, MENU_SPLORE_ARTWORK, value, sizeof value);
+  check(strcmp(value, "Standard") == 0, "Splore Artwork starts on Standard with no file");
+
+  select_row(&menu, MENU_SPLORE_ARTWORK);
+  press(&menu, MENU_RIGHT);
+  check(file_is(splore_artwork_path, "fancy\n"), "Right picks the fancy cover and saves it");
+  check(menu_read_splore_artwork(splore_artwork_path) == 1, "the saved cover reads back");
+  menu_open(&menu, &settings, "Cart");
+  menu_option_value(&menu, MENU_SPLORE_ARTWORK, value, sizeof value);
+  check(strcmp(value, "Fancy") == 0, "the menu opens on the saved cover");
+
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_A);
+  select_row(&menu, MENU_SPLORE_ARTWORK);
+  press(&menu, MENU_RIGHT);
+  check(file_is(splore_artwork_path, "standard\n"), "Right wraps back to the standard cover");
+
+  write_file(splore_artwork_path, "shiny\n");
+  check(menu_read_splore_artwork(splore_artwork_path) == 0, "an unknown cover reads as standard");
+  unlink(splore_artwork_path);
+}
+
+/*
+ * A description's note on when it applies sits on the line under it, which is
+ * checked by drawing the PICO-8 rows' descriptions and finding ink on two lines.
+ */
+static void test_description_lines(void)
+{
+  struct menu_settings settings;
+  struct menu menu;
+  gfx_canvas canvas = guarded_canvas(1280, 720);
+  gfx_metrics m = gfx_metrics_for(1280, 720);
+  gfx_font *font = gfx_font_open(NULL);
+  gfx_theme theme;
+  int leading = gfx_u(&m, 12), desc_top = 720 - gfx_u(&m, m.padding) - 2 * leading;
+  int line, x, y, inked[2] = {0, 0};
+
+  settings_for_test(&settings);
+  gfx_theme_init(&theme, "minui", NULL);
+  menu = open_options(&settings);
+  select_row(&menu, MENU_CONFIG_FIRST);
+  menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
+
+  for (line = 0; line < 2; line++) {
+    for (y = desc_top + line * leading; y < desc_top + (line + 1) * leading; y++) {
+      for (x = 0; x < 1280; x++) {
+        inked[line] |= canvas.pixels[(size_t)y * 1280 + x] == gfx_hint_text(&theme);
+      }
+    }
+  }
+  check(inked[0] && inked[1], "a setting's note on when it applies is on a line of its own");
+
+  gfx_font_close(font);
+  free(canvas.pixels - GUARD);
+}
+
 static void test_config(void)
 {
   struct menu_settings settings;
@@ -393,6 +462,11 @@ static void test_drawing(const char *minui_font, const char *nextui_font)
         gfx_theme_init(&theme, styles[t], NULL);
         menu_open(&menu, &settings,
                   "A cart whose name is far too long to fit in the title at all, ever");
+        /* each font also draws the battery's place a different way */
+        menu.indicator = f == 0 ? MENU_INDICATOR_NONE
+                         : f == 1 ? MENU_INDICATOR_VOLUME
+                                  : MENU_INDICATOR_BRIGHTNESS;
+        menu.indicator_value = 7;
         menu_draw(&menu, &canvas, frame, font, &theme, &batteries[f]);
         all_inside &= guards_intact(&canvas);
         selected_drawn &= canvas.pixels[(size_t)(top + pill / 2) * w + gfx_u(&m, m.padding) + 2] ==
@@ -420,6 +494,62 @@ static void test_drawing(const char *minui_font, const char *nextui_font)
   check(selected_drawn, "the selected root row is a pill in the theme's colour");
   check(dimmed, "the game shows through the root page dimmed by half");
   check(cleared, "the Options page clears the game away");
+}
+
+/* finds a pixel of colour in the box, for icons drawn without a fixed shape */
+static int has_colour(const gfx_canvas *canvas, int x, int y, int w, int h, uint32_t colour)
+{
+  int row, col;
+
+  for (row = y; row < y + h; row++) {
+    for (col = x; col < x + w; col++) {
+      if (canvas->pixels[(size_t)row * canvas->w + col] == colour) {
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+static void test_indicator_drawing(void)
+{
+  gfx_canvas canvas = guarded_canvas(372, 90);
+  gfx_theme theme;
+  int w, h;
+  /* the Brick's scale: the bar starts a pill in, 39 pixels down, 240 by 12 */
+  int bar_x = 90, bar_y = 39, bar_w = 240;
+
+  menu_indicator_size(1024, 768, &w, &h);
+  check(w == 372 && h == 90, "the indicator is minarch's size, 124 by 30 units");
+  menu_indicator_size(640, 480, &w, &h);
+  check(w == 248 && h == 60, "and scales with the screen");
+
+  gfx_theme_init(&theme, "minui", NULL);
+  gfx_clear(&canvas, 0);
+  menu_draw_indicator(&canvas, 1024, 768, &theme, 0, 0, MENU_INDICATOR_VOLUME, 10);
+  check(guards_intact(&canvas), "the indicator stays inside its canvas");
+  check(canvas.pixels[0] == 0, "its rounded ends leave the corners clear for the game");
+  check(canvas.pixels[(size_t)(bar_y + 6) * 372 + bar_x + bar_w / 4] == gfx_indicator_bar(&theme) &&
+            canvas.pixels[(size_t)(bar_y + 6) * 372 + bar_x + bar_w * 3 / 4] ==
+                gfx_indicator_track(&theme),
+        "volume 10 of 20 fills half the bar");
+  check(has_colour(&canvas, 0, 0, 90, 90, gfx_indicator_icon(&theme)), "the speaker is drawn");
+
+  gfx_clear(&canvas, 0);
+  menu_draw_indicator(&canvas, 1024, 768, &theme, 0, 0, MENU_INDICATOR_VOLUME, 0);
+  check(canvas.pixels[(size_t)(bar_y + 6) * 372 + bar_x + 12] == gfx_indicator_track(&theme),
+        "volume 0 leaves the bar empty");
+
+  gfx_clear(&canvas, 0);
+  menu_draw_indicator(&canvas, 1024, 768, &theme, 0, 0, MENU_INDICATOR_BRIGHTNESS, 10);
+  check(canvas.pixels[(size_t)(bar_y + 6) * 372 + bar_x + bar_w - 12] == gfx_indicator_bar(&theme),
+        "brightness 10 of 10 fills the whole bar");
+
+  gfx_clear(&canvas, 0);
+  menu_draw_indicator(&canvas, 1024, 768, &theme, 0, 0, MENU_INDICATOR_VOLUME, 99);
+  check(guards_intact(&canvas), "a value past the end is drawn as the end");
+
+  free(canvas.pixels - GUARD);
 }
 
 static void test_scrolling(void)
@@ -571,8 +701,11 @@ int main(int argc, char **argv)
   test_repeat();
   test_screen_mode_and_overlay();
   test_copy_carts();
+  test_splore_artwork();
+  test_description_lines();
   test_config();
   test_drawing(minui_font, nextui_font);
+  test_indicator_drawing();
   test_scrolling();
   test_fonts(minui_font, nextui_font);
   test_theme();

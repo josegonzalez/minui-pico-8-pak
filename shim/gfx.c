@@ -234,6 +234,26 @@ void gfx_triangle(gfx_canvas *canvas, int x0, int y0, int x1, int y1, int x2, in
   }
 }
 
+void gfx_arc(gfx_canvas *canvas, int cx, int cy, int r, int thickness, uint32_t colour)
+{
+  int x, y;
+
+  for (y = cy - r; y <= cy + r; y++) {
+    for (x = cx; x <= cx + r; x++) {
+      double dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+      double distance = gfx_sqrt(dx * dx + dy * dy);
+      double outside = distance - r, inside = (r - thickness) - distance;
+      double cover = 0.5 - (outside > inside ? outside : inside);
+
+      /* the part facing right, where the ring is no steeper than about 56 degrees */
+      if (cover <= 0 || gfx_fabs(dy) > 1.5 * dx) {
+        continue;
+      }
+      gfx_plot(canvas, x, y, colour, cover >= 1 ? 255 : (int)(cover * 255 + 0.5));
+    }
+  }
+}
+
 void gfx_arrow(gfx_canvas *canvas, int x, int y, int w, int h, int down, uint32_t colour)
 {
   int row;
@@ -636,6 +656,27 @@ uint32_t gfx_option_row(const gfx_theme *theme)
 uint32_t gfx_background(const gfx_theme *theme)
 {
   return theme->nextui ? theme->color[6] : GFX_BLACK;
+}
+
+/* NextUI draws its indicator in the accent pill, with the hint colour's icon and colour 3's track */
+uint32_t gfx_indicator_pill(const gfx_theme *theme)
+{
+  return theme->nextui ? theme->color[1] : GFX_BLACK;
+}
+
+uint32_t gfx_indicator_icon(const gfx_theme *theme)
+{
+  return theme->nextui ? theme->color[5] : GFX_WHITE;
+}
+
+uint32_t gfx_indicator_bar(const gfx_theme *theme)
+{
+  return theme->nextui ? theme->color[0] : GFX_WHITE;
+}
+
+uint32_t gfx_indicator_track(const gfx_theme *theme)
+{
+  return theme->nextui ? theme->color[2] : GFX_DARK_GRAY;
 }
 
 int gfx_shadow(const gfx_theme *theme)
