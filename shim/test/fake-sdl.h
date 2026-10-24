@@ -11,6 +11,9 @@
 
 #define FAKE_OUTPUT_W 1024
 #define FAKE_OUTPUT_H 768
+#define FAKE_AUDIO_DEVICE 2
+/* the menu loop is stuck if it waits this many times */
+#define FAKE_MAX_DELAYS 1000
 
 typedef struct {
   int x, y, w, h;
@@ -34,10 +37,20 @@ struct fake_copy {
 struct fake_state {
   /* indexed by SDL_GameControllerButton */
   uint8_t buttons[32];
+  /* joystick buttons no mapping names, such as rg35xxplus's volume keys */
+  uint8_t raw_buttons[20];
+
+  /*
+   * Each SDL_Delay sets the pad to the next mask, a bit per button, which is
+   * how a test presses buttons while the menu holds pico-8 in SDL_RenderPresent.
+   */
+  uint32_t script[32];
+  int script_length;
+  int delays;
 
   int presents;
   int copies;
-  struct fake_copy copy[64];
+  struct fake_copy copy[256];
 
   int surfaces;
   int surface_w, surface_h, surface_depth, surface_pitch;
@@ -45,6 +58,24 @@ struct fake_state {
   unsigned char surface_pixels[256];
 
   int textures_live;
+  int streaming_textures;
+
+  /* SDL_RenderReadPixels fills the frame with this, and records how it was asked */
+  uint32_t frame_colour;
+  int reads;
+  uint32_t read_format;
+  int read_pitch;
+  struct fake_copy read_state;
+
+  /* the first pixel of each SDL_UpdateTexture, and how many there were */
+  int updates;
+  uint32_t updated[256];
+  int clears;
+
+  int audio_opened;
+  int audio_status;
+  int audio_pauses;
+  int audio_resumes;
 
   int pushed;
   uint32_t pushed_type;

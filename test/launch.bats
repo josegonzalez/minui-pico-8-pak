@@ -367,11 +367,126 @@ teardown() {
   [ "$output" = "arm" ]
 }
 
-@test "get_menu_button names guide as Menu on every platform" {
-  for platform in $SUPPORTED_PLATFORMS; do
-    PLATFORM="$platform" run get_menu_button
-    [ "$output" = "guide" ]
+@test "get_cart_display_name drops each cart extension" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  for cart in Celeste.p8 Celeste.p8.png Celeste.png Celeste.P8.PNG; do
+    run get_cart_display_name "$rom_folder/$cart"
+    [ "$output" = "Celeste" ]
   done
+}
+
+# MinUI and NextUI sort by a leading "1) " and leave it off the name they show
+@test "get_cart_display_name drops the sorting prefix" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  run get_cart_display_name "$rom_folder/1) Splore.p8"
+  [ "$output" = "Splore" ]
+  run get_cart_display_name "$rom_folder/2048.p8"
+  [ "$output" = "2048" ]
+}
+
+@test "get_cart_display_name uses the cart's row in map.txt" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'other.p8.png\tOther\r\n15133.p8.png\tCeleste Classic 2\r\n' >"$rom_folder/map.txt"
+
+  run get_cart_display_name "$rom_folder/15133.p8.png"
+  [ "$output" = "Celeste Classic 2" ]
+  run get_cart_display_name "$rom_folder/unlisted.p8"
+  [ "$output" = "unlisted" ]
+}
+
+# MinUI resolves the m3u to its first cart, but lists the game as its folder
+@test "get_cart_display_name names a multi-cart game after its folder" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$rom_folder/Poom"
+  : >"$rom_folder/Poom/Poom.m3u"
+
+  run get_cart_display_name "$rom_folder/Poom/poom_0.p8"
+  [ "$output" = "Poom" ]
+
+  printf 'Poom\tPOOM 1.9\n' >"$rom_folder/map.txt"
+  run get_cart_display_name "$rom_folder/Poom/poom_0.p8"
+  [ "$output" = "POOM 1.9" ]
+}
+
+@test "get_menu_style is minui without NextUI's settings and fonts" {
+  run get_menu_style
+  [ "$output" = "minui" ]
+
+  : >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_style
+  [ "$output" = "minui" ]
+}
+
+@test "get_menu_style is nextui with NextUI's settings and fonts" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  : >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  run get_menu_style
+  [ "$output" = "nextui" ]
+}
+
+@test "get_menu_font uses MinUI's font under MinUI" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/BPreplayBold-unhinted.otf"
+
+  run get_menu_font
+  [ "$output" = "$SDCARD_PATH/.system/res/BPreplayBold-unhinted.otf" ]
+}
+
+@test "get_menu_font names nothing on a card with no font" {
+  run get_menu_font
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "get_menu_font follows NextUI's font setting" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  : >"$SDCARD_PATH/.system/res/font2.ttf"
+
+  : >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font
+  [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+
+  printf 'font=1\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font
+  [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+
+  printf 'font=0\r\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font
+  [ "$output" = "$SDCARD_PATH/.system/res/font2.ttf" ]
+
+  printf 'font=font2.ttf\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font
+  [ "$output" = "$SDCARD_PATH/.system/res/font2.ttf" ]
+}
+
+@test "get_menu_font falls back to font1 when NextUI names a font that is gone" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  printf 'font=mine.ttf\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  run get_menu_font
+  [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+}
+
+@test "get_menu_colors names NextUI's seven colours in order" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  printf 'color1=0xFFFFFFFF\r\ncolor2=0x9B2257FF\r\ncolor7=0x000000FF\r\nfont=1\r\n' \
+    >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  run get_menu_colors
+  [ "$output" = "0xFFFFFFFF,0x9B2257FF,,,,,0x000000FF" ]
+}
+
+@test "get_menu_colors names none under MinUI" {
+  run get_menu_colors
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
 }
 
 # called without run so the exports survive
@@ -384,13 +499,35 @@ teardown() {
   PLATFORM=tg5040
   architecture=arm64
   LD_PRELOAD=
-  setup_display_preload
+  setup_display_preload "$(make_rom_folder "Pico-8 (PICO)")/Celeste.p8"
 
   [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm64/sdl-display.so" ]
   [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
   [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
   [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
-  [ "$PICO_PAK_MENU_BUTTON" = "guide" ]
+}
+
+@test "setup_display_preload names every file the menu reads and writes" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm64" "$SDCARD_PATH/.system/res"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  printf 'color2=0x112233FF\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  PLATFORM=tg5040
+  architecture=arm64
+  LD_PRELOAD=
+  setup_display_preload "$(make_rom_folder "Pico-8 (PICO)")/1) Splore.p8"
+
+  [ "$PICO_PAK_COPY_CARTS_DIR" = "$USERDATA_PATH/Pico-8-native" ]
+  [ "$PICO_PAK_SHARED_COPY_CARTS_DIR" = "$SHARED_USERDATA_PATH/Pico-8-native" ]
+  [ "$PICO_PAK_PICO8_CONFIG" = "$USERDATA_PATH/Pico-8-native/pico8-config" ]
+  [ "$PICO_PAK_INSTALLED_CONFIG" = "$HOME/config.txt" ]
+  [ "$PICO_PAK_CART_NAME" = "Splore" ]
+  [ "$PICO_PAK_MENU_STYLE" = "nextui" ]
+  [ "$PICO_PAK_MENU_FONT" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+  [ "$PICO_PAK_MENU_COLORS" = ",0x112233FF,,,,," ]
+  [ -z "${PICO_PAK_MENU_BUTTON+set}" ]
 }
 
 # the shim also switches the screen mode in game, which needs no overlay
@@ -448,7 +585,6 @@ teardown() {
   setup_display_preload
 
   [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm/sdl-display.so" ]
-  [ "$PICO_PAK_MENU_BUTTON" = "guide" ]
 }
 
 # NextUI's skeleton creates Overlays/<TAG> for its own cores but not for paks
@@ -768,6 +904,37 @@ teardown() {
   [ "$(wc -l <"$HOME/config.txt")" -eq "$(wc -l <"$REPO_ROOT/config/tg5040.txt")" ]
   grep -q "^use_wget 0 " "$HOME/config.txt"
   grep -q "^transform_screen 0$" "$HOME/config.txt"
+}
+
+@test "install_config applies the settings changed in the in-game menu" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'show_fps 1\nvolume 128\nforeground_sleep_ms 10\nsplore_filter 1\ncheck_for_cart_updates 0\n' \
+    >"$USERDATA_PATH/Pico-8-native/pico8-config"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  grep -qx "show_fps 1" "$HOME/config.txt"
+  grep -qx "volume 128" "$HOME/config.txt"
+  grep -qx "foreground_sleep_ms 10" "$HOME/config.txt"
+  grep -qx "splore_filter 1" "$HOME/config.txt"
+  grep -qx "check_for_cart_updates 0" "$HOME/config.txt"
+  [ "$(grep -c "^volume " "$HOME/config.txt")" -eq 1 ]
+  [ "$(wc -l <"$HOME/config.txt")" -eq "$(wc -l <"$REPO_ROOT/config/tg5040.txt")" ]
+}
+
+# the file is the menu's, but it sits on the SD card for anyone to edit
+@test "install_config takes only the menu's settings, and only as numbers" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'cdata_path /elsewhere/\nroot_path /elsewhere/\nshow_fps yes\nuse_wget 1\nvolume 64\n' \
+    >"$USERDATA_PATH/Pico-8-native/pico8-config"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" "$HOME/config.txt"
+  grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
+  grep -q "^show_fps 0 " "$HOME/config.txt"
+  grep -q "^use_wget 0 " "$HOME/config.txt"
+  grep -qx "volume 64" "$HOME/config.txt"
 }
 
 @test "install_config rewrites the same keys on every supported platform" {

@@ -17,7 +17,7 @@ MINUI_POWER_CONTROL_REPO := josegonzalez/minui-power-control
 MINUI_POWER_CONTROL_VERSION := 3.2.0
 PICO8_DATA_EXTRACTOR_VERSION := 0.1.1
 
-# the overlay and screen mode shim is the same on every platform of an
+# the overlay, screen mode and menu shim is the same on every platform of an
 # architecture, so it ships once per architecture rather than per platform
 DISPLAY_SHIMS := $(foreach architecture,$(ARCHITECTURES),lib/$(architecture)/sdl-display.so)
 
@@ -49,7 +49,8 @@ build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreac
 # unlike the downloads above this is built from source in this repo, so it has
 # to name its prerequisites or a stale object survives every edit to them
 lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS): shim/sdl-nosensor.c shim/sdl-display.c shim/Dockerfile \
-	shim/test/fake-sdl.h shim/test/fake-sdl.c shim/test/display-test.c
+	shim/menu.c shim/menu.h shim/gfx.c shim/gfx.h \
+	shim/test/fake-sdl.h shim/test/fake-sdl.c shim/test/display-test.c shim/test/menu-test.c
 	docker buildx build --build-arg BASE_IMAGE=$(SHIM_IMAGE) \
 		--target export --file shim/Dockerfile --output "type=local,dest=lib" shim
 

@@ -1,16 +1,17 @@
 /*
  * Plays pico-8's part against sdl-display.so, which is preloaded over the fake
- * libSDL2 in fake-sdl.c, and checks what reached the fake. Run once per value of
- * PICO_PAK_MENU_BUTTON the shim accepts:
+ * libSDL2 in fake-sdl.c, and checks what reached the fake:
  *
- *   LD_PRELOAD=sdl-display.so display-test guide|start|none
+ *   LD_PRELOAD=sdl-display.so display-test
  *
- * guide also runs the overlay, screen mode and event checks, which do not
- * depend on the Menu button. The shim reads its environment once, so each
- * mode needs a process of its own. Prints TAP and exits non-zero on a failure.
+ * The menu holds pico-8 inside SDL_RenderPresent, so each menu is driven by a
+ * script of pad states the fake steps through on every SDL_Delay. The shim
+ * reads its environment once, so everything runs in one process in order.
+ * Prints TAP and exits non-zero on a failure.
  */
 
 #define _GNU_SOURCE
+#include <linux/input.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,10 +21,13 @@
 
 #include "fake-sdl.h"
 
-/* From SDL_events.h and SDL_gamecontroller.h. */
+/* From SDL_events.h, SDL_pixels.h and SDL_gamecontroller.h. */
 #define SDL_QUIT 0x100
 #define SDL_KEYDOWN 0x300
 #define SDL_CONTROLLERBUTTONDOWN 0x650
+#define SDL_PIXELFORMAT_ARGB8888 0x16362004
+#define BUTTON_A 0
+#define BUTTON_B 1
 #define BUTTON_BACK 4
 #define BUTTON_GUIDE 5
 #define BUTTON_START 6
@@ -31,6 +35,11 @@
 #define BUTTON_DPAD_DOWN 12
 #define BUTTON_DPAD_LEFT 13
 #define BUTTON_DPAD_RIGHT 14
+
+#define BIT(button) (1u << (button))
+
+/* the menu's Options rows, in order */
+enum { ROW_SCREEN_MODE, ROW_OVERLAY, ROW_COPY_CARTS, ROW_SHOW_FPS, ROW_VOLUME };
 
 /* what pico-8 calls, answered by the shim and passed on to the fake */
 void SDL_RenderPresent(void *renderer);
@@ -40,12 +49,17 @@ int SDL_RenderCopy(void *renderer, void *texture, const fake_rect *src, const fa
 void *SDL_GameControllerOpen(int index);
 void SDL_GameControllerClose(void *controller);
 uint8_t SDL_GameControllerGetButton(void *controller, int button);
+uint32_t SDL_OpenAudioDevice(const char *device, int iscapture, const void *desired,
+                             void *obtained, int allowed_changes);
 
 static int tests;
 static int failures;
 static char dir[] = "/tmp/display-test.XXXXXX";
 static char choice_path[4096];
 static char screen_mode_path[4096];
+static char copy_carts_dir[4096];
+static char pico8_config_path[4096];
+static char input_path[4096];
 static char renderer_a, renderer_b, game_texture;
 
 static void check(int passed, const char *name)
@@ -87,6 +101,14 @@ static void write_file(const char *path, const void *data, size_t size)
     exit(2);
   }
   fclose(file);
+}
+
+static void make_dir(const char *path)
+{
+  if (mkdir(path, 0755) != 0) {
+    perror(path);
+    exit(2);
+  }
 }
 
 static uint32_t crc32(const unsigned char *data, size_t size, uint32_t crc)
@@ -136,7 +158,7 @@ static void write_png(const char *name, int width, int height, const unsigned ch
   unsigned char header[13];
   size_t raw_size = 0, zlib_size = 0, png_size;
   uint32_t a = 1, b = 0;
-  char path[4096];
+  char path[8192];
   unsigned char *out;
   int row;
   size_t i;
@@ -184,7 +206,7 @@ static unsigned char square_pixels[2 * 2 * 4];
 
 static void make_fixtures(void)
 {
-  char path[4096];
+  char path[8192];
   size_t i;
 
   if (mkdtemp(dir) == NULL) {
@@ -192,10 +214,7 @@ static void make_fixtures(void)
     exit(2);
   }
   snprintf(path, sizeof path, "%s/overlays", dir);
-  if (mkdir(path, 0755) != 0) {
-    perror(path);
-    exit(2);
-  }
+  make_dir(path);
 
   for (i = 0; i < sizeof wide_pixels; i++) {
     wide_pixels[i] = (unsigned char)(i * 7);
@@ -221,15 +240,47 @@ static void make_fixtures(void)
   snprintf(screen_mode_path, sizeof screen_mode_path, "%s/screen-mode", dir);
   write_file(screen_mode_path, "standard\n", 9);
 
+  snprintf(copy_carts_dir, sizeof copy_carts_dir, "%s/userdata", dir);
+  make_dir(copy_carts_dir);
+  snprintf(path, sizeof path, "%s/shared", dir);
+  make_dir(path);
+  setenv("PICO_PAK_SHARED_COPY_CARTS_DIR", path, 1);
+  snprintf(pico8_config_path, sizeof pico8_config_path, "%s/pico8-config", dir);
+  snprintf(path, sizeof path, "%s/config.txt", dir);
+  write_file(path, "volume 256\n", 11);
+  setenv("PICO_PAK_INSTALLED_CONFIG", path, 1);
+
+  snprintf(path, sizeof path, "%s/input", dir);
+  make_dir(path);
+  setenv("PICO_PAK_INPUT_DIR", path, 1);
+  snprintf(input_path, sizeof input_path, "%s/input/event0", dir);
+  write_file(input_path, "", 0);
+
+  snprintf(path, sizeof path, "%s/power", dir);
+  make_dir(path);
+  setenv("PICO_PAK_POWER_SUPPLY_DIR", path, 1);
+  snprintf(path, sizeof path, "%s/power/battery", dir);
+  make_dir(path);
+  snprintf(path, sizeof path, "%s/power/battery/type", dir);
+  write_file(path, "Battery\n", 8);
+  snprintf(path, sizeof path, "%s/power/battery/capacity", dir);
+  write_file(path, "50\n", 3);
+
   snprintf(path, sizeof path, "%s/overlays", dir);
   setenv("PICO_PAK_OVERLAY_DIR", path, 1);
   setenv("PICO_PAK_OVERLAY_CHOICE", choice_path, 1);
   setenv("PICO_PAK_SCREEN_MODE", screen_mode_path, 1);
+  setenv("PICO_PAK_COPY_CARTS_DIR", copy_carts_dir, 1);
+  setenv("PICO_PAK_PICO8_CONFIG", pico8_config_path, 1);
+  setenv("PICO_PAK_CART_NAME", "Celeste", 1);
+  /* no font, so the menu draws with its built-in one */
+  unsetenv("PICO_PAK_MENU_FONT");
 }
 
 static void release_all(void)
 {
   memset(fake.buttons, 0, sizeof fake.buttons);
+  memset(fake.raw_buttons, 0, sizeof fake.raw_buttons);
 }
 
 /* presses a button with Select held, as pico-8 would see it read that frame */
@@ -240,39 +291,72 @@ static uint8_t combo(void *pad, int button)
   return SDL_GameControllerGetButton(pad, button);
 }
 
-static void release(void *pad, int button)
+/* presses and releases Menu with the frames pico-8 reads the pad in between */
+static void tap_menu(void *pad)
 {
-  fake.buttons[button] = 0;
-  SDL_GameControllerGetButton(pad, button);
+  fake.buttons[BUTTON_GUIDE] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_GUIDE);
+  fake.buttons[BUTTON_GUIDE] = 0;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
 }
 
-static void test_menu(void *pad, const char *mode)
+static void set_script(const uint32_t *states, int count)
 {
-  if (strcmp(mode, "start") == 0) {
-    check(combo(pad, BUTTON_START) == 0, "start: Select + Start is hidden from pico-8");
-    check(fake.pushed == 1 && fake.pushed_type == SDL_QUIT, "start: Select + Start pushes SDL_QUIT");
-    check(SDL_GameControllerGetButton(pad, BUTTON_START) == 0 && fake.pushed == 1,
-          "start: a held Start quits only once");
-    release_all();
-    fake.buttons[BUTTON_GUIDE] = 1;
-    check(combo(pad, BUTTON_GUIDE) == 1 && fake.pushed == 1,
-          "start: Select + Guide reaches pico-8 and does not quit");
-  } else if (strcmp(mode, "guide") == 0) {
-    check(combo(pad, BUTTON_GUIDE) == 0, "guide: Select + Guide is hidden from pico-8");
-    check(fake.pushed == 1 && fake.pushed_type == SDL_QUIT, "guide: Select + Guide pushes SDL_QUIT");
-    check(SDL_GameControllerGetButton(pad, BUTTON_GUIDE) == 0 && fake.pushed == 1,
-          "guide: a held Guide quits only once");
-    release_all();
-    check(combo(pad, BUTTON_START) == 1 && fake.pushed == 1,
-          "guide: Select + Start reaches pico-8 and does not quit");
-  } else {
-    check(combo(pad, BUTTON_START) == 1 && fake.pushed == 0,
-          "none: Select + Start reaches pico-8 and does not quit");
-    release_all();
-    check(combo(pad, BUTTON_GUIDE) == 1 && fake.pushed == 0,
-          "none: Select + Guide reaches pico-8 and does not quit");
+  if (count > 0) {
+    memcpy(fake.script, states, count * sizeof *states);
   }
+  fake.script_length = count;
+  fake.delays = 0;
+}
+
+/*
+ * Taps Menu, opens Options and steps the option on row by steps, then backs
+ * out with B twice. Every press is followed by a release, as a thumb would.
+ */
+static void change_option(void *pad, void *renderer, int row, int steps)
+{
+  uint32_t states[32];
+  int count = 0, i;
+
+  states[count++] = BIT(BUTTON_DPAD_DOWN);
+  states[count++] = 0;
+  states[count++] = BIT(BUTTON_A);
+  states[count++] = 0;
+  for (i = 0; i < row; i++) {
+    states[count++] = BIT(BUTTON_DPAD_DOWN);
+    states[count++] = 0;
+  }
+  for (i = 0; i < (steps < 0 ? -steps : steps); i++) {
+    states[count++] = BIT(steps < 0 ? BUTTON_DPAD_LEFT : BUTTON_DPAD_RIGHT);
+    states[count++] = 0;
+  }
+  states[count++] = BIT(BUTTON_B);
+  states[count++] = 0;
+  states[count++] = BIT(BUTTON_B);
+
   release_all();
+  tap_menu(pad);
+  set_script(states, count);
+  fake.copies = 0;
+  SDL_RenderPresent(renderer);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_B);
+}
+
+static void test_select_combos(void *pad)
+{
+  check(combo(pad, BUTTON_DPAD_RIGHT) == 1 && file_is(choice_path, "b.png"),
+        "Select + Right reaches pico-8 and changes no overlay");
+  release_all();
+  check(combo(pad, BUTTON_DPAD_DOWN) == 1 && file_is(screen_mode_path, "standard"),
+        "Select + Down reaches pico-8 and changes no screen mode");
+  release_all();
+  check(combo(pad, BUTTON_START) == 1 && fake.pushed == 0, "Select + Start reaches pico-8");
+  release_all();
+  check(combo(pad, BUTTON_GUIDE) == 0 && fake.pushed == 0,
+        "Select + Menu is hidden from pico-8 and does not quit");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
 }
 
 static void test_overlays(void *pad)
@@ -314,8 +398,8 @@ static void test_overlays(void *pad)
   SDL_RenderPresent(&renderer_a);
   check(fake.surfaces == 1 && fake.copies == 2, "the texture is reused on the next frame");
 
-  check(combo(pad, BUTTON_DPAD_RIGHT) == 0, "Select + Right is hidden from pico-8");
-  check(file_is(choice_path, "z.png"), "Select + Right moves to z.png and saves it");
+  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  check(file_is(choice_path, "z.png"), "stepping Overlay right moves to z.png and saves it");
   copies = fake.copies;
   SDL_RenderPresent(&renderer_a);
   check(fake.copies == copies && fake.textures_live == 0,
@@ -323,17 +407,16 @@ static void test_overlays(void *pad)
   SDL_RenderPresent(&renderer_a);
   check(fake.copies == copies && fake.surfaces == 1, "an unreadable PNG is not retried every frame");
 
-  fake.buttons[BUTTON_DPAD_RIGHT] = 0;
-  check(SDL_GameControllerGetButton(pad, BUTTON_DPAD_RIGHT) == 0,
-        "Right stays hidden while Select is held");
-  check(combo(pad, BUTTON_DPAD_RIGHT) == 0 && file_is(choice_path, "disabled"),
-        "the next Select + Right disables the overlay");
+  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  check(file_is(choice_path, "disabled"), "the next step right disables the overlay");
+  copies = fake.copies;
   SDL_RenderPresent(&renderer_a);
   check(fake.copies == copies, "nothing is drawn while disabled");
 
-  release(pad, BUTTON_DPAD_RIGHT);
-  check(combo(pad, BUTTON_DPAD_RIGHT) == 0 && file_is(choice_path, "a.png"),
-        "Select + Right wraps around to a.png, skipping ._ files and other types");
+  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  check(file_is(choice_path, "a.png"),
+        "the overlays wrap around to a.png, skipping ._ files and other types");
+  copies = fake.copies;
   SDL_RenderPresent(&renderer_a);
   copy = &fake.copy[fake.copies - 1];
   check(fake.surfaces == 2 && fake.surface_w == 4 && fake.surface_h == 3 &&
@@ -342,20 +425,10 @@ static void test_overlays(void *pad)
   check(fake.copies == copies + 1 && rect_is(copy->dst, 0, 0, FAKE_OUTPUT_W, FAKE_OUTPUT_H),
         "a 4:3 overlay fills a 4:3 screen");
 
-  release_all();
-  check(combo(pad, BUTTON_DPAD_LEFT) == 0 && file_is(choice_path, "disabled"),
-        "Select + Left steps back from the first overlay to disabled");
-  release_all();
-  combo(pad, BUTTON_DPAD_RIGHT);
-  check(file_is(choice_path, "a.png"), "Select + Right steps forward again");
-
-  /* a press that began with Select stays hidden until a frame sees it released */
-  release_all();
-  SDL_GameControllerGetButton(pad, BUTTON_DPAD_RIGHT);
-  fake.buttons[BUTTON_DPAD_RIGHT] = 1;
-  check(SDL_GameControllerGetButton(pad, BUTTON_DPAD_RIGHT) == 1 && file_is(choice_path, "a.png"),
-        "Right alone reaches pico-8 and changes nothing");
-  release_all();
+  change_option(pad, &renderer_a, ROW_OVERLAY, -1);
+  check(file_is(choice_path, "disabled"), "stepping left from the first overlay disables it");
+  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  check(file_is(choice_path, "a.png"), "stepping right comes back to it");
 
   SDL_DestroyRenderer(&renderer_a);
   copies = fake.copies;
@@ -364,14 +437,159 @@ static void test_overlays(void *pad)
         "a new renderer gets the overlay loaded again");
 }
 
+static void test_menu(void *pad)
+{
+  static const uint32_t press_a[] = {BIT(BUTTON_A)};
+  uint32_t frame = 0x00ff8040;
+  int presents, copies;
+
+  fake.frame_colour = frame;
+  fake.reads = fake.updates = fake.audio_pauses = fake.audio_resumes = 0;
+  fake.streaming_textures = 0;
+
+  fake.buttons[BUTTON_GUIDE] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_GUIDE) == 0, "Menu is hidden from pico-8");
+  fake.buttons[BUTTON_GUIDE] = 0;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  check(fake.reads == 0, "releasing Menu opens nothing until the frame is presented");
+
+  set_script(press_a, 1);
+  presents = fake.presents;
+  fake.copies = 0;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == 1 && fake.read_format == SDL_PIXELFORMAT_ARGB8888 &&
+            fake.read_pitch == FAKE_OUTPUT_W * 4,
+        "a Menu tap reads the frame back as ARGB8888");
+  check(fake.read_state.logical_w == 0 && fake.read_state.scale_x == 1.0f &&
+            rect_is(fake.read_state.viewport, 0, 0, FAKE_OUTPUT_W, FAKE_OUTPUT_H) &&
+            !fake.read_state.clip_enabled,
+        "the frame is read with the letterboxing cleared");
+  check(fake.updated[0] == 0xff7f3f1f, "the menu is drawn over the frame dimmed by half");
+  check(fake.updates >= 2 && fake.updated[fake.updates - 1] == (frame | 0xff000000u),
+        "the undimmed frame is put back when the menu closes");
+  check(fake.presents == presents + 2,
+        "the menu is presented while open and the frame once after");
+  check(fake.delays == 1, "A on Continue closes the menu");
+  check(fake.audio_pauses == 1 && fake.audio_resumes == 1,
+        "pico-8's audio is paused while the menu is open");
+  check(fake.logical_w == 128 && fake.scale_x == 2.0f && rect_is(fake.viewport, 128, 0, 768, 768) &&
+            fake.clip_enabled,
+        "pico-8's letterboxing is put back after the menu");
+  check(fake.streaming_textures == 1 && fake.textures_live == 1,
+        "the menu's texture is freed when it closes");
+
+  check(SDL_GameControllerGetButton(pad, BUTTON_A) == 0,
+        "the A that closed the menu is hidden from pico-8 while held");
+  fake.buttons[BUTTON_A] = 0;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.buttons[BUTTON_A] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_A) == 1, "the next press of A reaches pico-8");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  copies = fake.reads;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == copies, "the menu does not open again by itself");
+
+  fake.audio_status = 0;
+  tap_menu(pad);
+  set_script(press_a, 1);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.audio_pauses == 1 && fake.audio_resumes == 1,
+        "audio pico-8 paused itself is left paused");
+  fake.audio_status = 1;
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+}
+
+static void test_menu_closing(void *pad)
+{
+  static const uint32_t press_b[] = {BIT(BUTTON_B)};
+  static const uint32_t press_menu[] = {0, BIT(BUTTON_GUIDE)};
+  static const uint32_t quit[] = {BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_DOWN), 0,
+                                  BIT(BUTTON_A)};
+  int reads;
+
+  tap_menu(pad);
+  set_script(press_b, 1);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.delays == 1 && fake.pushed == 0, "B closes the menu");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  tap_menu(pad);
+  set_script(press_menu, 2);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.delays == 2 && fake.pushed == 0, "Menu closes the menu");
+  reads = fake.reads;
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == reads, "releasing the Menu that closed the menu does not open it again");
+
+  tap_menu(pad);
+  set_script(quit, 5);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == 1 && fake.pushed_type == SDL_QUIT,
+        "Quit, past the unavailable Save and Load, pushes SDL_QUIT");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  tap_menu(pad);
+  memset(fake.queue, 0, sizeof fake.queue);
+  fake.queue[0][0] = SDL_QUIT;
+  fake.queued = 1;
+  fake.queue_head = 0;
+  set_script(NULL, 0);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == 2 && fake.delays == 0, "an SDL_QUIT while the menu is open quits pico-8");
+  fake.queued = fake.queue_head = 0;
+}
+
+static void test_chords(void *pad)
+{
+  struct input_event key = {.type = EV_KEY, .code = KEY_VOLUMEUP, .value = 1};
+  FILE *input;
+  int reads = fake.reads;
+
+  fake.buttons[BUTTON_GUIDE] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.raw_buttons[17] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == reads, "Menu held with a button no mapping names does not open the menu");
+
+  fake.buttons[BUTTON_GUIDE] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  input = fopen(input_path, "ab");
+  if (input == NULL || fwrite(&key, sizeof key, 1, input) != 1) {
+    perror(input_path);
+    exit(2);
+  }
+  fclose(input);
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == reads, "Menu held with a volume key does not open the menu");
+
+  tap_menu(pad);
+  set_script((const uint32_t[]){BIT(BUTTON_B)}, 1);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == reads + 1, "the next tap of Menu on its own opens the menu");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+}
+
 static void test_events(void *pad)
 {
   uint32_t event[14];
 
-  (void)pad;
   memset(fake.queue, 0, sizeof fake.queue);
   fake.queue[0][0] = SDL_CONTROLLERBUTTONDOWN;
-  ((uint8_t *)&fake.queue[0][3])[0] = BUTTON_DPAD_LEFT;
+  ((uint8_t *)&fake.queue[0][3])[0] = BUTTON_GUIDE;
   fake.queue[1][0] = SDL_KEYDOWN;
   fake.queue[2][0] = SDL_CONTROLLERBUTTONDOWN;
   ((uint8_t *)&fake.queue[2][3])[0] = BUTTON_DPAD_LEFT;
@@ -379,15 +597,16 @@ static void test_events(void *pad)
   fake.queue_head = 0;
 
   fake.buttons[BUTTON_BACK] = 1;
-  check(SDL_PollEvent(event) == 1 && event[0] == SDL_KEYDOWN,
-        "a d-pad event is swallowed while Select is held");
+  check(SDL_PollEvent(event) == 1 && event[0] == SDL_KEYDOWN, "a Menu event is swallowed");
   check(SDL_PollEvent(event) == 0, "nothing else is left in the queue");
 
-  release_all();
   fake.queued = 3;
   fake.queue_head = 2;
   check(SDL_PollEvent(event) == 1 && event[0] == SDL_CONTROLLERBUTTONDOWN,
-        "a d-pad event without Select reaches pico-8");
+        "a d-pad event with Select held reaches pico-8");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.queued = fake.queue_head = 0;
 }
 
 static void test_screen_mode(void *pad)
@@ -401,9 +620,8 @@ static void test_screen_mode(void *pad)
   copy = &fake.copy[fake.copies - 1];
   check(rect_is(copy->dst, 128, 0, 768, 768), "standard mode leaves pico-8's copies alone");
 
-  check(combo(pad, BUTTON_DPAD_DOWN) == 0, "Select + Down is hidden from pico-8");
-  check(file_is(screen_mode_path, "stretched"), "Select + Down switches to stretched and saves it");
-  release_all();
+  change_option(pad, &renderer_b, ROW_SCREEN_MODE, 1);
+  check(file_is(screen_mode_path, "stretched"), "stepping Screen Mode right saves stretched");
 
   SDL_RenderCopy(&renderer_b, &game_texture, NULL, &game);
   copy = &fake.copy[fake.copies - 1];
@@ -417,44 +635,55 @@ static void test_screen_mode(void *pad)
   SDL_RenderPresent(&renderer_b);
   check(fake.copies == copies, "no overlay is drawn in stretched mode");
 
-  check(combo(pad, BUTTON_DPAD_UP) == 0 && file_is(screen_mode_path, "standard"),
-        "Select + Up switches back to standard");
-  release_all();
+  change_option(pad, &renderer_b, ROW_SCREEN_MODE, -1);
+  check(file_is(screen_mode_path, "standard"), "stepping it back saves standard");
   SDL_RenderCopy(&renderer_b, &game_texture, NULL, &game);
   copy = &fake.copy[fake.copies - 1];
   check(rect_is(copy->dst, 128, 0, 768, 768), "standard mode stops stretching");
 }
 
+static void test_settings(void *pad)
+{
+  char path[8192];
+
+  change_option(pad, &renderer_b, ROW_COPY_CARTS, 1);
+  snprintf(path, sizeof path, "%s/copy-carts", copy_carts_dir);
+  check(access(path, F_OK) == 0, "Copy Splore Carts writes its marker to the userdata folder");
+
+  change_option(pad, &renderer_b, ROW_VOLUME, -1);
+  check(file_is(pico8_config_path, "volume 192"),
+        "Volume steps down from the installed config.txt's value and saves it");
+}
+
 static void test_closed_pad(void *pad)
 {
   SDL_GameControllerClose(pad);
-  check(combo(pad, BUTTON_DPAD_RIGHT) == 1 && file_is(choice_path, "a.png"),
-        "a closed pad is no longer read for combos");
+  fake.buttons[BUTTON_GUIDE] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_GUIDE) == 1,
+        "a closed pad's Menu button reaches pico-8");
   release_all();
 }
 
-int main(int argc, char **argv)
+int main(void)
 {
-  const char *mode = argc > 1 ? argv[1] : "none";
   void *pad;
 
   make_fixtures();
-  if (strcmp(mode, "none") == 0) {
-    unsetenv("PICO_PAK_MENU_BUTTON");
-  } else {
-    setenv("PICO_PAK_MENU_BUTTON", mode, 1);
-  }
 
   pad = SDL_GameControllerOpen(0);
   check(pad != NULL, "the pad pico-8 opens is passed through");
+  check(SDL_OpenAudioDevice(NULL, 0, NULL, NULL, 0) == FAKE_AUDIO_DEVICE,
+        "the audio device pico-8 opens is passed through");
 
-  test_menu(pad, mode);
-  if (strcmp(mode, "guide") == 0) {
-    test_overlays(pad);
-    test_events(pad);
-    test_screen_mode(pad);
-    test_closed_pad(pad);
-  }
+  test_select_combos(pad);
+  test_overlays(pad);
+  test_menu(pad);
+  test_menu_closing(pad);
+  test_chords(pad);
+  test_events(pad);
+  test_screen_mode(pad);
+  test_settings(pad);
+  test_closed_pad(pad);
 
   printf("1..%d\n", tests);
   return failures == 0 ? 0 : 1;

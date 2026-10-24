@@ -521,11 +521,93 @@ get_pico_architecture() {
   echo "arm"
 }
 
-# The pad button each platform's controller mapping reports for Menu, which the
-# shim pairs with Select to quit. Every mapping in controllers/ puts Menu on the
-# pad's guide button, leaving Start for pico-8's own pause menu.
-get_menu_button() {
-  echo "guide"
+# The menu's title is the name the game list shows: the cart's row in map.txt,
+# or its file name without the extension and the "1) " MinUI and NextUI sort by
+# and leave off. A multi-cart game is listed as its folder, the m3u's.
+get_cart_display_name() {
+  display_folder="$(dirname "$1")"
+  display_key="$(basename "$1")"
+  display_name="$display_key"
+
+  if [ -f "$display_folder/${display_folder##*/}.m3u" ]; then
+    display_key="${display_folder##*/}"
+    display_name="$display_key"
+    display_folder="$(dirname "$display_folder")"
+  else
+    case "$display_name" in
+    *.[pP][nN][gG]) display_name="${display_name%.*}" ;;
+    esac
+    case "$display_name" in
+    *.[pP]8) display_name="${display_name%.*}" ;;
+    esac
+  fi
+
+  if [ -f "$display_folder/map.txt" ]; then
+    # ENVIRON rather than awk -v, which would process backslash escapes in a name
+    display_mapped="$(DISPLAY_KEY="$display_key" awk -F'\t' '$1 == ENVIRON["DISPLAY_KEY"] { print $2; exit }' "$display_folder/map.txt" | tr -d '\r')"
+    if [ -n "$display_mapped" ]; then
+      echo "$display_mapped"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$display_name" | sed 's/^[0-9][0-9]*) //'
+}
+
+# The menu dresses as the launcher pico-8 was started from. NextUI keeps its
+# theme in minuisettings.txt and ships font1.ttf and font2.ttf, while MinUI has
+# neither and draws everything with BPreplay.
+get_menu_style() {
+  if [ -f "$SHARED_USERDATA_PATH/minuisettings.txt" ] && [ -f "$SDCARD_PATH/.system/res/font1.ttf" ]; then
+    echo "nextui"
+    return 0
+  fi
+
+  echo "minui"
+}
+
+# Nothing is printed when the device has no font, and the menu then draws with
+# a small one of its own.
+get_menu_font() {
+  menu_res_dir="$SDCARD_PATH/.system/res"
+
+  if [ "$(get_menu_style)" = "nextui" ]; then
+    # NextUI's own reading of font=, where 0 is font2 and 1 is font1, the
+    # numbers older releases wrote, and anything else names a file
+    menu_font="$(sed -n 's/^font=//p' "$SHARED_USERDATA_PATH/minuisettings.txt" | tail -n 1 | tr -d '\r')"
+    case "$menu_font" in
+    0) menu_font="font2.ttf" ;;
+    "" | 1) menu_font="font1.ttf" ;;
+    esac
+    if [ ! -f "$menu_res_dir/$menu_font" ]; then
+      menu_font="font1.ttf"
+    fi
+    echo "$menu_res_dir/$menu_font"
+    return 0
+  fi
+
+  if [ -f "$menu_res_dir/BPreplayBold-unhinted.otf" ]; then
+    echo "$menu_res_dir/BPreplayBold-unhinted.otf"
+  fi
+}
+
+# NextUI's seven theme colours in order, joined with commas, with an empty
+# field for one it has not written. MinUI's look is fixed, so it has none.
+get_menu_colors() {
+  if [ "$(get_menu_style)" != "nextui" ]; then
+    return 0
+  fi
+
+  menu_colors=""
+  for menu_color_index in 1 2 3 4 5 6 7; do
+    menu_color="$(sed -n "s/^color$menu_color_index=//p" "$SHARED_USERDATA_PATH/minuisettings.txt" | tail -n 1 | tr -d '\r')"
+    if [ "$menu_color_index" -gt 1 ]; then
+      menu_colors="$menu_colors,"
+    fi
+    menu_colors="$menu_colors$menu_color"
+  done
+
+  echo "$menu_colors"
 }
 
 # pico-8 cannot draw a bezel itself, so the shim draws one over every frame.
@@ -545,9 +627,10 @@ has_overlays() {
   return 1
 }
 
-# The shim also switches the screen mode in game with Select + Up/Down, so it
-# is loaded whenever the pak ships it, overlays or not. Returns non-zero when it
-# is not loaded, so the caller knows to stretch pico-8 itself.
+# The shim also draws the in-game menu, so it is loaded whenever the pak ships
+# it, overlays or not. Takes the cart being started, for the menu's title.
+# Returns non-zero when it is not loaded, so the caller knows to stretch
+# pico-8 itself.
 setup_display_preload() {
   overlay_dir="$(get_overlay_dir)"
   display_shim="$PAK_DIR/lib/$(get_pico_architecture)/sdl-display.so"
@@ -562,12 +645,24 @@ setup_display_preload() {
   # nothing creates one for this pak, so it is made here for the user to fill
   mkdir -p "$overlay_dir"
 
-  # the shim saves the Select + d-pad choices to these files itself
+  # the menu saves its settings to these files itself, the same ones the rest
+  # of this script reads
   export PICO_PAK_OVERLAY_DIR="$overlay_dir"
   export PICO_PAK_OVERLAY_CHOICE="$USERDATA_PATH/Pico-8-native/overlay"
   export PICO_PAK_SCREEN_MODE="$USERDATA_PATH/Pico-8-native/screen-mode"
-  PICO_PAK_MENU_BUTTON="$(get_menu_button)"
-  export PICO_PAK_MENU_BUTTON
+  export PICO_PAK_COPY_CARTS_DIR="$USERDATA_PATH/Pico-8-native"
+  export PICO_PAK_SHARED_COPY_CARTS_DIR="$SHARED_USERDATA_PATH/Pico-8-native"
+  PICO_PAK_PICO8_CONFIG="$(get_pico8_config_overrides)"
+  export PICO_PAK_PICO8_CONFIG
+  export PICO_PAK_INSTALLED_CONFIG="$HOME/config.txt"
+
+  PICO_PAK_CART_NAME="$(get_cart_display_name "$1")"
+  PICO_PAK_MENU_STYLE="$(get_menu_style)"
+  PICO_PAK_MENU_FONT="$(get_menu_font)"
+  PICO_PAK_MENU_COLORS="$(get_menu_colors)"
+  export PICO_PAK_CART_NAME PICO_PAK_MENU_STYLE PICO_PAK_MENU_FONT PICO_PAK_MENU_COLORS
+  echo "In-game menu: $PICO_PAK_MENU_STYLE look, font ${PICO_PAK_MENU_FONT:-built-in}, titled $PICO_PAK_CART_NAME" 1>&2
+
   export LD_PRELOAD="$display_shim${LD_PRELOAD:+:$LD_PRELOAD}"
 }
 
@@ -660,16 +755,39 @@ get_saves_dir() {
 # already passed on the command line.
 install_config() {
   rom_folder="$1"
+  overrides="$(get_pico8_config_overrides)"
+  if [ ! -f "$overrides" ]; then
+    overrides="/dev/null"
+  fi
 
-  # ENVIRON rather than awk -v, which would process backslash escapes in a path
-  PICO_CDATA_PATH="$(get_saves_dir)/" PICO_ROOT_PATH="$rom_folder/" awk '
+  # ENVIRON rather than awk -v, which would process backslash escapes in a path.
+  # Only the settings the menu offers are taken from its file, and only as
+  # numbers, so a stray line can never move cdata_path or root_path.
+  PICO_CDATA_PATH="$(get_saves_dir)/" PICO_ROOT_PATH="$rom_folder/" PICO_OVERRIDES="$overrides" awk '
     BEGIN {
       cdata = ENVIRON["PICO_CDATA_PATH"]
       root = ENVIRON["PICO_ROOT_PATH"]
+      split("show_fps volume foreground_sleep_ms splore_filter check_for_cart_updates", keys, " ")
+      for (i in keys) {
+        offered[keys[i]] = 1
+      }
+    }
+    FILENAME == ENVIRON["PICO_OVERRIDES"] {
+      if (($1 in offered) && $2 ~ /^[0-9]+$/) {
+        value[$1] = $2
+      }
+      next
     }
     /^cdata_path / { print "cdata_path " cdata; next }
     /^root_path / { print "root_path " root; next }
-    { print }' "$PAK_DIR/config/$PLATFORM.txt" >"$HOME/config.txt"
+    ($1 in value) { print $1 " " value[$1]; next }
+    { print }' "$overrides" "$PAK_DIR/config/$PLATFORM.txt" >"$HOME/config.txt"
+}
+
+# The PICO-8 settings changed in the in-game menu, which install_config puts in
+# config.txt on the next launch
+get_pico8_config_overrides() {
+  echo "$USERDATA_PATH/Pico-8-native/pico8-config"
 }
 
 # Saves used to live beside the pak's other shared userdata. Move them into the
@@ -922,7 +1040,7 @@ launch_cart() {
   inherited_preload="${LD_PRELOAD:-}"
   setup_sdl_preload
   display_shim_loaded=false
-  if setup_display_preload; then
+  if setup_display_preload "$ROM_PATH"; then
     display_shim_loaded=true
   fi
 

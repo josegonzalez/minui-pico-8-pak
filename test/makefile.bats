@@ -179,32 +179,70 @@ pak_platforms() {
   done
 }
 
-@test "the display shim tests run for every Menu button launch.sh can name" {
-  grep -q 'for menu in guide start none; do' "$REPO_ROOT/shim/Dockerfile"
+@test "both architectures run the display and menu tests" {
+  mk ARCHITECTURES
+  for architecture in $output; do
+    awk -v stage="test-$architecture" '
+      /^FROM / { in_stage = ($NF == stage) }
+      in_stage && /LD_PRELOAD=\/display.so \/src\/test\/display-test/ { display = 1 }
+      in_stage && /\/src\/test\/menu-test \/fonts\// { menu = 1 }
+      END { exit !(display && menu) }' "$REPO_ROOT/shim/Dockerfile"
+  done
 }
 
-# an edit to the tests has to rebuild the shims, or a stale object skips them
-@test "the display shim tests are prerequisites of the shim build" {
-  run make --no-print-directory -C "$REPO_ROOT" -n -W shim/test/display-test.c lib/arm64/sdl-display.so
+# the menu draws in the device's own font, which only the test stages get
+@test "the menu is tested against both launchers' fonts without shipping them" {
+  grep -Eq 'shauninman/MinUI/[0-9a-f]{40}/skeleton/SYSTEM/res/BPreplayBold-unhinted.otf' \
+    "$REPO_ROOT/shim/Dockerfile"
+  grep -Eq 'LoveRetro/NextUI/[0-9a-f]{40}/skeleton/SYSTEM/res/font1.ttf' "$REPO_ROOT/shim/Dockerfile"
+
+  # the export stage is what make writes into lib/, and it copies objects alone
+  run sh -c "sed -n '/ AS export\$/,\$p' '$REPO_ROOT/shim/Dockerfile' | grep '^COPY'"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"docker buildx build"* ]]
+  [ -n "$output" ]
+  ! printf '%s\n' "$output" | grep -qv '\.so$'
+}
+
+# an edit to the tests or the menu has to rebuild the shims, or a stale object
+# skips them
+@test "the display shim sources and tests are prerequisites of the shim build" {
+  for prerequisite in shim/menu.c shim/menu.h shim/gfx.c shim/gfx.h shim/test/display-test.c \
+    shim/test/menu-test.c shim/test/fake-sdl.c; do
+    run make --no-print-directory -C "$REPO_ROOT" -n -W "$prerequisite" lib/arm64/sdl-display.so
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"docker buildx build"* ]]
+  done
 }
 
 @test "the display shim tests do not ship with the pak" {
-  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/test/display-test.c"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"export-ignore: set"* ]]
+  for test_file in display-test.c menu-test.c; do
+    run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/test/$test_file"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"export-ignore: set"* ]]
+  done
 }
 
-@test "the png decoder is pinned by commit and checksum" {
-  grep -Eq '^ADD --checksum=sha256:[0-9a-f]{64} ' "$REPO_ROOT/shim/Dockerfile"
-  grep -Eq 'nothings/stb/[0-9a-f]{40}/stb_image.h' "$REPO_ROOT/shim/Dockerfile"
+@test "the png and font decoders are pinned by commit and checksum" {
+  for header in stb_image.h stb_truetype.h; do
+    grep -B1 "nothings/stb/[0-9a-f]\{40\}/$header" "$REPO_ROOT/shim/Dockerfile" |
+      grep -Eq '^ADD --checksum=sha256:[0-9a-f]{64} '
+  done
 }
 
 @test "the display shim source ships with the pak" {
-  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/sdl-display.c"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"export-ignore: unspecified"* ]]
+  for source in sdl-display.c menu.c menu.h gfx.c gfx.h; do
+    run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/$source"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"export-ignore: unspecified"* ]]
+  done
+}
+
+# a function of the menu's bound to one of the same name in pico-8 would call
+# into pico-8 instead
+@test "the display shim exports only its SDL wrappers" {
+  [ "$(grep -c -- '-fvisibility=hidden' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
+  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu)_'" \
+    "$REPO_ROOT/shim/Dockerfile"
 }
 
 # glibc 2.34 folded libdl into libc, so a newer base records dlsym@GLIBC_2.34

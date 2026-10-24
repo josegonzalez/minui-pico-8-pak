@@ -1,5 +1,6 @@
 /*
- * Draws a PNG over every frame pico-8 presents, for bezels and overlays.
+ * Draws a PNG over every frame pico-8 presents, for bezels and overlays, and
+ * opens minarch's in-game menu when Menu is tapped.
  *
  * pico-8 has no overlay support of its own, but it draws through SDL's
  * renderer, so wrapping SDL_RenderPresent lets this copy an image over the
@@ -8,21 +9,19 @@
  * the game shows through. The PNG is decoded here with stb_image, so overlays
  * need nothing on the device beyond the SDL2 pico-8 already uses.
  *
- * launch.sh passes the overlay folder in PICO_PAK_OVERLAY_DIR. Select +
- * Left/Right steps through every PNG there and a disabled state, and the choice
- * is saved by name to the file in PICO_PAK_OVERLAY_CHOICE for the next launch.
- * pico-8 reads the pad with SDL_GameControllerGetButton rather than from
- * events, so the combo is read the same way and hidden from those calls.
+ * Every controller mapping in controllers/ reports Menu as the guide button,
+ * which is hidden from pico-8. Releasing it, unless another button or a volume
+ * key was pressed with it, opens the menu from SDL_RenderPresent: the finished
+ * frame is read back, dimmed and drawn under the menu, and pico-8's main thread
+ * waits there with its audio paused until the menu closes, which pauses the
+ * cart. menu.c holds the pages and gfx.c the drawing.
  *
- * Select + Up/Down switches between the standard and stretched screen modes,
- * saved to the file in PICO_PAK_SCREEN_MODE. pico-8 only takes its draw rect at
- * startup, so launch.sh always starts it in standard mode and stretching is
- * done here by redirecting the copy pico-8 draws each frame with.
- *
- * Select + Menu quits pico-8 from a game, Splore or its command prompt by
- * pushing SDL_QUIT, the event closing its window sends. Which pad button is
- * Menu depends on the platform's controller mapping, so launch.sh names it in
- * PICO_PAK_MENU_BUTTON, and without one there is no quit combo.
+ * The menu's Options page sets the overlay, from the PNGs in
+ * PICO_PAK_OVERLAY_DIR, and the screen mode, between standard and stretched.
+ * pico-8 only takes its draw rect at startup, so launch.sh always starts it in
+ * standard mode and stretching is done here by redirecting the copy pico-8
+ * draws each frame with. launch.sh names every file the menu saves to in the
+ * PICO_PAK_ variables read by init_display.
  *
  * Every SDL call goes through dlsym, like sdl-nosensor.c, so this builds without
  * SDL headers and asks glibc for nothing newer than that shim does. See
@@ -32,11 +31,17 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <linux/input.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include "gfx.h"
+#include "menu.h"
 
 /*
  * Only the PNG decoder is compiled, static so none of it is exported into
@@ -55,7 +60,8 @@
 #include "stb_image.h"
 #pragma GCC diagnostic pop
 
-/* From SDL_rect.h, SDL_blendmode.h, SDL_events.h and SDL_gamecontroller.h. */
+/* From SDL_rect.h, SDL_blendmode.h, SDL_events.h, SDL_pixels.h, SDL_render.h,
+ * SDL_audio.h and SDL_gamecontroller.h. */
 typedef struct {
   int x, y, w, h;
 } SDL_Rect;
@@ -68,23 +74,25 @@ typedef struct {
 } SDL_ControllerButtonEvent;
 #define SDL_BLENDMODE_BLEND 0x00000001
 #define SDL_SCALEMODE_LINEAR 1
+#define SDL_PIXELFORMAT_ARGB8888 0x16362004
+#define SDL_TEXTUREACCESS_STREAMING 1
+#define SDL_AUDIO_PLAYING 1
 #define SDL_QUIT 0x100
 #define SDL_CONTROLLERBUTTONDOWN 0x650
 #define SDL_CONTROLLERBUTTONUP 0x651
-#define SDL_CONTROLLER_BUTTON_BACK 4
+#define SDL_CONTROLLER_BUTTON_A 0
+#define SDL_CONTROLLER_BUTTON_B 1
 #define SDL_CONTROLLER_BUTTON_GUIDE 5
-#define SDL_CONTROLLER_BUTTON_START 6
 #define SDL_CONTROLLER_BUTTON_DPAD_UP 11
 #define SDL_CONTROLLER_BUTTON_DPAD_DOWN 12
 #define SDL_CONTROLLER_BUTTON_DPAD_LEFT 13
 #define SDL_CONTROLLER_BUTTON_DPAD_RIGHT 14
+#define SDL_CONTROLLER_BUTTON_MAX 21
 
-/* indexes into the state of the buttons pressed with Select below */
-enum { DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN, DIR_MENU, DIR_COUNT };
-
-static const char *const screen_modes[] = {"standard", "stretched"};
-#define SCREEN_MODE_COUNT ((int)(sizeof screen_modes / sizeof *screen_modes))
-#define SCREEN_MODE_STRETCHED 1
+/* how much of the game shows through under the root page, as in minarch */
+#define MENU_DIM 0x80
+/* the most input devices watched for the volume keys */
+#define INPUT_DEVICES 16
 
 static struct {
   void (*RenderPresent)(void *);
@@ -94,15 +102,22 @@ static struct {
   void *(*GameControllerOpen)(int);
   void (*GameControllerClose)(void *);
   uint8_t (*GameControllerGetButton)(void *, int);
+  void *(*GameControllerGetJoystick)(void *);
+  int (*JoystickNumButtons)(void *);
+  uint8_t (*JoystickGetButton)(void *, int);
   void *(*CreateRGBSurfaceFrom)(void *, int, int, int, int, uint32_t, uint32_t, uint32_t,
                                 uint32_t);
   void *(*CreateTextureFromSurface)(void *, void *);
+  void *(*CreateTexture)(void *, uint32_t, int, int, int);
+  int (*UpdateTexture)(void *, const SDL_Rect *, const void *, int);
   void (*DestroyTexture)(void *);
   void (*FreeSurface)(void *);
   int (*SetTextureBlendMode)(void *, int);
   int (*SetTextureScaleMode)(void *, int);
   const char *(*GetError)(void);
   int (*RenderCopy)(void *, void *, const SDL_Rect *, const SDL_Rect *);
+  int (*RenderClear)(void *);
+  int (*RenderReadPixels)(void *, const SDL_Rect *, uint32_t, void *, int);
   void (*RenderGetLogicalSize)(void *, int *, int *);
   int (*RenderSetLogicalSize)(void *, int, int);
   void (*RenderGetViewport)(void *, SDL_Rect *);
@@ -114,36 +129,63 @@ static struct {
   int (*RenderSetClipRect)(void *, const SDL_Rect *);
   int (*GetRendererOutputSize)(void *, int *, int *);
   int (*QueryTexture)(void *, uint32_t *, int *, int *, int *);
+  void (*Delay)(uint32_t);
+  uint32_t (*GetTicks)(void);
+  uint32_t (*OpenAudioDevice)(const char *, int, const void *, void *, int);
+  int (*OpenAudio)(void *, void *);
+  void (*PauseAudioDevice)(uint32_t, int);
+  int (*GetAudioDeviceStatus)(uint32_t);
 } sdl;
 
 static void *overlay_renderer;
 static void *overlay_texture;
 static int overlay_broken;
+static int menu_broken;
 
 static const char *overlay_dir;
-static const char *choice_path;
 static char **overlay_names;
 static int overlay_count;
-/* an index into overlay_names, or -1 while disabled */
-static int current = -1;
 /* the index overlay_texture was made from, -2 when none has been tried */
 static int loaded = -2;
 
-/* the pad pico-8 opened, which is the one read for the combo */
-static void *controller;
-/* the pad button launch.sh named as Menu, or -1 for no quit combo */
-static int menu_button = -1;
-static int select_held;
-/* a direction pressed with Select stays hidden from pico-8 until released */
-static int consumed[DIR_COUNT];
+/* the overlay, screen mode and files the menu changes, read by init_display */
+static struct menu_settings settings = {.overlay = -1};
 
-static const char *screen_mode_path;
-/* an index into screen_modes */
-static int screen_mode;
+/* the pad pico-8 opened, which is the one the menu reads */
+static void *controller;
+/* a Menu release opens the menu from the next SDL_RenderPresent */
+static int menu_requested;
+static int menu_was_down;
+/* another button or a volume key went with this press of Menu */
+static int menu_spoiled;
+/* buttons still held from the menu, hidden from pico-8 until released */
+static uint8_t hidden[SDL_CONTROLLER_BUTTON_MAX];
+static int hidden_count;
+
+static int input_fds[INPUT_DEVICES];
+static int input_count;
+
+/* the device pico-8 plays through, paused while the menu is open */
+static uint32_t audio_device;
+
+static const char *cart_name;
+static const char *power_supply_dir;
+static gfx_font *menu_font;
+static gfx_theme menu_theme;
+static uint32_t *menu_frame;
+static uint32_t *menu_pixels;
+static size_t menu_buffer_size;
+
 /* the biggest rect pico-8 has drawn to, which is its own standard screen */
 static SDL_Rect game_rect;
 
 #define LOG(...) fprintf(stderr, "sdl-display: " __VA_ARGS__)
+
+/*
+ * The shim is built with hidden visibility, so menu.c and gfx.c can never bind
+ * to a function of the same name in pico-8, and only the wrappers are exported.
+ */
+#define EXPORT __attribute__((visibility("default")))
 
 #define RESOLVE(name) (sdl.name = dlsym(RTLD_NEXT, "SDL_" #name))
 
@@ -166,6 +208,16 @@ static int resolve_sdl(void)
   RESOLVE(RenderCopy);
   /* SDL 2.0.12 and up only, and only cosmetic, so its absence is not fatal */
   RESOLVE(SetTextureScaleMode);
+  /* wrapped, so they must resolve even if the menu cannot */
+  RESOLVE(OpenAudioDevice);
+  RESOLVE(OpenAudio);
+  /* only used to tell a tap of Menu from a chord, which pad buttons can also do */
+  RESOLVE(GameControllerGetJoystick);
+  RESOLVE(JoystickNumButtons);
+  RESOLVE(JoystickGetButton);
+  /* without these the menu still opens, over a game whose sound keeps playing */
+  RESOLVE(PauseAudioDevice);
+  RESOLVE(GetAudioDeviceStatus);
 
   resolved = RESOLVE(CreateRGBSurfaceFrom) && RESOLVE(CreateTextureFromSurface) &&
                      RESOLVE(DestroyTexture) &&
@@ -181,8 +233,15 @@ static int resolve_sdl(void)
                  : -1;
 
   if (resolved < 0) {
-    LOG("this SDL2 is missing a renderer function, not drawing an overlay\n");
+    LOG("this SDL2 is missing a renderer function, not drawing an overlay or the menu\n");
     overlay_broken = 1;
+    menu_broken = 1;
+  } else if (!(RESOLVE(CreateTexture) && RESOLVE(UpdateTexture) && RESOLVE(RenderClear) &&
+               RESOLVE(RenderReadPixels) && RESOLVE(Delay) && RESOLVE(GetTicks) &&
+               RESOLVE(GameControllerGetButton) && RESOLVE(PollEvent) &&
+               RESOLVE(RenderPresent))) {
+    LOG("this SDL2 is missing a function the menu needs, Menu goes to pico-8\n");
+    menu_broken = 1;
   }
 
   return resolved > 0;
@@ -228,86 +287,68 @@ static void scan_overlays(void)
   qsort(overlay_names, overlay_count, sizeof *overlay_names, compare_names);
 }
 
-static void read_line(const char *path, char *line, size_t size)
-{
-  FILE *file = path != NULL ? fopen(path, "r") : NULL;
-
-  line[0] = '\0';
-  if (file != NULL) {
-    if (fgets(line, size, file) == NULL) {
-      line[0] = '\0';
-    }
-    fclose(file);
-  }
-  line[strcspn(line, "\r\n")] = '\0';
-}
-
-static void write_line(const char *path, const char *line)
-{
-  FILE *file;
-
-  if (path == NULL || *path == '\0') {
-    return;
-  }
-
-  file = fopen(path, "w");
-  if (file == NULL) {
-    LOG("cannot save %s to %s\n", line, path);
-    return;
-  }
-
-  fprintf(file, "%s\n", line);
-  fclose(file);
-}
-
-/* Nothing is drawn until an overlay has been chosen, or after its file is gone. */
-static int read_choice(void)
-{
-  char line[256];
-  int i;
-
-  read_line(choice_path, line, sizeof line);
-  for (i = 0; i < overlay_count; i++) {
-    if (strcmp(overlay_names[i], line) == 0) {
-      return i;
-    }
-  }
-
-  return -1;
-}
-
-static int read_screen_mode(void)
-{
-  char line[64];
-  int i;
-
-  read_line(screen_mode_path, line, sizeof line);
-  for (i = 0; i < SCREEN_MODE_COUNT; i++) {
-    if (strcmp(screen_modes[i], line) == 0) {
-      return i;
-    }
-  }
-
-  return 0;
-}
-
 static const char *current_name(void)
 {
-  return current < 0 ? "disabled" : overlay_names[current];
+  return settings.overlay < 0 ? "disabled" : overlay_names[settings.overlay];
 }
 
-static int read_menu_button(void)
+/*
+ * Every event device is watched for the volume keys, which the OS pairs with
+ * Menu for brightness and SDL never sees. Opened read-only and unexclusive, so
+ * the OS still reads every key itself.
+ */
+static void open_input_devices(void)
 {
-  const char *name = getenv("PICO_PAK_MENU_BUTTON");
+  const char *input_dir = getenv("PICO_PAK_INPUT_DIR");
+  char path[4096];
+  struct dirent *entry;
+  DIR *dir;
+  int fd;
 
-  if (name != NULL && strcmp(name, "start") == 0) {
-    return SDL_CONTROLLER_BUTTON_START;
-  }
-  if (name != NULL && strcmp(name, "guide") == 0) {
-    return SDL_CONTROLLER_BUTTON_GUIDE;
+  if (input_dir == NULL || *input_dir == '\0') {
+    input_dir = "/dev/input";
   }
 
-  return -1;
+  dir = opendir(input_dir);
+  if (dir == NULL) {
+    LOG("cannot open %s, Menu + a volume key may open the menu\n", input_dir);
+    return;
+  }
+
+  while ((entry = readdir(dir)) != NULL && input_count < INPUT_DEVICES) {
+    if (strncmp(entry->d_name, "event", 5) != 0) {
+      continue;
+    }
+    snprintf(path, sizeof path, "%s/%s", input_dir, entry->d_name);
+    fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd >= 0) {
+      input_fds[input_count++] = fd;
+    }
+  }
+
+  closedir(dir);
+}
+
+/* reads everything waiting on the input devices, and says if a volume key went down */
+static int volume_key_pressed(void)
+{
+  struct input_event events[16];
+  ssize_t got;
+  int i, pressed = 0;
+  size_t e;
+
+  for (i = 0; i < input_count; i++) {
+    while ((got = read(input_fds[i], events, sizeof events)) > 0) {
+      for (e = 0; e < (size_t)got / sizeof *events; e++) {
+        if (events[e].type == EV_KEY && events[e].value != 0 &&
+            (events[e].code == KEY_VOLUMEUP || events[e].code == KEY_VOLUMEDOWN)) {
+          pressed = 1;
+        }
+      }
+    }
+  }
+
+  return pressed;
 }
 
 static void init_display(void)
@@ -319,46 +360,33 @@ static void init_display(void)
   }
   done = 1;
 
-  menu_button = read_menu_button();
-  if (menu_button < 0) {
-    LOG("no Menu button named, Select + Menu will not quit pico-8\n");
-  }
+  settings.screen_mode_path = getenv("PICO_PAK_SCREEN_MODE");
+  settings.screen_mode = menu_read_screen_mode(settings.screen_mode_path);
+  LOG("starting in %s screen mode\n", menu_screen_modes[settings.screen_mode]);
 
-  screen_mode_path = getenv("PICO_PAK_SCREEN_MODE");
-  screen_mode = read_screen_mode();
-  LOG("starting in %s screen mode\n", screen_modes[screen_mode]);
+  settings.overlay_path = getenv("PICO_PAK_OVERLAY_CHOICE");
+  settings.copy_carts_dir = getenv("PICO_PAK_COPY_CARTS_DIR");
+  settings.shared_copy_carts_dir = getenv("PICO_PAK_SHARED_COPY_CARTS_DIR");
+  settings.pico8_config_path = getenv("PICO_PAK_PICO8_CONFIG");
+  settings.installed_config_path = getenv("PICO_PAK_INSTALLED_CONFIG");
+  cart_name = getenv("PICO_PAK_CART_NAME");
+  power_supply_dir = getenv("PICO_PAK_POWER_SUPPLY_DIR");
+  if (power_supply_dir == NULL || *power_supply_dir == '\0') {
+    power_supply_dir = "/sys/class/power_supply";
+  }
+  open_input_devices();
 
   overlay_dir = getenv("PICO_PAK_OVERLAY_DIR");
-  choice_path = getenv("PICO_PAK_OVERLAY_CHOICE");
   if (overlay_dir == NULL || *overlay_dir == '\0') {
     LOG("PICO_PAK_OVERLAY_DIR is not set\n");
     return;
   }
 
   scan_overlays();
-  current = read_choice();
+  settings.overlay_names = overlay_names;
+  settings.overlay_count = overlay_count;
+  settings.overlay = menu_read_overlay(settings.overlay_path, overlay_names, overlay_count);
   LOG("%d overlays in %s, starting with %s\n", overlay_count, overlay_dir, current_name());
-}
-
-/* The disabled state sits after the last overlay, so the cycle wraps through it. */
-static void cycle_overlay(int step)
-{
-  int slots = overlay_count + 1;
-  int slot = current < 0 ? overlay_count : current;
-
-  slot = (slot + step + slots) % slots;
-  current = slot == overlay_count ? -1 : slot;
-
-  LOG("switched to %s\n", current_name());
-  write_line(choice_path, current_name());
-}
-
-static void cycle_screen_mode(int step)
-{
-  screen_mode = (screen_mode + step + SCREEN_MODE_COUNT) % SCREEN_MODE_COUNT;
-
-  LOG("switched to %s screen mode\n", screen_modes[screen_mode]);
-  write_line(screen_mode_path, screen_modes[screen_mode]);
 }
 
 static void request_quit(void)
@@ -371,93 +399,96 @@ static void request_quit(void)
     return;
   }
 
-  LOG("Select + Menu pressed, quitting pico-8\n");
+  LOG("Quit chosen in the menu, quitting pico-8\n");
   sdl.PushEvent(event);
 }
 
-/*
- * Left and Right are only taken from pico-8 when there are overlays to pick,
- * and Menu only when launch.sh named the button.
- */
-static int has_action(int direction)
+static int menu_available(void)
 {
-  if (direction == DIR_LEFT || direction == DIR_RIGHT) {
-    return overlay_count > 0;
-  }
-  if (direction == DIR_MENU) {
-    return menu_button >= 0;
-  }
+  return resolve_sdl() && !menu_broken && controller != NULL;
+}
 
-  return 1;
+static uint8_t pad_button(int button)
+{
+  return sdl.GameControllerGetButton(controller, button);
 }
 
 /*
- * Reads Select and the buttons pressed with it straight from the pad. A button
- * counts once per press, and calling this again in the same frame changes nothing.
+ * A Menu held with any other button is a chord for the OS, such as
+ * brightness on rg35xxplus, whose volume keys are pad buttons no mapping
+ * names, so the raw buttons are counted rather than the mapped ones.
  */
-static void update_combo(void)
+static int other_buttons_down(void)
 {
-  static int was_down[DIR_COUNT];
-  int buttons[DIR_COUNT];
-  int direction, down;
+  void *joystick;
+  int count, i, down = 0;
 
-  if (controller == NULL || sdl.GameControllerGetButton == NULL) {
+  joystick = sdl.GameControllerGetJoystick != NULL && sdl.JoystickNumButtons != NULL &&
+                     sdl.JoystickGetButton != NULL
+                 ? sdl.GameControllerGetJoystick(controller)
+                 : NULL;
+  if (joystick != NULL) {
+    count = sdl.JoystickNumButtons(joystick);
+    for (i = 0; i < count; i++) {
+      down += sdl.JoystickGetButton(joystick, i) != 0;
+    }
+    return down > 1;
+  }
+
+  for (i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++) {
+    if (i != SDL_CONTROLLER_BUTTON_GUIDE && pad_button(i)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/*
+ * Reads Menu straight from the pad and asks for the menu when a press ends
+ * without being part of a chord. Calling this again in the same frame changes
+ * nothing. Buttons hidden since the menu closed come back once released.
+ */
+static void update_buttons(void)
+{
+  int down, button;
+
+  if (!menu_available()) {
     return;
   }
 
-  buttons[DIR_LEFT] = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
-  buttons[DIR_RIGHT] = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
-  buttons[DIR_UP] = SDL_CONTROLLER_BUTTON_DPAD_UP;
-  buttons[DIR_DOWN] = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
-  buttons[DIR_MENU] = menu_button;
+  down = pad_button(SDL_CONTROLLER_BUTTON_GUIDE);
+  if (down && !menu_was_down) {
+    /* only a volume key pressed from here on counts against this press */
+    volume_key_pressed();
+    menu_spoiled = 0;
+  }
+  if (down && !menu_spoiled && (volume_key_pressed() || other_buttons_down())) {
+    LOG("Menu pressed with another key, not opening the menu\n");
+    menu_spoiled = 1;
+  }
+  if (!down && menu_was_down && !menu_spoiled) {
+    menu_requested = 1;
+  }
+  menu_was_down = down;
 
-  select_held = sdl.GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_BACK);
-
-  for (direction = 0; direction < DIR_COUNT; direction++) {
-    down = buttons[direction] >= 0 && sdl.GameControllerGetButton(controller, buttons[direction]);
-    if (down && !was_down[direction] && select_held && has_action(direction)) {
-      consumed[direction] = 1;
-      if (direction == DIR_MENU) {
-        request_quit();
-      } else if (direction == DIR_LEFT || direction == DIR_RIGHT) {
-        cycle_overlay(direction == DIR_RIGHT ? 1 : -1);
-      } else {
-        cycle_screen_mode(direction == DIR_DOWN ? 1 : -1);
-      }
+  for (button = 0; hidden_count > 0 && button < SDL_CONTROLLER_BUTTON_MAX; button++) {
+    if (hidden[button] && !pad_button(button)) {
+      hidden[button] = 0;
+      hidden_count--;
     }
-    if (!down) {
-      consumed[direction] = 0;
-    }
-    was_down[direction] = down;
   }
 }
 
-static int direction_of(int button)
+static int is_hidden(int button)
 {
-  if (button >= 0 && button == menu_button) {
-    return DIR_MENU;
+  if (!menu_available() || button < 0 || button >= SDL_CONTROLLER_BUTTON_MAX) {
+    return 0;
   }
 
-  switch (button) {
-  case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-    return DIR_LEFT;
-  case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-    return DIR_RIGHT;
-  case SDL_CONTROLLER_BUTTON_DPAD_UP:
-    return DIR_UP;
-  case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-    return DIR_DOWN;
-  default:
-    return -1;
-  }
+  return button == SDL_CONTROLLER_BUTTON_GUIDE || hidden[button];
 }
 
-static int is_hidden(int direction)
-{
-  return direction >= 0 && has_action(direction) && (select_held || consumed[direction]);
-}
-
-/* Covers pico-8 reading the d-pad from events as well as from button state. */
+/* Covers pico-8 reading the pad from events as well as from button state. */
 static int swallow_event(const void *event)
 {
   const SDL_ControllerButtonEvent *button = event;
@@ -466,8 +497,8 @@ static int swallow_event(const void *event)
     return 0;
   }
 
-  update_combo();
-  return is_hidden(direction_of(button->button));
+  update_buttons();
+  return is_hidden(button->button);
 }
 
 /*
@@ -483,8 +514,8 @@ static int stretch_rect(void *renderer, const SDL_Rect *dst, SDL_Rect *out)
     LOG("pico-8 draws its screen at %d,%d %dx%d\n", dst->x, dst->y, dst->w, dst->h);
   }
 
-  if (screen_mode != SCREEN_MODE_STRETCHED || game_rect.w <= 0 || game_rect.h <= 0 ||
-      sdl.GetRendererOutputSize == NULL ||
+  if (settings.screen_mode != MENU_SCREEN_MODE_STRETCHED || game_rect.w <= 0 ||
+      game_rect.h <= 0 || sdl.GetRendererOutputSize == NULL ||
       sdl.GetRendererOutputSize(renderer, &width, &height) != 0) {
     return 0;
   }
@@ -568,25 +599,53 @@ static int fit_overlay(void *renderer, SDL_Rect *dst)
   return 1;
 }
 
-/*
- * pico-8 may letterbox with a logical size, viewport, scale or clip rect, and
- * any of those would squeeze the overlay into the game's square. They are
- * cleared for the one copy and put back so pico-8's next frame is unaffected.
- */
-static void draw_overlay(void *renderer)
-{
+struct letterbox {
   int logical_w, logical_h, clip_enabled;
   float scale_x, scale_y;
-  SDL_Rect viewport, clip, fitted;
+  SDL_Rect viewport, clip;
+};
+
+/*
+ * pico-8 may letterbox with a logical size, viewport, scale or clip rect, and
+ * any of those would squeeze the overlay or the menu into the game's square.
+ * They are cleared for what the shim draws and put back so pico-8's next frame
+ * is unaffected.
+ */
+static void clear_letterbox(void *renderer, struct letterbox *saved)
+{
+  sdl.RenderGetLogicalSize(renderer, &saved->logical_w, &saved->logical_h);
+  sdl.RenderGetViewport(renderer, &saved->viewport);
+  sdl.RenderGetScale(renderer, &saved->scale_x, &saved->scale_y);
+  saved->clip_enabled = sdl.RenderIsClipEnabled(renderer);
+  sdl.RenderGetClipRect(renderer, &saved->clip);
+
+  sdl.RenderSetLogicalSize(renderer, 0, 0);
+  sdl.RenderSetScale(renderer, 1.0f, 1.0f);
+  sdl.RenderSetViewport(renderer, NULL);
+  sdl.RenderSetClipRect(renderer, NULL);
+}
+
+static void restore_letterbox(void *renderer, const struct letterbox *saved)
+{
+  if (saved->logical_w > 0 && saved->logical_h > 0) {
+    sdl.RenderSetLogicalSize(renderer, saved->logical_w, saved->logical_h);
+  }
+  sdl.RenderSetScale(renderer, saved->scale_x, saved->scale_y);
+  sdl.RenderSetViewport(renderer, &saved->viewport);
+  sdl.RenderSetClipRect(renderer, saved->clip_enabled ? &saved->clip : NULL);
+}
+
+static void draw_overlay(void *renderer)
+{
+  struct letterbox saved;
+  SDL_Rect fitted;
 
   if (overlay_broken || !resolve_sdl()) {
     return;
   }
-  init_display();
-  update_combo();
 
   /* a stretched game fills the screen, so any bezel would cover it */
-  if (screen_mode == SCREEN_MODE_STRETCHED) {
+  if (settings.screen_mode == MENU_SCREEN_MODE_STRETCHED) {
     return;
   }
 
@@ -597,54 +656,221 @@ static void draw_overlay(void *renderer)
   }
 
   /* a file that will not load is retried only once the choice moves off it */
-  if (loaded != current) {
+  if (loaded != settings.overlay) {
     if (overlay_texture != NULL) {
       sdl.DestroyTexture(overlay_texture);
       overlay_texture = NULL;
     }
-    if (current >= 0) {
-      overlay_texture = load_overlay(renderer, overlay_names[current]);
+    if (settings.overlay >= 0) {
+      overlay_texture = load_overlay(renderer, overlay_names[settings.overlay]);
     }
-    loaded = current;
+    loaded = settings.overlay;
   }
 
   if (overlay_texture == NULL) {
     return;
   }
 
-  sdl.RenderGetLogicalSize(renderer, &logical_w, &logical_h);
-  sdl.RenderGetViewport(renderer, &viewport);
-  sdl.RenderGetScale(renderer, &scale_x, &scale_y);
-  clip_enabled = sdl.RenderIsClipEnabled(renderer);
-  sdl.RenderGetClipRect(renderer, &clip);
-
-  sdl.RenderSetLogicalSize(renderer, 0, 0);
-  sdl.RenderSetScale(renderer, 1.0f, 1.0f);
-  sdl.RenderSetViewport(renderer, NULL);
-  sdl.RenderSetClipRect(renderer, NULL);
-
+  clear_letterbox(renderer, &saved);
   sdl.RenderCopy(renderer, overlay_texture, NULL, fit_overlay(renderer, &fitted) ? &fitted : NULL);
-
-  if (logical_w > 0 && logical_h > 0) {
-    sdl.RenderSetLogicalSize(renderer, logical_w, logical_h);
-  }
-  sdl.RenderSetScale(renderer, scale_x, scale_y);
-  sdl.RenderSetViewport(renderer, &viewport);
-  sdl.RenderSetClipRect(renderer, clip_enabled ? &clip : NULL);
+  restore_letterbox(renderer, &saved);
 }
 
-void SDL_RenderPresent(void *renderer)
+/* the menu's buttons, read straight from the pad */
+static unsigned read_menu_buttons(void)
+{
+  static const struct {
+    int button;
+    unsigned bit;
+  } map[] = {
+      {SDL_CONTROLLER_BUTTON_DPAD_UP, MENU_UP},     {SDL_CONTROLLER_BUTTON_DPAD_DOWN, MENU_DOWN},
+      {SDL_CONTROLLER_BUTTON_DPAD_LEFT, MENU_LEFT}, {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, MENU_RIGHT},
+      {SDL_CONTROLLER_BUTTON_A, MENU_A},            {SDL_CONTROLLER_BUTTON_B, MENU_B},
+      {SDL_CONTROLLER_BUTTON_GUIDE, MENU_MENU},
+  };
+  unsigned held = 0;
+  size_t i;
+
+  for (i = 0; i < sizeof map / sizeof *map; i++) {
+    if (pad_button(map[i].button)) {
+      held |= map[i].bit;
+    }
+  }
+
+  return held;
+}
+
+/* pausing a device pico-8 paused itself would have the menu start it again */
+static int pause_audio(void)
+{
+  if (audio_device == 0 || sdl.PauseAudioDevice == NULL ||
+      (sdl.GetAudioDeviceStatus != NULL &&
+       sdl.GetAudioDeviceStatus(audio_device) != SDL_AUDIO_PLAYING)) {
+    return 0;
+  }
+
+  sdl.PauseAudioDevice(audio_device, 1);
+  return 1;
+}
+
+static int make_menu_buffers(int width, int height)
+{
+  size_t size = (size_t)width * height * sizeof *menu_pixels;
+  uint32_t *frame, *pixels;
+
+  if (size <= menu_buffer_size) {
+    return 1;
+  }
+
+  frame = realloc(menu_frame, size);
+  if (frame != NULL) {
+    menu_frame = frame;
+  }
+  pixels = realloc(menu_pixels, size);
+  if (pixels != NULL) {
+    menu_pixels = pixels;
+  }
+  if (frame == NULL || pixels == NULL) {
+    LOG("cannot allocate the menu for a %dx%d screen\n", width, height);
+    return 0;
+  }
+
+  menu_buffer_size = size;
+  return 1;
+}
+
+static void show_pixels(void *renderer, void *texture, const uint32_t *pixels, int width)
+{
+  sdl.UpdateTexture(texture, NULL, pixels, width * (int)sizeof *pixels);
+  sdl.RenderClear(renderer);
+  sdl.RenderCopy(renderer, texture, NULL, NULL);
+}
+
+/*
+ * The cart waits here, in the middle of presenting a frame, until the menu
+ * closes. The frame it was presenting is drawn again on the way out, for the
+ * SDL_RenderPresent the menu was opened from to show.
+ */
+static void run_menu(void *renderer)
+{
+  enum menu_result result = MENU_STAY;
+  struct letterbox saved;
+  struct menu menu;
+  gfx_canvas canvas;
+  gfx_battery battery;
+  uint32_t event[14];
+  unsigned held, was_held;
+  int width, height, paused, button;
+  size_t i;
+  void *texture;
+
+  if (sdl.GetRendererOutputSize(renderer, &width, &height) != 0 || width <= 0 || height <= 0) {
+    LOG("cannot read the screen size, not opening the menu: %s\n", sdl.GetError());
+    return;
+  }
+  if (!make_menu_buffers(width, height)) {
+    return;
+  }
+
+  texture = sdl.CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+                              width, height);
+  if (texture == NULL) {
+    LOG("cannot make a texture for the menu: %s\n", sdl.GetError());
+    return;
+  }
+
+  clear_letterbox(renderer, &saved);
+  if (sdl.RenderReadPixels(renderer, NULL, SDL_PIXELFORMAT_ARGB8888, menu_frame,
+                           width * (int)sizeof *menu_frame) != 0) {
+    LOG("cannot read the game's frame, drawing the menu over black: %s\n", sdl.GetError());
+    memset(menu_frame, 0, (size_t)width * height * sizeof *menu_frame);
+  }
+  /* the back buffer's alpha means nothing, and the frame is drawn opaque */
+  for (i = 0; i < (size_t)width * height; i++) {
+    menu_frame[i] |= 0xff000000u;
+  }
+
+  if (menu_font == NULL) {
+    menu_font = gfx_font_open(getenv("PICO_PAK_MENU_FONT"));
+    gfx_theme_init(&menu_theme, getenv("PICO_PAK_MENU_STYLE"), getenv("PICO_PAK_MENU_COLORS"));
+  }
+
+  paused = pause_audio();
+  LOG("opening the menu%s\n", paused ? " and pausing pico-8's audio" : "");
+  menu_open(&menu, &settings, cart_name);
+  battery = gfx_read_battery(power_supply_dir);
+  canvas.pixels = menu_pixels;
+  canvas.w = width;
+  canvas.h = height;
+
+  /* a button already down when the menu opens is not a press */
+  was_held = read_menu_buttons();
+  while (result == MENU_STAY) {
+    while (sdl.PollEvent(event)) {
+      if (event[0] == SDL_QUIT) {
+        result = MENU_QUIT;
+      }
+    }
+    if (result != MENU_STAY) {
+      break;
+    }
+
+    held = read_menu_buttons();
+    result = menu_update(&menu, held & ~was_held, held, sdl.GetTicks());
+    was_held = held;
+
+    if (menu_font != NULL && menu.dirty) {
+      menu_draw(&menu, &canvas, menu_frame, menu_font, &menu_theme, &battery);
+      show_pixels(renderer, texture, menu_pixels, width);
+      sdl.RenderPresent(renderer);
+    }
+    if (result == MENU_STAY) {
+      sdl.Delay(16);
+    }
+  }
+
+  show_pixels(renderer, texture, menu_frame, width);
+  sdl.DestroyTexture(texture);
+  restore_letterbox(renderer, &saved);
+
+  if (paused) {
+    sdl.PauseAudioDevice(audio_device, 0);
+  }
+
+  /* the press that closed the menu is not the cart's, nor is the Menu release after it */
+  for (button = 0; button < SDL_CONTROLLER_BUTTON_MAX; button++) {
+    if (!hidden[button] && pad_button(button)) {
+      hidden[button] = 1;
+      hidden_count++;
+    }
+  }
+  menu_was_down = pad_button(SDL_CONTROLLER_BUTTON_GUIDE);
+  menu_spoiled = 1;
+
+  LOG("closing the menu\n");
+  if (result == MENU_QUIT) {
+    request_quit();
+  }
+}
+
+EXPORT void SDL_RenderPresent(void *renderer)
 {
   resolve_sdl();
   if (sdl.RenderPresent == NULL) {
     return;
   }
 
+  init_display();
+  update_buttons();
   draw_overlay(renderer);
+  if (menu_requested) {
+    menu_requested = 0;
+    run_menu(renderer);
+  }
   sdl.RenderPresent(renderer);
 }
 
-int SDL_RenderCopy(void *renderer, void *texture, const SDL_Rect *src, const SDL_Rect *dst)
+EXPORT int SDL_RenderCopy(void *renderer, void *texture, const SDL_Rect *src, const SDL_Rect *dst)
 {
   SDL_Rect stretched;
 
@@ -661,7 +887,7 @@ int SDL_RenderCopy(void *renderer, void *texture, const SDL_Rect *src, const SDL
   return sdl.RenderCopy(renderer, texture, src, dst);
 }
 
-int SDL_PollEvent(void *event)
+EXPORT int SDL_PollEvent(void *event)
 {
   int got;
 
@@ -683,7 +909,7 @@ int SDL_PollEvent(void *event)
   return got;
 }
 
-void *SDL_GameControllerOpen(int index)
+EXPORT void *SDL_GameControllerOpen(int index)
 {
   void *opened;
 
@@ -695,18 +921,22 @@ void *SDL_GameControllerOpen(int index)
   opened = sdl.GameControllerOpen(index);
   if (opened != NULL) {
     controller = opened;
-    LOG("watching controller %d for Select combos\n", index);
+    LOG("watching controller %d for the Menu button\n", index);
   }
 
   return opened;
 }
 
-void SDL_GameControllerClose(void *closing)
+EXPORT void SDL_GameControllerClose(void *closing)
 {
   resolve_sdl();
 
   if (closing == controller) {
     controller = NULL;
+    menu_requested = 0;
+    menu_was_down = 0;
+    memset(hidden, 0, sizeof hidden);
+    hidden_count = 0;
   }
 
   if (sdl.GameControllerClose != NULL) {
@@ -714,18 +944,17 @@ void SDL_GameControllerClose(void *closing)
   }
 }
 
-uint8_t SDL_GameControllerGetButton(void *pad, int button)
+EXPORT uint8_t SDL_GameControllerGetButton(void *pad, int button)
 {
   resolve_sdl();
   if (sdl.GameControllerGetButton == NULL) {
     return 0;
   }
 
-  /* the Menu button is only known once init_display has read the environment */
   init_display();
-  if (pad == controller && pad != NULL && direction_of(button) >= 0) {
-    update_combo();
-    if (is_hidden(direction_of(button))) {
+  if (pad == controller && pad != NULL) {
+    update_buttons();
+    if (is_hidden(button)) {
       return 0;
     }
   }
@@ -733,8 +962,44 @@ uint8_t SDL_GameControllerGetButton(void *pad, int button)
   return sdl.GameControllerGetButton(pad, button);
 }
 
+EXPORT uint32_t SDL_OpenAudioDevice(const char *device, int iscapture, const void *desired,
+                             void *obtained, int allowed_changes)
+{
+  uint32_t opened;
+
+  resolve_sdl();
+  if (sdl.OpenAudioDevice == NULL) {
+    return 0;
+  }
+
+  opened = sdl.OpenAudioDevice(device, iscapture, desired, obtained, allowed_changes);
+  if (opened != 0 && !iscapture) {
+    audio_device = opened;
+  }
+
+  return opened;
+}
+
+/* the legacy call always opens device 1 */
+EXPORT int SDL_OpenAudio(void *desired, void *obtained)
+{
+  int status;
+
+  resolve_sdl();
+  if (sdl.OpenAudio == NULL) {
+    return -1;
+  }
+
+  status = sdl.OpenAudio(desired, obtained);
+  if (status == 0) {
+    audio_device = 1;
+  }
+
+  return status;
+}
+
 /* SDL frees a renderer's textures with it, so a later renderer needs its own. */
-void SDL_DestroyRenderer(void *renderer)
+EXPORT void SDL_DestroyRenderer(void *renderer)
 {
   resolve_sdl();
 
