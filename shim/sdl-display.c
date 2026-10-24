@@ -721,8 +721,9 @@ uint8_t SDL_GameControllerGetButton(void *pad, int button)
     return 0;
   }
 
+  /* the Menu button is only known once init_display has read the environment */
+  init_display();
   if (pad == controller && pad != NULL && direction_of(button) >= 0) {
-    init_display();
     update_combo();
     if (is_hidden(direction_of(button))) {
       return 0;

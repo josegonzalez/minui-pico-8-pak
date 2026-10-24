@@ -296,4 +296,6 @@ make test
 
 `make build` and `make release` additionally need Docker, which is what the SDL sensor shim and the display shim are cross-compiled in, the display shim once for `arm` and once for `arm64`. The display shim decodes overlays with [stb_image](https://github.com/nothings/stb), which the build fetches at a pinned commit and checks against a checksum. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
 
+The build also tests the display shim on both architectures, by loading it into a small program in `shim/test` that stands in for PICO-8, linked against a fake `libSDL2` that records what the shim does to each frame, the controller and the event queue. A shim that fails these tests is not written to `lib/`.
+
 Three environment variables exist for the test suite only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to.
