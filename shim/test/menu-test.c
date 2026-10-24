@@ -207,9 +207,30 @@ static struct menu open_options(struct menu_settings *settings)
   return menu;
 }
 
-static void select_row(struct menu *menu, int row)
+/* opens the page of the group a setting is in, from Options or another group, and selects it */
+static void select_setting(struct menu *menu, int setting)
 {
-  while (menu->option_row != row) {
+  int group, row, found_group = -1, found_row = -1;
+
+  for (group = 0; group < MENU_GROUP_COUNT; group++) {
+    for (row = 0; row < menu_group_size(group); row++) {
+      if (menu_group_setting(group, row) == setting) {
+        found_group = group;
+        found_row = row;
+      }
+    }
+  }
+
+  if (menu->page == MENU_PAGE_GROUP && menu->option_row != found_group) {
+    press(menu, MENU_B);
+  }
+  if (menu->page != MENU_PAGE_GROUP) {
+    while (menu->option_row != found_group) {
+      press(menu, MENU_DOWN);
+    }
+    press(menu, MENU_A);
+  }
+  while (menu->setting_row != found_row) {
     press(menu, MENU_DOWN);
   }
 }
@@ -222,6 +243,21 @@ static void test_screen_mode_and_overlay(void)
 
   settings_for_test(&settings);
   menu = open_options(&settings);
+  check(menu.page == MENU_PAGE_OPTIONS && menu.option_row == MENU_GROUP_FRONTEND,
+        "Options opens on its first group, Frontend");
+  check(press(&menu, MENU_RIGHT) == MENU_STAY && menu.page == MENU_PAGE_GROUP &&
+            menu.setting_row == 0 && menu_group_setting(MENU_GROUP_FRONTEND, 0) == MENU_SCREEN_MODE,
+        "Right opens Frontend at its first setting, Screen Mode");
+  check(press(&menu, MENU_B) == MENU_STAY && menu.page == MENU_PAGE_OPTIONS &&
+            menu.option_row == MENU_GROUP_FRONTEND,
+        "B goes back to Options on the group");
+  check(menu_group_size(MENU_GROUP_SPLORE) == 4 &&
+            menu_group_setting(MENU_GROUP_SPLORE, 0) == MENU_COPY_CARTS &&
+            menu_group_setting(MENU_GROUP_SPLORE, 1) == MENU_SPLORE_ARTWORK &&
+            menu_group_setting(MENU_GROUP_SPLORE, 2) == MENU_HIDE_MATURE &&
+            menu_group_setting(MENU_GROUP_SPLORE, 3) == MENU_CHECK_UPDATES,
+        "Splore holds every Splore setting and nothing else");
+  select_setting(&menu, MENU_SCREEN_MODE);
 
   menu_option_value(&menu, MENU_SCREEN_MODE, value, sizeof value);
   check(strcmp(value, "Standard") == 0, "Screen Mode shows Standard");
@@ -239,7 +275,7 @@ static void test_screen_mode_and_overlay(void)
   write_file(screen_mode_path, "sideways\n");
   check(menu_read_screen_mode(screen_mode_path) == 0, "an unknown screen mode reads as standard");
 
-  select_row(&menu, MENU_OVERLAY);
+  select_setting(&menu, MENU_OVERLAY);
   menu_option_value(&menu, MENU_OVERLAY, value, sizeof value);
   check(strcmp(value, "None") == 0, "Overlay shows None with no overlay chosen");
   press(&menu, MENU_RIGHT);
@@ -274,7 +310,7 @@ static void test_copy_carts(void)
   check(menu.copy_carts == MENU_COPY_FAVOURITES,
         "a favourites marker in the shared folder, spelt either way, wins");
 
-  select_row(&menu, MENU_COPY_CARTS);
+  select_setting(&menu, MENU_COPY_CARTS);
   press(&menu, MENU_RIGHT);
   check(menu.copy_carts == MENU_COPY_OFF && !exists(userdata, "copy-carts") &&
             !exists(shared, "copy-carts-favorites"),
@@ -308,7 +344,7 @@ static void test_splore_artwork(void)
   menu_option_value(&menu, MENU_SPLORE_ARTWORK, value, sizeof value);
   check(strcmp(value, "Standard") == 0, "Splore Artwork starts on Standard with no file");
 
-  select_row(&menu, MENU_SPLORE_ARTWORK);
+  select_setting(&menu, MENU_SPLORE_ARTWORK);
   press(&menu, MENU_RIGHT);
   check(file_is(splore_artwork_path, "fancy\n"), "Right picks the fancy cover and saves it");
   check(menu_read_splore_artwork(splore_artwork_path) == 1, "the saved cover reads back");
@@ -318,7 +354,7 @@ static void test_splore_artwork(void)
 
   press(&menu, MENU_DOWN);
   press(&menu, MENU_A);
-  select_row(&menu, MENU_SPLORE_ARTWORK);
+  select_setting(&menu, MENU_SPLORE_ARTWORK);
   press(&menu, MENU_RIGHT);
   check(file_is(splore_artwork_path, "standard\n"), "Right wraps back to the standard cover");
 
@@ -345,7 +381,7 @@ static void test_description_lines(void)
   settings_for_test(&settings);
   gfx_theme_init(&theme, "minui", NULL);
   menu = open_options(&settings);
-  select_row(&menu, MENU_CONFIG_FIRST);
+  select_setting(&menu, MENU_SHOW_FPS);
   menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
 
   for (line = 0; line < 2; line++) {
@@ -373,24 +409,24 @@ static void test_config(void)
              "show_fps 0 // Draw frames per second\nvolume 128\nforeground_sleep_ms 7\n");
 
   menu = open_options(&settings);
-  menu_option_value(&menu, MENU_CONFIG_FIRST, value, sizeof value);
+  menu_option_value(&menu, MENU_SHOW_FPS, value, sizeof value);
   check(strcmp(value, "On") == 0, "a setting the menu saved wins over config.txt");
-  menu_option_value(&menu, MENU_CONFIG_FIRST + 1, value, sizeof value);
+  menu_option_value(&menu, MENU_VOLUME, value, sizeof value);
   check(strcmp(value, "50%") == 0, "a setting never changed is read from config.txt");
-  menu_option_value(&menu, MENU_CONFIG_FIRST + 2, value, sizeof value);
+  menu_option_value(&menu, MENU_BATTERY_SAVER, value, sizeof value);
   check(strcmp(value, "Off") == 0, "a value the menu does not offer shows the default");
-  menu_option_value(&menu, MENU_CONFIG_FIRST + 4, value, sizeof value);
+  menu_option_value(&menu, MENU_CHECK_UPDATES, value, sizeof value);
   check(strcmp(value, "On") == 0, "a setting in neither file shows the default");
 
-  select_row(&menu, MENU_CONFIG_FIRST + 1);
+  select_setting(&menu, MENU_VOLUME);
   press(&menu, MENU_RIGHT);
   check(file_is(pico8_config_path, "show_fps 1\nsplore_filter 1\nvolume 192\n"),
         "changing a setting adds it and keeps the others");
-  select_row(&menu, MENU_CONFIG_FIRST);
+  select_setting(&menu, MENU_SHOW_FPS);
   press(&menu, MENU_LEFT);
   check(file_is(pico8_config_path, "show_fps 0\nsplore_filter 1\nvolume 192\n"),
         "changing it again replaces its line");
-  select_row(&menu, MENU_CONFIG_FIRST + 2);
+  select_setting(&menu, MENU_BATTERY_SAVER);
   press(&menu, MENU_RIGHT);
   check(file_is(pico8_config_path, "show_fps 0\nsplore_filter 1\nvolume 192\nforeground_sleep_ms 10\n"),
         "Battery Saver writes a longer sleep");
@@ -458,7 +494,7 @@ static void test_drawing(const char *minui_font, const char *nextui_font)
         struct menu menu;
         int pill = gfx_u(&m, GFX_PILL_SIZE);
         int top = (h - gfx_u(&m, m.padding * 2) - MENU_ROOT_COUNT * pill) / 2 + gfx_u(&m, m.padding);
-        int row;
+        int group, row, rows;
 
         gfx_theme_init(&theme, styles[t], NULL);
         menu_open(&menu, &settings,
@@ -474,12 +510,22 @@ static void test_drawing(const char *minui_font, const char *nextui_font)
                           gfx_selected_pill(&theme);
         dimmed &= canvas.pixels[(size_t)(h / 2) * w + w - 1] == GFX_ARGB(0x5f5f5f);
 
+        /* Options, then every row of every group's page */
         press(&menu, MENU_DOWN);
         press(&menu, MENU_A);
-        for (row = 0; row < MENU_OPTION_COUNT; row++) {
+        for (group = 0; group < MENU_GROUP_COUNT; group++) {
           menu_draw(&menu, &canvas, frame, font, &theme, &batteries[f]);
           all_inside &= guards_intact(&canvas);
           cleared &= canvas.pixels[(size_t)(h - 1) * w] == gfx_background(&theme);
+          press(&menu, MENU_A);
+          rows = group == MENU_GROUP_SHORTCUTS ? MENU_SHORTCUT_COUNT : menu_group_size(group);
+          for (row = 0; row < rows; row++) {
+            menu_draw(&menu, &canvas, frame, font, &theme, &batteries[f]);
+            all_inside &= guards_intact(&canvas);
+            cleared &= canvas.pixels[(size_t)(h - 1) * w] == gfx_background(&theme);
+            press(&menu, MENU_DOWN);
+          }
+          press(&menu, MENU_B);
           press(&menu, MENU_DOWN);
         }
         gfx_font_close(font);
@@ -553,23 +599,30 @@ static void test_indicator_drawing(void)
   free(canvas.pixels - GUARD);
 }
 
+/*
+ * Every page fits on a 480 line screen, so the list scrolls on a canvas too
+ * short for the Shortcuts page, which at the smallest scale fits five rows
+ */
 static void test_scrolling(void)
 {
   struct menu_settings settings;
   struct menu menu;
-  gfx_canvas canvas = guarded_canvas(640, 480);
+  gfx_canvas canvas = guarded_canvas(640, 100);
   gfx_font *font = gfx_font_open(NULL);
   gfx_theme theme;
 
   settings_for_test(&settings);
   gfx_theme_init(&theme, "minui", NULL);
   menu = open_options(&settings);
-  select_row(&menu, MENU_OPTION_COUNT - 1);
+  press(&menu, MENU_UP);
+  press(&menu, MENU_A);
+  press(&menu, MENU_UP);
   menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
-  check(menu.option_top > 0, "the last row scrolls the list on a 480 line screen");
+  check(menu.shortcut_row == MENU_SHORTCUT_COUNT - 1 && menu.shortcut_top > 0,
+        "the last row scrolls a list too long for the screen");
   press(&menu, MENU_DOWN);
   menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
-  check(menu.option_row == 0 && menu.option_top == 0, "Down from the last row wraps to the top");
+  check(menu.shortcut_row == 0 && menu.shortcut_top == 0, "Down from the last row wraps to the top");
   check(!menu.dirty, "drawing leaves the menu clean");
   gfx_font_close(font);
   free(canvas.pixels - GUARD);
@@ -883,7 +936,7 @@ static void test_shortcuts_page(void)
 
   menu = open_options(&settings);
   press(&menu, MENU_UP);
-  check(menu.option_row == MENU_SHORTCUTS_ROW, "Shortcuts is the last Options row");
+  check(menu.option_row == MENU_GROUP_SHORTCUTS, "Shortcuts is the last Options group");
   press(&menu, MENU_A);
   check(menu.page == MENU_PAGE_SHORTCUTS && menu.shortcut_row == 0, "A on it opens the Shortcuts page");
 
@@ -962,7 +1015,7 @@ static void test_shortcuts_page(void)
   press(&menu, MENU_UP);
 
   check(press(&menu, MENU_B) == MENU_STAY && menu.page == MENU_PAGE_OPTIONS &&
-            menu.option_row == MENU_SHORTCUTS_ROW,
+            menu.option_row == MENU_GROUP_SHORTCUTS,
         "B goes back to Options on the Shortcuts row");
   unlink(path);
 }
@@ -1090,7 +1143,7 @@ static void test_splore_covers(void)
   settings.tag = "PICO";
   settings.splore_covers_dir = covers;
   menu = open_options(&settings);
-  select_row(&menu, MENU_SPLORE_ARTWORK);
+  select_setting(&menu, MENU_SPLORE_ARTWORK);
   press(&menu, MENU_RIGHT);
 
   snprintf(path, sizeof path, "%s/.media/1) Splore.png", folder);

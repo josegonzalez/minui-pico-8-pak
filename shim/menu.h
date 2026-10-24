@@ -1,8 +1,9 @@
 /*
  * The in-game menu, laid out as minarch's: Continue, Save, Load, Options and
  * Quit over the dimmed game, with Save and Load shown but unavailable until
- * the pak has save states, and an Options page for the pak's settings and the
- * PICO-8 settings it writes into config.txt.
+ * the pak has save states, and an Options page of groups, Frontend, Emulator,
+ * Splore and Shortcuts, for the pak's settings and the PICO-8 settings it
+ * writes into config.txt.
  *
  * Every setting is saved the moment it changes, to the same files launch.sh
  * reads, so there is no page for saving them. Like gfx.c, nothing here calls
@@ -38,23 +39,43 @@ enum menu_indicator { MENU_INDICATOR_NONE, MENU_INDICATOR_BRIGHTNESS, MENU_INDIC
 #define MENU_BRIGHTNESS_MAX 10
 #define MENU_VOLUME_MAX 20
 
-enum menu_page { MENU_PAGE_ROOT, MENU_PAGE_OPTIONS, MENU_PAGE_SHORTCUTS };
+/*
+ * Options lists the groups, as minarch's does, and each group but Shortcuts
+ * opens a page of its settings
+ */
+enum menu_page { MENU_PAGE_ROOT, MENU_PAGE_OPTIONS, MENU_PAGE_GROUP, MENU_PAGE_SHORTCUTS };
 
 enum menu_root_row { MENU_CONTINUE, MENU_SAVE, MENU_LOAD, MENU_OPTIONS, MENU_EXIT, MENU_ROOT_COUNT };
 
-enum menu_option_row {
+enum menu_group {
+  MENU_GROUP_FRONTEND,
+  MENU_GROUP_EMULATOR,
+  MENU_GROUP_SPLORE,
+  MENU_GROUP_SHORTCUTS,
+  MENU_GROUP_COUNT,
+};
+
+/* every setting the groups hold, whichever group shows it */
+enum menu_setting {
   MENU_SCREEN_MODE,
   MENU_OVERLAY,
   MENU_COPY_CARTS,
   MENU_SPLORE_ARTWORK,
-  /* the PICO-8 settings follow, one row each */
+  /* the PICO-8 settings follow, one each, in the order config_options in menu.c lists them */
   MENU_CONFIG_FIRST,
+  MENU_SHOW_FPS = MENU_CONFIG_FIRST,
+  MENU_VOLUME,
+  MENU_BATTERY_SAVER,
+  MENU_HIDE_MATURE,
+  MENU_CHECK_UPDATES,
+  MENU_SETTING_COUNT,
 };
 
-#define MENU_CONFIG_COUNT 5
-/* the last Options row opens the Shortcuts page */
-#define MENU_SHORTCUTS_ROW (MENU_CONFIG_FIRST + MENU_CONFIG_COUNT)
-#define MENU_OPTION_COUNT (MENU_SHORTCUTS_ROW + 1)
+#define MENU_CONFIG_COUNT (MENU_SETTING_COUNT - MENU_CONFIG_FIRST)
+
+/* how many settings a group shows, none for Shortcuts, and which is at a row */
+int menu_group_size(int group);
+int menu_group_setting(int group, int row);
 
 /* what a shortcut does, one row each of the Shortcuts page */
 enum menu_shortcut {
@@ -140,9 +161,13 @@ struct menu {
 
   enum menu_page page;
   int root_row;
+  /* the group selected on the Options page */
   int option_row;
-  /* the first option row on screen, when they do not all fit */
+  /* the first row on screen of each page, when they do not all fit */
   int option_top;
+  /* the row selected on the open group's page, an index into the group */
+  int setting_row;
+  int setting_top;
   int shortcut_row;
   int shortcut_top;
   /* the shortcut waiting for a button to be pressed for it, or -1 */
@@ -201,8 +226,8 @@ void menu_indicator_size(int canvas_w, int canvas_h, int *w, int *h);
 void menu_draw_indicator(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
                          int x, int y, enum menu_indicator indicator, int value);
 
-/* the text an option row shows for its current value */
-void menu_option_value(const struct menu *menu, int row, char *out, size_t size);
+/* the text a setting's row shows for its current value */
+void menu_option_value(const struct menu *menu, int setting, char *out, size_t size);
 
 /* reads the shortcuts saved at path, leaving every other one unbound */
 void menu_read_shortcuts(const char *path, struct menu_binding *shortcuts);

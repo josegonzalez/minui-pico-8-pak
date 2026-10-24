@@ -97,7 +97,7 @@ The menu takes its look from the launcher, using NextUI's theme colours and font
 
 #### Shortcuts
 
-The last row of the options, `Shortcuts`, sets buttons that do something straight away while a game is running, as NextUI's own shortcuts do. Every shortcut starts unbound.
+The last group of the options, `Shortcuts`, sets buttons that do something straight away while a game is running, as NextUI's own shortcuts do. Every shortcut starts unbound.
 
 | Shortcut          | What it does                                                          |
 | ----------------- | --------------------------------------------------------------------- |
@@ -127,21 +127,21 @@ The pak reads the volume and brightness from the launcher's own settings library
 
 #### Options
 
-Use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. Each change is saved to the SD card straight away, and `B` goes back.
+`Options` lists four groups, as the options in MinUI and NextUI's own emulators are grouped: `Frontend`, `Emulator`, `Splore` and `Shortcuts`. Press `A` or `Right` to open one and `B` to go back. In a group, use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. Each change is saved to the SD card straight away.
 
-| Setting            | Values                  | Takes effect                |
-| ------------------ | ----------------------- | --------------------------- |
-| Screen Mode        | Standard, Stretched     | When the menu closes        |
-| Overlay            | None, or any overlay    | When the menu closes        |
-| Copy Splore Carts  | Off, All, Favourites    | When you exit Splore        |
-| Splore Artwork     | Standard, Fancy         | Straight away               |
-| Show FPS           | Off, On                 | The next time a game starts |
-| Volume             | 0%, 25%, 50%, 75%, 100% | The next time a game starts |
-| Battery Saver      | Off, On                 | The next time a game starts |
-| Hide Mature Carts  | Off, On                 | The next time a game starts |
-| Check Cart Updates | Off, On                 | The next time a game starts |
+| Group    | Setting            | Values                  | Takes effect                |
+| -------- | ------------------ | ----------------------- | --------------------------- |
+| Frontend | Screen Mode        | Standard, Stretched     | When the menu closes        |
+| Frontend | Overlay            | None, or any overlay    | When the menu closes        |
+| Frontend | Show FPS           | Off, On                 | The next time a game starts |
+| Emulator | Volume             | 0%, 25%, 50%, 75%, 100% | The next time a game starts |
+| Emulator | Battery Saver      | Off, On                 | The next time a game starts |
+| Splore   | Copy Splore Carts  | Off, All, Favourites    | When you exit Splore        |
+| Splore   | Splore Artwork     | Standard, Fancy         | Straight away               |
+| Splore   | Hide Mature Carts  | Off, On                 | The next time a game starts |
+| Splore   | Check Cart Updates | Off, On                 | The next time a game starts |
 
-See [Screen Mode](#screen-mode), [Overlay](#overlay), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the first four. The rest are PICO-8's own settings:
+`Shortcuts` opens its own page, described [below](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
 
 - `Show FPS` draws the frame rate in the corner of the screen.
 - `Volume` is PICO-8's own volume, which applies under the device's volume.
@@ -243,11 +243,11 @@ To exit Splore, choose a game and follow the normal process of exiting a game.
 
 You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png` and `.res/1) Splore.p8.png`.
 
-The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover. To use it, set `Splore Artwork` in the [in-game menu](#in-game-menu)'s options to `Fancy`, and set it back to `Standard` to return to the usual one. The choice is saved to a file named `splore-artwork` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. As soon as you change it, the cover of every Splore cart in a roms folder tagged `(PICO)` is changed to match, renamed carts included. Only covers that are still one of the pak's two are changed, so artwork of your own, or a cart with no artwork, is left alone. A Splore cart the pak creates later gets the chosen cover from the start.
+The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover. To use it, set `Splore Artwork` in the `Splore` options of the [in-game menu](#in-game-menu) to `Fancy`, and set it back to `Standard` to return to the usual one. The choice is saved to a file named `splore-artwork` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. As soon as you change it, the cover of every Splore cart in a roms folder tagged `(PICO)` is changed to match, renamed carts included. Only covers that are still one of the pak's two are changed, so artwork of your own, or a cart with no artwork, is left alone. A Splore cart the pak creates later gets the chosen cover from the start.
 
 ### Copying Splore carts into your roms folder
 
-Carts downloaded via Splore are only available via Splore. To copy them into your roms folder as well, set `Copy Splore Carts` in the [in-game menu](#in-game-menu)'s options to `All` or `Favourites`. The menu does this by writing the files described below, and removes any of them it finds when you change the setting.
+Carts downloaded via Splore are only available via Splore. To copy them into your roms folder as well, set `Copy Splore Carts` in the `Splore` options of the [in-game menu](#in-game-menu) to `All` or `Favourites`. The menu does this by writing the files described below, and removes any of them it finds when you change the setting.
 
 You can also create a file named `copy-carts` yourself, in either the `/.userdata/$PLATFORM/Pico-8-native` or the `/.userdata/shared/Pico-8-native` folder on your SD card. The file can be empty, and it needs no extension - if your computer hides extensions, check on a terminal that it is not really named `copy-carts.txt`.
 
@@ -351,13 +351,13 @@ Please note that using `stretched` mode may look unnatural for games with circul
 
 `stretched` mode needs to know the size of your screen. It reads that from `fbset` where the device provides one, and otherwise falls back to the panel size for your model, which is known for every `h700` device. On the RG28XX, NextUI rotates the display for applications, so both screen modes look the same there as they do on the other models.
 
-You can also switch between the two while a game is running, with `Screen Mode` in the [in-game menu](#in-game-menu)'s options. The mode you switch to is saved to the `screen-mode` file, so the next game starts in it too.
+You can also switch between the two while a game is running, with `Screen Mode` in the `Frontend` options of the [in-game menu](#in-game-menu). The mode you switch to is saved to the `screen-mode` file, so the next game starts in it too.
 
 ### Overlay
 
 A PNG in the `/Overlays/PICO` folder on your SD card is drawn over the game, for a bezel or border. This follows the layout NextUI uses for its own emulators' overlays, a folder under `/Overlays` named for the tag at the end of the roms folder, which is `(PICO)` for this pak. The pak creates the folder the first time you launch a game.
 
-While a game is running, choose one with `Overlay` in the [in-game menu](#in-game-menu)'s options, which steps through `None` and then every PNG in the folder, in name order. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
+While a game is running, choose one with `Overlay` in the `Frontend` options of the [in-game menu](#in-game-menu), which steps through `None` and then every PNG in the folder, in name order. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
 
 The PNG is decoded by the pak itself, so overlays work the same on every platform. The image is scaled to fit the screen without changing its shape and centred, leaving any space around it uncovered, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left, so a 4:3 image fills the screen. The Trimui Smart Pro also uses the `tg5040` build, and its 1280x720 screen is 16:9, so a 4:3 image there has bars at the sides and a 16:9 image fills it. No overlay is drawn in `stretched` mode, where the game fills the screen.
 

@@ -76,6 +76,34 @@ static const char *const option_descriptions[MENU_CONFIG_FIRST] = {
     "The cover the Splore cart shows in the game list.\nApplies straight away.",
 };
 
+static const int frontend_settings[] = {MENU_SCREEN_MODE, MENU_OVERLAY, MENU_SHOW_FPS};
+static const int emulator_settings[] = {MENU_VOLUME, MENU_BATTERY_SAVER};
+static const int splore_settings[] = {MENU_COPY_CARTS, MENU_SPLORE_ARTWORK, MENU_HIDE_MATURE,
+                                      MENU_CHECK_UPDATES};
+
+/* the Options page's rows, each the title of the page of settings it opens */
+static const struct group {
+  const char *label;
+  const char *description;
+  int count;
+  const int *settings;
+} groups[MENU_GROUP_COUNT] = {
+    {"Frontend", "The screen mode, the overlay and the frame rate.", 3, frontend_settings},
+    {"Emulator", "PICO-8's own volume and battery saver.", 2, emulator_settings},
+    {"Splore", "Copying Splore's carts, its cover and what it shows.", 4, splore_settings},
+    {"Shortcuts", "Buttons for a screenshot, quitting, resetting the game and more.", 0, NULL},
+};
+
+int menu_group_size(int group)
+{
+  return groups[group].count;
+}
+
+int menu_group_setting(int group, int row)
+{
+  return groups[group].settings[row];
+}
+
 void menu_read_line(const char *path, char *line, size_t size)
 {
   FILE *file = path != NULL ? fopen(path, "r") : NULL;
@@ -332,12 +360,9 @@ void menu_open(struct menu *menu, struct menu_settings *settings, const char *ti
   menu->dirty = 1;
 }
 
-/* the Shortcuts row opens a page rather than holding a value */
 static int choice_count(const struct menu *menu, int row)
 {
   switch (row) {
-  case MENU_SHORTCUTS_ROW:
-    return 1;
   case MENU_SCREEN_MODE:
     return MENU_SCREEN_MODE_COUNT;
   case MENU_OVERLAY:
@@ -358,9 +383,6 @@ static void choice_name(const struct menu *menu, int row, int choice, char *out,
   size_t length;
 
   switch (row) {
-  case MENU_SHORTCUTS_ROW:
-    snprintf(out, size, "%s", "");
-    break;
   case MENU_SCREEN_MODE:
     snprintf(out, size, "%s", screen_mode_names[choice]);
     break;
@@ -388,8 +410,6 @@ static void choice_name(const struct menu *menu, int row, int choice, char *out,
 static int current_choice(const struct menu *menu, int row)
 {
   switch (row) {
-  case MENU_SHORTCUTS_ROW:
-    return 0;
   case MENU_SCREEN_MODE:
     return menu->settings->screen_mode;
   case MENU_OVERLAY:
@@ -585,8 +605,6 @@ static void step_option(struct menu *menu, int row, int step)
   int choice = (current_choice(menu, row) + step + count) % count;
 
   switch (row) {
-  case MENU_SHORTCUTS_ROW:
-    break;
   case MENU_SCREEN_MODE:
     set_screen_mode(settings, choice);
     break;
@@ -628,8 +646,12 @@ static void move_row(struct menu *menu, int step)
     } while (!root_row_enabled(menu->root_row));
   } else if (menu->page == MENU_PAGE_SHORTCUTS) {
     menu->shortcut_row = (menu->shortcut_row + step + MENU_SHORTCUT_COUNT) % MENU_SHORTCUT_COUNT;
+  } else if (menu->page == MENU_PAGE_GROUP) {
+    int count = menu_group_size(menu->option_row);
+
+    menu->setting_row = (menu->setting_row + step + count) % count;
   } else {
-    menu->option_row = (menu->option_row + step + MENU_OPTION_COUNT) % MENU_OPTION_COUNT;
+    menu->option_row = (menu->option_row + step + MENU_GROUP_COUNT) % MENU_GROUP_COUNT;
   }
 }
 
@@ -720,24 +742,35 @@ enum menu_result menu_update(struct menu *menu, unsigned pressed, unsigned held,
     return MENU_STAY;
   }
 
+  if (menu->page == MENU_PAGE_GROUP) {
+    if (pressed & MENU_B) {
+      menu->page = MENU_PAGE_OPTIONS;
+      menu->dirty = 1;
+    } else if (pressed & (MENU_LEFT | MENU_RIGHT | MENU_A)) {
+      step_option(menu, menu_group_setting(menu->option_row, menu->setting_row),
+                  pressed & MENU_LEFT ? -1 : 1);
+      menu->dirty = 1;
+    }
+    return MENU_STAY;
+  }
+
   if (pressed & MENU_B) {
     menu->page = MENU_PAGE_ROOT;
     menu->dirty = 1;
     return MENU_STAY;
   }
 
-  if (menu->option_row == MENU_SHORTCUTS_ROW) {
-    if (pressed & (MENU_RIGHT | MENU_A)) {
+  /* B on a group's page comes back to it here, as it does from Shortcuts */
+  if (pressed & (MENU_RIGHT | MENU_A)) {
+    if (menu->option_row == MENU_GROUP_SHORTCUTS) {
       menu->page = MENU_PAGE_SHORTCUTS;
       menu->shortcut_row = 0;
       menu->shortcut_top = 0;
-      menu->dirty = 1;
+    } else {
+      menu->page = MENU_PAGE_GROUP;
+      menu->setting_row = 0;
+      menu->setting_top = 0;
     }
-    return MENU_STAY;
-  }
-
-  if (pressed & (MENU_LEFT | MENU_RIGHT | MENU_A)) {
-    step_option(menu, menu->option_row, pressed & MENU_LEFT ? -1 : 1);
     menu->dirty = 1;
   }
 
@@ -1040,17 +1073,11 @@ static int wrap_description(const gfx_font *font, int px, const char *text, int 
 
 static const char *option_label(int row)
 {
-  if (row == MENU_SHORTCUTS_ROW) {
-    return "Shortcuts";
-  }
   return row < MENU_CONFIG_FIRST ? option_labels[row] : config_options[row - MENU_CONFIG_FIRST].label;
 }
 
 static const char *option_description(int row)
 {
-  if (row == MENU_SHORTCUTS_ROW) {
-    return "Buttons for a screenshot, quitting, resetting the game and more.";
-  }
   return row < MENU_CONFIG_FIRST ? option_descriptions[row]
                                  : config_options[row - MENU_CONFIG_FIRST].description;
 }
@@ -1068,10 +1095,28 @@ struct list_page {
   void (*value)(const struct menu *menu, int row, char *out, size_t size);
 };
 
-static const char *options_label(const struct menu *menu, int row)
+static const char *groups_label(const struct menu *menu, int row)
 {
   (void)menu;
-  return option_label(row);
+  return groups[row].label;
+}
+
+/* a group opens a page rather than holding a value */
+static void groups_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  (void)menu;
+  (void)row;
+  snprintf(out, size, "%s", "");
+}
+
+static const char *group_label(const struct menu *menu, int row)
+{
+  return option_label(menu_group_setting(menu->option_row, row));
+}
+
+static void group_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  menu_option_value(menu, menu_group_setting(menu->option_row, row), out, size);
 }
 
 static const char *shortcuts_label(const struct menu *menu, int row)
@@ -1177,20 +1222,41 @@ static void draw_list(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *
 static void draw_options(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
                          const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
 {
+  int small = gfx_u(m, GFX_FONT_SMALL), op = gfx_u(m, GFX_OPTION_PADDING);
+  struct list_page page = {"Options", MENU_GROUP_COUNT, menu->option_row, &menu->option_top, 0,
+                           groups[menu->option_row].description, groups_label, groups_value};
+  int row;
+
+  for (row = 0; row < MENU_GROUP_COUNT; row++) {
+    int w = gfx_text_width(font, small, groups[row].label) + 4 * op;
+    page.widest = w > page.widest ? w : page.widest;
+  }
+
+  draw_list(menu, canvas, m, font, theme, battery, &page);
+}
+
+/* a group's settings, as wide as any of their values needs */
+static void draw_group(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                       const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
+{
+  const struct group *group = &groups[menu->option_row];
   int small = gfx_u(m, GFX_FONT_SMALL), tiny = gfx_u(m, GFX_FONT_TINY);
   int op = gfx_u(m, GFX_OPTION_PADDING);
-  struct list_page page = {"Options", MENU_OPTION_COUNT, menu->option_row, &menu->option_top, 0,
-                           option_description(menu->option_row), options_label,
-                           menu_option_value};
+  struct list_page page = {group->label, group->count, menu->setting_row, &menu->setting_top, 0,
+                           option_description(group->settings[menu->setting_row]), group_label,
+                           group_value};
   char value[256];
   int row, choice;
 
-  for (row = 0; row < MENU_OPTION_COUNT; row++) {
-    for (choice = 0; choice < choice_count(menu, row); choice++) {
+  for (row = 0; row < group->count; row++) {
+    int setting = group->settings[row];
+
+    for (choice = 0; choice < choice_count(menu, setting); choice++) {
       int w;
 
-      choice_name(menu, row, choice, value, sizeof value);
-      w = gfx_text_width(font, small, option_label(row)) + gfx_text_width(font, tiny, value) + 4 * op;
+      choice_name(menu, setting, choice, value, sizeof value);
+      w = gfx_text_width(font, small, option_label(setting)) + gfx_text_width(font, tiny, value) +
+          4 * op;
       page.widest = w > page.widest ? w : page.widest;
     }
   }
@@ -1261,6 +1327,8 @@ void menu_draw(struct menu *menu, gfx_canvas *canvas, const uint32_t *frame, con
     draw_root(menu, canvas, &metrics, frame, font, theme, battery);
   } else if (menu->page == MENU_PAGE_SHORTCUTS) {
     draw_shortcuts(menu, canvas, &metrics, font, theme, battery);
+  } else if (menu->page == MENU_PAGE_GROUP) {
+    draw_group(menu, canvas, &metrics, font, theme, battery);
   } else {
     draw_options(menu, canvas, &metrics, font, theme, battery);
   }

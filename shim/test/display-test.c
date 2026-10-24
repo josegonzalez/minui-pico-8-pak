@@ -50,8 +50,11 @@
 
 #define BIT(button) (1u << (button))
 
-/* the menu's Options rows, in order */
-enum { ROW_SCREEN_MODE, ROW_OVERLAY, ROW_COPY_CARTS, ROW_SPLORE_ARTWORK, ROW_SHOW_FPS, ROW_VOLUME };
+/* the menu's Options groups, in order, and the rows the tests change in each */
+enum { GROUP_FRONTEND, GROUP_EMULATOR, GROUP_SPLORE };
+enum { ROW_SCREEN_MODE = 0, ROW_OVERLAY = 1 };
+enum { ROW_VOLUME = 0 };
+enum { ROW_COPY_CARTS = 0, ROW_SPLORE_ARTWORK = 1 };
 
 /* what pico-8 calls, answered by the shim and passed on to the fake */
 void SDL_RenderPresent(void *renderer);
@@ -369,16 +372,23 @@ static void set_script(const uint32_t *states, int count)
 }
 
 /*
- * Taps Menu, opens Options and steps the option on row by steps, then backs
- * out with B twice. Every press is followed by a release, as a thumb would.
+ * Taps Menu, opens Options and the group, steps the setting on row by steps,
+ * then backs out with B three times. Every press is followed by a release, as
+ * a thumb would.
  */
-static void change_option(void *pad, void *renderer, int row, int steps)
+static void change_option(void *pad, void *renderer, int group, int row, int steps)
 {
   uint32_t states[32];
   int count = 0, i;
 
   states[count++] = BIT(BUTTON_DPAD_DOWN);
   states[count++] = 0;
+  states[count++] = BIT(BUTTON_A);
+  states[count++] = 0;
+  for (i = 0; i < group; i++) {
+    states[count++] = BIT(BUTTON_DPAD_DOWN);
+    states[count++] = 0;
+  }
   states[count++] = BIT(BUTTON_A);
   states[count++] = 0;
   for (i = 0; i < row; i++) {
@@ -389,6 +399,8 @@ static void change_option(void *pad, void *renderer, int row, int steps)
     states[count++] = BIT(steps < 0 ? BUTTON_DPAD_LEFT : BUTTON_DPAD_RIGHT);
     states[count++] = 0;
   }
+  states[count++] = BIT(BUTTON_B);
+  states[count++] = 0;
   states[count++] = BIT(BUTTON_B);
   states[count++] = 0;
   states[count++] = BIT(BUTTON_B);
@@ -463,7 +475,7 @@ static void test_overlays(void *pad)
   SDL_RenderPresent(&renderer_a);
   check(fake.surfaces == 1 && fake.copies == 2, "the texture is reused on the next frame");
 
-  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  change_option(pad, &renderer_a, GROUP_FRONTEND, ROW_OVERLAY, 1);
   check(file_is(choice_path, "z.png"), "stepping Overlay right moves to z.png and saves it");
   copies = fake.copies;
   SDL_RenderPresent(&renderer_a);
@@ -472,13 +484,13 @@ static void test_overlays(void *pad)
   SDL_RenderPresent(&renderer_a);
   check(fake.copies == copies && fake.surfaces == 1, "an unreadable PNG is not retried every frame");
 
-  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  change_option(pad, &renderer_a, GROUP_FRONTEND, ROW_OVERLAY, 1);
   check(file_is(choice_path, "disabled"), "the next step right disables the overlay");
   copies = fake.copies;
   SDL_RenderPresent(&renderer_a);
   check(fake.copies == copies, "nothing is drawn while disabled");
 
-  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  change_option(pad, &renderer_a, GROUP_FRONTEND, ROW_OVERLAY, 1);
   check(file_is(choice_path, "a.png"),
         "the overlays wrap around to a.png, skipping ._ files and other types");
   copies = fake.copies;
@@ -490,9 +502,9 @@ static void test_overlays(void *pad)
   check(fake.copies == copies + 1 && rect_is(copy->dst, 0, 0, FAKE_OUTPUT_W, FAKE_OUTPUT_H),
         "a 4:3 overlay fills a 4:3 screen");
 
-  change_option(pad, &renderer_a, ROW_OVERLAY, -1);
+  change_option(pad, &renderer_a, GROUP_FRONTEND, ROW_OVERLAY, -1);
   check(file_is(choice_path, "disabled"), "stepping left from the first overlay disables it");
-  change_option(pad, &renderer_a, ROW_OVERLAY, 1);
+  change_option(pad, &renderer_a, GROUP_FRONTEND, ROW_OVERLAY, 1);
   check(file_is(choice_path, "a.png"), "stepping right comes back to it");
 
   SDL_DestroyRenderer(&renderer_a);
@@ -853,7 +865,7 @@ static void test_screen_mode(void *pad)
   copy = &fake.copy[fake.copies - 1];
   check(rect_is(copy->dst, 128, 0, 768, 768), "standard mode leaves pico-8's copies alone");
 
-  change_option(pad, &renderer_b, ROW_SCREEN_MODE, 1);
+  change_option(pad, &renderer_b, GROUP_FRONTEND, ROW_SCREEN_MODE, 1);
   check(file_is(screen_mode_path, "stretched"), "stepping Screen Mode right saves stretched");
 
   SDL_RenderCopy(&renderer_b, &game_texture, NULL, &game);
@@ -868,7 +880,7 @@ static void test_screen_mode(void *pad)
   SDL_RenderPresent(&renderer_b);
   check(fake.copies == copies, "no overlay is drawn in stretched mode");
 
-  change_option(pad, &renderer_b, ROW_SCREEN_MODE, -1);
+  change_option(pad, &renderer_b, GROUP_FRONTEND, ROW_SCREEN_MODE, -1);
   check(file_is(screen_mode_path, "standard"), "stepping it back saves standard");
   SDL_RenderCopy(&renderer_b, &game_texture, NULL, &game);
   copy = &fake.copy[fake.copies - 1];
@@ -879,14 +891,14 @@ static void test_settings(void *pad)
 {
   char path[8192];
 
-  change_option(pad, &renderer_b, ROW_COPY_CARTS, 1);
+  change_option(pad, &renderer_b, GROUP_SPLORE, ROW_COPY_CARTS, 1);
   snprintf(path, sizeof path, "%s/copy-carts", copy_carts_dir);
   check(access(path, F_OK) == 0, "Copy Splore Carts writes its marker to the userdata folder");
 
-  change_option(pad, &renderer_b, ROW_SPLORE_ARTWORK, 1);
+  change_option(pad, &renderer_b, GROUP_SPLORE, ROW_SPLORE_ARTWORK, 1);
   check(file_is(splore_artwork_path, "fancy"), "Splore Artwork saves the fancy cover");
 
-  change_option(pad, &renderer_b, ROW_VOLUME, -1);
+  change_option(pad, &renderer_b, GROUP_EMULATOR, ROW_VOLUME, -1);
   check(file_is(pico8_config_path, "volume 192"),
         "Volume steps down from the installed config.txt's value and saves it");
 }
