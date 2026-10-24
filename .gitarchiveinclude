@@ -7,4 +7,5 @@ bin/rg35xxplus/minui-presenter
 bin/tg5040/minui-presenter
 bin/tg5050/minui-presenter
 lib/h700/sdl-nosensor.so
-lib/tg5040/sdl-display.so
+lib/arm/sdl-display.so
+lib/arm64/sdl-display.so

@@ -509,8 +509,36 @@ setup_sdl_preload() {
   export LD_PRELOAD="$sdl_shim${LD_PRELOAD:+:$LD_PRELOAD}"
 }
 
+# The display shim is preloaded into pico-8, so it has to match the binary
+# rather than uname -m: rg35xxplus reports its 64-bit kernel while MinUI's
+# userland, and the pico8_dyn get_pico_bin picks for it, are 32-bit.
+get_pico_architecture() {
+  if [ "$(get_pico_bin)" = "pico8_64" ]; then
+    echo "arm64"
+    return 0
+  fi
+
+  echo "arm"
+}
+
+# The pad button each platform's controller mapping reports for Menu, which the
+# shim pairs with Select to quit. TrimUI's mapping puts Menu on the pad's Start,
+# and the h700 and my355 mappings on its guide button. rg35xxplus has none:
+# MinUI's pads map no Menu button, and Select + Start would take Start from games.
+get_menu_button() {
+  case "$PLATFORM" in
+  tg5040 | tg5050)
+    echo "start"
+    ;;
+  h700 | my355)
+    echo "guide"
+    ;;
+  esac
+}
+
 # pico-8 cannot draw a bezel itself, so the shim draws one over every frame.
-# Overlays live where NextUI keeps them for its libretro cores.
+# Overlays live where NextUI keeps them for its libretro cores, a folder named
+# for the emulator tag under /Overlays, which is the name the pak folder carries.
 get_overlay_dir() {
   echo "$SDCARD_PATH/Overlays/$PAK_NAME"
 }
@@ -526,11 +554,11 @@ has_overlays() {
 }
 
 # The shim also switches the screen mode in game with Select + Up/Down, so it
-# is loaded whenever the platform ships it, overlays or not. Returns non-zero
-# when it is not loaded, so the caller knows to stretch pico-8 itself.
+# is loaded whenever the pak ships it, overlays or not. Returns non-zero when it
+# is not loaded, so the caller knows to stretch pico-8 itself.
 setup_display_preload() {
   overlay_dir="$(get_overlay_dir)"
-  display_shim="$PAK_DIR/lib/$PLATFORM/sdl-display.so"
+  display_shim="$PAK_DIR/lib/$(get_pico_architecture)/sdl-display.so"
   if [ ! -f "$display_shim" ]; then
     if has_overlays; then
       echo "No display shim at $display_shim, starting pico-8 without overlays from $overlay_dir" 1>&2
@@ -538,10 +566,16 @@ setup_display_preload() {
     return 1
   fi
 
+  # NextUI's own skeleton creates the overlay folder for each of its cores, and
+  # nothing creates one for this pak, so it is made here for the user to fill
+  mkdir -p "$overlay_dir"
+
   # the shim saves the Select + d-pad choices to these files itself
   export PICO_PAK_OVERLAY_DIR="$overlay_dir"
   export PICO_PAK_OVERLAY_CHOICE="$USERDATA_PATH/Pico-8-native/overlay"
   export PICO_PAK_SCREEN_MODE="$USERDATA_PATH/Pico-8-native/screen-mode"
+  PICO_PAK_MENU_BUTTON="$(get_menu_button)"
+  export PICO_PAK_MENU_BUTTON
   export LD_PRELOAD="$display_shim${LD_PRELOAD:+:$LD_PRELOAD}"
 }
 

@@ -136,16 +136,41 @@ pak_platforms() {
   [[ "$output" == *"export-ignore: set"* ]]
 }
 
-@test "the display shim is injected into the release archive" {
-  grep -qx "lib/tg5040/sdl-display.so" "$REPO_ROOT/.gitarchiveinclude"
+# launch.sh preloads lib/$architecture/sdl-display.so on every platform, so
+# each architecture it can pick needs its own build
+@test "a display shim is built for every architecture" {
+  mk DISPLAY_SHIMS
+  [ "$output" = "lib/arm/sdl-display.so lib/arm64/sdl-display.so" ]
+}
+
+@test "every architecture's display shim is injected into the release archive" {
+  mk ARCHITECTURES
+  for architecture in $output; do
+    grep -qx "lib/$architecture/sdl-display.so" "$REPO_ROOT/.gitarchiveinclude"
+  done
 }
 
 @test "the display shim is built rather than committed" {
-  run sh -c "cd '$REPO_ROOT' && git ls-files --error-unmatch lib/tg5040/sdl-display.so"
-  [ "$status" -ne 0 ]
+  mk ARCHITECTURES
+  for architecture in $output; do
+    run sh -c "cd '$REPO_ROOT' && git ls-files --error-unmatch lib/$architecture/sdl-display.so"
+    [ "$status" -ne 0 ]
 
-  run sh -c "cd '$REPO_ROOT' && git check-ignore -q lib/tg5040/sdl-display.so"
-  [ "$status" -eq 0 ]
+    run sh -c "cd '$REPO_ROOT' && git check-ignore -q lib/$architecture/sdl-display.so"
+    [ "$status" -eq 0 ]
+  done
+}
+
+# only tg5040 bundles an SDL2_image, and that copy needs the tg5040 system's
+# libpng and libjpeg, so the shim decodes overlays itself
+@test "the display shim decodes overlays without SDL2_image" {
+  ! grep -q 'libSDL2_image' "$REPO_ROOT/shim/sdl-display.c"
+  grep -q '#include "stb_image.h"' "$REPO_ROOT/shim/sdl-display.c"
+}
+
+@test "the png decoder is pinned by commit and checksum" {
+  grep -Eq '^ADD --checksum=sha256:[0-9a-f]{64} ' "$REPO_ROOT/shim/Dockerfile"
+  grep -Eq 'nothings/stb/[0-9a-f]{40}/stb_image.h' "$REPO_ROOT/shim/Dockerfile"
 }
 
 @test "the display shim source ships with the pak" {
