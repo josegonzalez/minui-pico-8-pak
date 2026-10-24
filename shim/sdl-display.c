@@ -3,8 +3,10 @@
  *
  * pico-8 has no overlay support of its own, but it draws through SDL's
  * renderer, so wrapping SDL_RenderPresent lets this copy an image over the
- * finished frame just before it reaches the screen. The image is stretched to
- * the whole screen and needs a transparent window where the game shows through.
+ * finished frame just before it reaches the screen. The image is scaled to fit
+ * the screen without changing its shape and needs a transparent window where
+ * the game shows through. The PNG is decoded here with stb_image, so overlays
+ * need nothing on the device beyond the SDL2 pico-8 already uses.
  *
  * launch.sh passes the overlay folder in PICO_PAK_OVERLAY_DIR. Select +
  * Left/Right steps through every PNG there and a disabled state, and the choice
@@ -18,8 +20,9 @@
  * done here by redirecting the copy pico-8 draws each frame with.
  *
  * Select + Menu quits pico-8 from a game, Splore or its command prompt by
- * pushing SDL_QUIT, the event closing its window sends. tg5040's controller
- * mapping reports the Menu button as the pad's Start.
+ * pushing SDL_QUIT, the event closing its window sends. Which pad button is
+ * Menu depends on the platform's controller mapping, so launch.sh names it in
+ * PICO_PAK_MENU_BUTTON, and without one there is no quit combo.
  *
  * Every SDL call goes through dlsym, like sdl-nosensor.c, so this builds without
  * SDL headers and asks glibc for nothing newer than that shim does. See
@@ -34,6 +37,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/*
+ * Only the PNG decoder is compiled, static so none of it is exported into
+ * pico-8, and without the HDR paths that would pull in libm. Its warnings are
+ * its own, so they are silenced for the include alone.
+ */
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+/* STBI_ONLY_PNG implies it, but too late to keep its declaration out */
+#define STBI_NO_GIF
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "stb_image.h"
+#pragma GCC diagnostic pop
 
 /* From SDL_rect.h, SDL_blendmode.h, SDL_events.h and SDL_gamecontroller.h. */
 typedef struct {
@@ -52,6 +72,7 @@ typedef struct {
 #define SDL_CONTROLLERBUTTONDOWN 0x650
 #define SDL_CONTROLLERBUTTONUP 0x651
 #define SDL_CONTROLLER_BUTTON_BACK 4
+#define SDL_CONTROLLER_BUTTON_GUIDE 5
 #define SDL_CONTROLLER_BUTTON_START 6
 #define SDL_CONTROLLER_BUTTON_DPAD_UP 11
 #define SDL_CONTROLLER_BUTTON_DPAD_DOWN 12
@@ -59,7 +80,7 @@ typedef struct {
 #define SDL_CONTROLLER_BUTTON_DPAD_RIGHT 14
 
 /* indexes into the state of the buttons pressed with Select below */
-enum { DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN, DIR_START, DIR_COUNT };
+enum { DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN, DIR_MENU, DIR_COUNT };
 
 static const char *const screen_modes[] = {"standard", "stretched"};
 #define SCREEN_MODE_COUNT ((int)(sizeof screen_modes / sizeof *screen_modes))
@@ -73,6 +94,8 @@ static struct {
   void *(*GameControllerOpen)(int);
   void (*GameControllerClose)(void *);
   uint8_t (*GameControllerGetButton)(void *, int);
+  void *(*CreateRGBSurfaceFrom)(void *, int, int, int, int, uint32_t, uint32_t, uint32_t,
+                                uint32_t);
   void *(*CreateTextureFromSurface)(void *, void *);
   void (*DestroyTexture)(void *);
   void (*FreeSurface)(void *);
@@ -108,6 +131,8 @@ static int loaded = -2;
 
 /* the pad pico-8 opened, which is the one read for the combo */
 static void *controller;
+/* the pad button launch.sh named as Menu, or -1 for no quit combo */
+static int menu_button = -1;
 static int select_held;
 /* a direction pressed with Select stays hidden from pico-8 until released */
 static int consumed[DIR_COUNT];
@@ -142,7 +167,8 @@ static int resolve_sdl(void)
   /* SDL 2.0.12 and up only, and only cosmetic, so its absence is not fatal */
   RESOLVE(SetTextureScaleMode);
 
-  resolved = RESOLVE(CreateTextureFromSurface) && RESOLVE(DestroyTexture) &&
+  resolved = RESOLVE(CreateRGBSurfaceFrom) && RESOLVE(CreateTextureFromSurface) &&
+                     RESOLVE(DestroyTexture) &&
                      RESOLVE(FreeSurface) &&
                      RESOLVE(SetTextureBlendMode) && RESOLVE(GetError) &&
                      RESOLVE(RenderCopy) && RESOLVE(RenderGetLogicalSize) &&
@@ -270,6 +296,20 @@ static const char *current_name(void)
   return current < 0 ? "disabled" : overlay_names[current];
 }
 
+static int read_menu_button(void)
+{
+  const char *name = getenv("PICO_PAK_MENU_BUTTON");
+
+  if (name != NULL && strcmp(name, "start") == 0) {
+    return SDL_CONTROLLER_BUTTON_START;
+  }
+  if (name != NULL && strcmp(name, "guide") == 0) {
+    return SDL_CONTROLLER_BUTTON_GUIDE;
+  }
+
+  return -1;
+}
+
 static void init_display(void)
 {
   static int done;
@@ -278,6 +318,11 @@ static void init_display(void)
     return;
   }
   done = 1;
+
+  menu_button = read_menu_button();
+  if (menu_button < 0) {
+    LOG("no Menu button named, Select + Menu will not quit pico-8\n");
+  }
 
   screen_mode_path = getenv("PICO_PAK_SCREEN_MODE");
   screen_mode = read_screen_mode();
@@ -330,10 +375,20 @@ static void request_quit(void)
   sdl.PushEvent(event);
 }
 
-/* Left and Right are only taken from pico-8 when there are overlays to pick. */
+/*
+ * Left and Right are only taken from pico-8 when there are overlays to pick,
+ * and Menu only when launch.sh named the button.
+ */
 static int has_action(int direction)
 {
-  return direction != DIR_LEFT && direction != DIR_RIGHT ? 1 : overlay_count > 0;
+  if (direction == DIR_LEFT || direction == DIR_RIGHT) {
+    return overlay_count > 0;
+  }
+  if (direction == DIR_MENU) {
+    return menu_button >= 0;
+  }
+
+  return 1;
 }
 
 /*
@@ -342,27 +397,27 @@ static int has_action(int direction)
  */
 static void update_combo(void)
 {
-  static const int buttons[DIR_COUNT] = {
-      SDL_CONTROLLER_BUTTON_DPAD_LEFT,
-      SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
-      SDL_CONTROLLER_BUTTON_DPAD_UP,
-      SDL_CONTROLLER_BUTTON_DPAD_DOWN,
-      SDL_CONTROLLER_BUTTON_START,
-  };
   static int was_down[DIR_COUNT];
+  int buttons[DIR_COUNT];
   int direction, down;
 
   if (controller == NULL || sdl.GameControllerGetButton == NULL) {
     return;
   }
 
+  buttons[DIR_LEFT] = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+  buttons[DIR_RIGHT] = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+  buttons[DIR_UP] = SDL_CONTROLLER_BUTTON_DPAD_UP;
+  buttons[DIR_DOWN] = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+  buttons[DIR_MENU] = menu_button;
+
   select_held = sdl.GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_BACK);
 
   for (direction = 0; direction < DIR_COUNT; direction++) {
-    down = sdl.GameControllerGetButton(controller, buttons[direction]);
+    down = buttons[direction] >= 0 && sdl.GameControllerGetButton(controller, buttons[direction]);
     if (down && !was_down[direction] && select_held && has_action(direction)) {
       consumed[direction] = 1;
-      if (direction == DIR_START) {
+      if (direction == DIR_MENU) {
         request_quit();
       } else if (direction == DIR_LEFT || direction == DIR_RIGHT) {
         cycle_overlay(direction == DIR_RIGHT ? 1 : -1);
@@ -379,6 +434,10 @@ static void update_combo(void)
 
 static int direction_of(int button)
 {
+  if (button >= 0 && button == menu_button) {
+    return DIR_MENU;
+  }
+
   switch (button) {
   case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
     return DIR_LEFT;
@@ -388,8 +447,6 @@ static int direction_of(int button)
     return DIR_UP;
   case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
     return DIR_DOWN;
-  case SDL_CONTROLLER_BUTTON_START:
-    return DIR_START;
   default:
     return -1;
   }
@@ -439,41 +496,38 @@ static int stretch_rect(void *renderer, const SDL_Rect *dst, SDL_Rect *out)
   return 1;
 }
 
+/*
+ * stb_image hands back RGBA bytes in memory order, which on these little endian
+ * devices is the mask set below. SDL copies the pixels into the texture, so both
+ * the surface and the pixels are freed as soon as it exists.
+ */
 static void *load_overlay(void *renderer, const char *name)
 {
-  static void *(*img_load)(const char *);
   char path[4096];
+  unsigned char *pixels;
+  int width, height;
   void *surface;
   void *texture;
 
-  if (img_load == NULL) {
-    /* found through the LD_LIBRARY_PATH launch.sh gives pico-8 */
-    void *image_lib = dlopen("libSDL2_image-2.0.so.0", RTLD_NOW);
-
-    if (image_lib == NULL) {
-      LOG("cannot load SDL2_image: %s\n", dlerror());
-      overlay_broken = 1;
-      return NULL;
-    }
-
-    img_load = (void *(*)(const char *))dlsym(image_lib, "IMG_Load");
-    if (img_load == NULL) {
-      LOG("SDL2_image has no IMG_Load\n");
-      overlay_broken = 1;
-      return NULL;
-    }
-  }
-
   snprintf(path, sizeof path, "%s/%s", overlay_dir, name);
 
-  surface = img_load(path);
+  pixels = stbi_load(path, &width, &height, NULL, 4);
+  if (pixels == NULL) {
+    LOG("cannot read %s: %s\n", path, stbi_failure_reason());
+    return NULL;
+  }
+
+  surface = sdl.CreateRGBSurfaceFrom(pixels, width, height, 32, width * 4, 0x000000ff,
+                                     0x0000ff00, 0x00ff0000, 0xff000000);
   if (surface == NULL) {
-    LOG("cannot read %s: %s\n", path, sdl.GetError());
+    LOG("cannot make a surface from %s: %s\n", path, sdl.GetError());
+    stbi_image_free(pixels);
     return NULL;
   }
 
   texture = sdl.CreateTextureFromSurface(renderer, surface);
   sdl.FreeSurface(surface);
+  stbi_image_free(pixels);
   if (texture == NULL) {
     LOG("cannot make a texture from %s: %s\n", path, sdl.GetError());
     return NULL;

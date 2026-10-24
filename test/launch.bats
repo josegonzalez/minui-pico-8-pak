@@ -352,47 +352,153 @@ teardown() {
   [ "$status" -eq 1 ]
 }
 
+@test "get_pico_architecture follows the pico-8 binary" {
+  PLATFORM=tg5040 architecture=arm64 run get_pico_architecture
+  [ "$output" = "arm64" ]
+  PLATFORM=h700 architecture=arm64 run get_pico_architecture
+  [ "$output" = "arm64" ]
+  PLATFORM=tg5040 architecture=arm run get_pico_architecture
+  [ "$output" = "arm" ]
+}
+
+# uname -m reports the 64-bit kernel on rg35xxplus, under a 32-bit userland
+@test "get_pico_architecture is arm on rg35xxplus whatever uname reports" {
+  PLATFORM=rg35xxplus architecture=arm64 run get_pico_architecture
+  [ "$output" = "arm" ]
+}
+
+@test "get_menu_button names the button each mapping reports for Menu" {
+  for platform in tg5040 tg5050; do
+    PLATFORM="$platform" run get_menu_button
+    [ "$output" = "start" ]
+  done
+  for platform in h700 my355; do
+    PLATFORM="$platform" run get_menu_button
+    [ "$output" = "guide" ]
+  done
+}
+
+# MinUI's pads map no Menu button, and Start is the real Start there
+@test "get_menu_button names nothing on rg35xxplus" {
+  PLATFORM=rg35xxplus run get_menu_button
+  [ "$output" = "" ]
+}
+
 # called without run so the exports survive
 @test "setup_display_preload preloads the shim when there is an overlay" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
-  mkdir -p "$PAK_DIR/lib/tg5040" "$SDCARD_PATH/Overlays/PICO"
-  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
+  mkdir -p "$PAK_DIR/lib/arm64" "$SDCARD_PATH/Overlays/PICO"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
   : >"$SDCARD_PATH/Overlays/PICO/bezel.png"
 
   PLATFORM=tg5040
+  architecture=arm64
   LD_PRELOAD=
   setup_display_preload
 
-  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm64/sdl-display.so" ]
   [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
   [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
   [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
+  [ "$PICO_PAK_MENU_BUTTON" = "start" ]
 }
 
 # the shim also switches the screen mode in game, which needs no overlay
 @test "setup_display_preload preloads the shim without any overlays" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
-  mkdir -p "$PAK_DIR/lib/tg5040"
-  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
+  mkdir -p "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
 
   PLATFORM=tg5040
+  architecture=arm64
   LD_PRELOAD=
   setup_display_preload
 
-  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm64/sdl-display.so" ]
 }
 
 @test "setup_display_preload preloads the shim in stretched mode" {
   PAK_DIR="$BATS_TEST_TMPDIR/pak"
-  mkdir -p "$PAK_DIR/lib/tg5040"
-  : >"$PAK_DIR/lib/tg5040/sdl-display.so"
+  mkdir -p "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
 
   PLATFORM=tg5040
+  architecture=arm64
   LD_PRELOAD=
   setup_display_preload
 
-  [ "$LD_PRELOAD" = "$PAK_DIR/lib/tg5040/sdl-display.so" ]
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm64/sdl-display.so" ]
+}
+
+@test "setup_display_preload preloads the shim on every arm64 platform" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+
+  for platform in h700 my355 tg5040 tg5050; do
+    PLATFORM="$platform"
+    architecture=arm64
+    LD_PRELOAD=
+    setup_display_preload
+
+    [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm64/sdl-display.so" ]
+  done
+}
+
+@test "setup_display_preload preloads the 32-bit shim on rg35xxplus" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm" "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm/sdl-display.so"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+
+  PLATFORM=rg35xxplus
+  architecture=arm64
+  LD_PRELOAD=
+  setup_display_preload
+
+  [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm/sdl-display.so" ]
+  [ "$PICO_PAK_MENU_BUTTON" = "" ]
+}
+
+@test "setup_display_preload passes the guide button as Menu on h700" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+
+  PLATFORM=h700
+  architecture=arm64
+  LD_PRELOAD=
+  setup_display_preload
+
+  [ "$PICO_PAK_MENU_BUTTON" = "guide" ]
+}
+
+# NextUI's skeleton creates Overlays/<TAG> for its own cores but not for paks
+@test "setup_display_preload creates the overlay folder" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+
+  PLATFORM=tg5040
+  architecture=arm64
+  LD_PRELOAD=
+  setup_display_preload
+
+  [ -d "$SDCARD_PATH/Overlays/PICO" ]
+}
+
+@test "setup_display_preload creates no overlay folder without the shim" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR"
+
+  PLATFORM=tg5040
+  architecture=arm64
+  LD_PRELOAD=
+  run setup_display_preload
+
+  [ "$status" -eq 1 ]
+  [ ! -d "$SDCARD_PATH/Overlays/PICO" ]
 }
 
 @test "setup_display_preload says so when the pak ships no shim" {
@@ -2171,8 +2277,8 @@ STUB
 
 @test "launch.sh leaves stretching to the display shim when it is loaded" {
   pak_dir="$(make_pak)"
-  mkdir -p "$pak_dir/lib/tg5040"
-  : >"$pak_dir/lib/tg5040/sdl-display.so"
+  mkdir -p "$pak_dir/lib/arm64"
+  : >"$pak_dir/lib/arm64/sdl-display.so"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
 
   make_bios
@@ -2189,7 +2295,7 @@ STUB
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 0 ]
-  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-display.so" "$LOGS_PATH/PICO.txt"
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/arm64/sdl-display.so" "$LOGS_PATH/PICO.txt"
   grep -q "^pico8 ARGS=" "$LOGS_PATH/PICO.txt"
   [ "$(grep -c "^pico8 ARGS=.*-draw_rect" "$LOGS_PATH/PICO.txt")" -eq 0 ]
 }
@@ -2198,8 +2304,8 @@ STUB
 # would load the pak's SDL2 and the display shim; sync is the first command run after
 @test "launch.sh restores the loader environment once pico-8 exits" {
   pak_dir="$(make_pak)"
-  mkdir -p "$pak_dir/lib/tg5040"
-  : >"$pak_dir/lib/tg5040/sdl-display.so"
+  mkdir -p "$pak_dir/lib/arm64"
+  : >"$pak_dir/lib/arm64/sdl-display.so"
   printf '#!/bin/sh\necho "sync LD_PRELOAD=$LD_PRELOAD"\necho "sync LD_LIBRARY_PATH=$LD_LIBRARY_PATH"\n' >"$STUB_BIN/sync"
   chmod +x "$STUB_BIN/sync"
 
@@ -2217,7 +2323,7 @@ STUB
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 0 ]
-  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/tg5040/sdl-display.so" "$LOGS_PATH/PICO.txt"
+  grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/arm64/sdl-display.so" "$LOGS_PATH/PICO.txt"
   grep -qx "sync LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
   [ "$(grep -c "^sync LD_PRELOAD=.*sdl-display" "$LOGS_PATH/PICO.txt")" -eq 0 ]
   grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/pico8/lib:$pak_dir/lib/tg5040:$pak_dir/lib/arm64:/inherited" \

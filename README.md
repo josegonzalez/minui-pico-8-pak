@@ -86,7 +86,7 @@ To exit a game:
 - select `Options`
 - select `shutdown Pico-8`
 
-On `tg5040`, you can also hold `Select` and press `Menu` to quit straight away, from a game, Splore, or PICO-8's command prompt.
+On `tg5040`, `tg5050`, `my355` and `h700`, you can also hold `Select` and press `Menu` to quit straight away, from a game, Splore, or PICO-8's command prompt. On `h700` this needs NextUI v6.14.0-rc11 or newer, the first release whose controller mapping includes the `Menu` button. `rg35xxplus` has no such shortcut, as MinUI's controller mapping does not include the `Menu` button.
 
 ### Game switcher
 
@@ -123,6 +123,8 @@ SDL Error: SDL not built with sensor support
 The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead of SDL2. It drops that one request on its way past and hands everything else to the device's own SDL2 unchanged, which matters because NextUI's SDL2 is the build that sees the built-in controller and no replacement would. PICO-8 never reads a sensor, so nothing is lost. The source is in `shim/sdl-nosensor.c` in this pak.
 
 The library is only loaded on `h700`, and only when it is present. A copy the device cannot load is skipped with a line in the log rather than stopping the launch.
+
+Overlays, switching the screen mode in game and the `Select` + `Menu` shortcut come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c` in this pak.
 
 ### In-Game saves
 
@@ -266,15 +268,15 @@ Please note that using `stretched` mode may look unnatural for games with circul
 
 `stretched` mode needs to know the size of your screen. It reads that from `fbset` where the device provides one, and otherwise falls back to the panel size for your model, which is known for every `h700` device. On the RG28XX, NextUI rotates the display for applications, so both screen modes look the same there as they do on the other models.
 
-On `tg5040`, you can also switch between the two while a game is running: hold `Select` and press `Up` or `Down`. The mode you switch to is saved to the `screen-mode` file, so the next game starts in it too.
+You can also switch between the two while a game is running: hold `Select` and press `Up` or `Down`. The mode you switch to is saved to the `screen-mode` file, so the next game starts in it too.
 
 ### Overlay
 
-On `tg5040`, a PNG in the `/Overlays/PICO` folder on your SD card is drawn over the game, for a bezel or border. This is the folder NextUI uses for its own emulators' overlays.
+A PNG in the `/Overlays/PICO` folder on your SD card is drawn over the game, for a bezel or border. This follows the layout NextUI uses for its own emulators' overlays, a folder under `/Overlays` named for the tag at the end of the roms folder, which is `(PICO)` for this pak. The pak creates the folder the first time you launch a game.
 
 While a game is running, hold `Select` and press `Left` or `Right` to step through every PNG in the folder, in name order, and an option with no overlay at all. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
 
-The image is scaled to fit the screen without changing its shape and centred, leaving any space around it uncovered, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left, so a 4:3 image fills the screen. The Trimui Smart Pro also uses the `tg5040` build, and its 1280x720 screen is 16:9, so a 4:3 image there has bars at the sides and a 16:9 image fills it. No overlay is drawn in `stretched` mode, where the game fills the screen.
+The PNG is decoded by the pak itself, so overlays work the same on every platform. The image is scaled to fit the screen without changing its shape and centred, leaving any space around it uncovered, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left, so a 4:3 image fills the screen. The Trimui Smart Pro also uses the `tg5040` build, and its 1280x720 screen is 16:9, so a 4:3 image there has bars at the sides and a 16:9 image fills it. No overlay is drawn in `stretched` mode, where the game fills the screen.
 
 ### Debug Logging
 
@@ -292,6 +294,6 @@ make format
 make test
 ```
 
-`make build` and `make release` additionally need Docker, which is what the SDL sensor shim is cross-compiled in. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
+`make build` and `make release` additionally need Docker, which is what the SDL sensor shim and the display shim are cross-compiled in, the display shim once for `arm` and once for `arm64`. The display shim decodes overlays with [stb_image](https://github.com/nothings/stb), which the build fetches at a pinned commit and checks against a checksum. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
 
 Three environment variables exist for the test suite only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to.

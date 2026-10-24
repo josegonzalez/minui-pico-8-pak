@@ -119,10 +119,12 @@ jobs:
 
       - name: Validate display shim is bundled
         run: |
-          if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "lib/tg5040/sdl-display.so"; then
-            echo "sdl-display.so is missing from the artifact"
-            exit 1
-          fi
+          for architecture in arm arm64; do
+            if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "lib/$architecture/sdl-display.so"; then
+              echo "sdl-display.so for $architecture is missing from the artifact"
+              exit 1
+            fi
+          done
 
       - name: Validate cart title extractor is bundled
         run: |

@@ -17,6 +17,10 @@ MINUI_POWER_CONTROL_REPO := josegonzalez/minui-power-control
 MINUI_POWER_CONTROL_VERSION := 3.2.0
 PICO8_DATA_EXTRACTOR_VERSION := 0.1.1
 
+# the overlay and screen mode shim is the same on every platform of an
+# architecture, so it ships once per architecture rather than per platform
+DISPLAY_SHIMS := $(foreach architecture,$(ARCHITECTURES),lib/$(architecture)/sdl-display.so)
+
 # The image the sdl sensor shim is compiled in. Pinned below glibc 2.34,
 # which folded libdl into libc: a newer base records dlsym@GLIBC_2.34 and the
 # shim then refuses to load on the device. See shim/Dockerfile.
@@ -38,13 +42,13 @@ clean:
 	rm -f bin/*/pico8-data-extractor || true
 	rm -f bin/minui-power-control || true
 	rm -f lib/h700/sdl-nosensor.so || true
-	rm -f lib/tg5040/sdl-display.so || true
+	rm -f $(DISPLAY_SHIMS) || true
 
-build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control lib/h700/sdl-nosensor.so lib/tg5040/sdl-display.so
+build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS)
 
 # unlike the downloads above this is built from source in this repo, so it has
 # to name its prerequisites or a stale object survives every edit to them
-lib/h700/sdl-nosensor.so lib/tg5040/sdl-display.so: shim/sdl-nosensor.c shim/sdl-display.c shim/Dockerfile
+lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS): shim/sdl-nosensor.c shim/sdl-display.c shim/Dockerfile
 	docker buildx build --build-arg BASE_IMAGE=$(SHIM_IMAGE) \
 		--target export --file shim/Dockerfile --output "type=local,dest=lib" shim
 
