@@ -155,6 +155,8 @@ On devices without deep sleep, which includes every device running MinUI, clicki
 
 The power button is handled by [MinUI Power Control](https://github.com/ben16w/minui-power-control). The pak uses [a fork](https://github.com/josegonzalez/minui-power-control) that adds `h700` support, turns the Miyoo Flip's screen off during deep sleep under NextUI, and sleeps when the Flip's lid closes, until those changes are part of the original. Its messages, such as "Powering off", are shown with the pak's own copy of minui-presenter. See either for more information and known issues.
 
+Power control is released as a single file that checks and unpacks itself every time it starts, which took seconds on a device while the game was starting. The pak ships it already unpacked, in its `bin/power-control` folder, so it starts at once.
+
 ### CPU speed
 
 On `rg35xxplus` and `tg5040`, the pak raises the CPU clock to 1.6 GHz while PICO-8 runs, but only when the OS uses the `userspace` CPU governor, as MinUI does. NextUI already switches to its `performance` governor before starting any pak, which runs the CPU at full speed, so the pak leaves the clock alone there and notes the governor in its log.
@@ -339,6 +341,8 @@ The log records the library search path PICO-8 is started with and the `ldd` out
 
 Each step of starting and exiting a game is marked in the log with the number of seconds since the device was turned on, such as `[1234.56] syncing the SD card`. The lines from the in-game menu and the rest of the display library, such as `[1240.03] sdl-display: Quit chosen in the menu, quitting pico-8`, are marked the same way. Comparing the marks shows how long each step took, from PICO-8 starting until it drew its first frame, to the time between choosing `Quit` and returning to the launcher.
 
+The log lists every command the pak runs, except inside the steps that would otherwise make starting and exiting slow, such as checking the cart, preparing the menu and copying carts, as each listed command is written to the SD card on its own. Those steps log what they find instead. Moving older saves and creating the Splore cart run alongside checking the cart, and the Splore artwork and game switcher preview are written alongside copying carts, so their lines can be interleaved in the log.
+
 ## Development
 
 The launcher is POSIX shell, and is linted and formatted with [shellcheck](https://www.shellcheck.net/) and [shfmt](https://github.com/mvdan/sh). Tests are written with [bats](https://github.com/bats-core/bats-core).
@@ -350,6 +354,8 @@ make test
 ```
 
 `make build` and `make release` additionally need Docker, which is what the SDL sensor shim and the display shim are cross-compiled in, the display shim once for `arm` and once for `arm64`. The display shim decodes overlays with [stb_image](https://github.com/nothings/stb) and draws the menu's text with stb_truetype from the same project, both of which the build fetches at a pinned commit and checks against a checksum. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
+
+`make build` also unpacks the pinned minui-power-control release into `bin/power-control` with `scripts/unpack-makeself.sh`. That script checks the archive against the MD5 it records for itself, and never runs any part of it.
 
 The build also tests the display shim on both architectures, by loading it into a small program in `shim/test` that stands in for PICO-8, linked against a fake `libSDL2` that records what the shim does to each frame, the controller, the audio and the event queue. The menu's pages, the files its settings write and its drawing are tested on their own by `shim/test/menu-test.c`, with the fonts MinUI and NextUI ship, which the build fetches at a pinned commit for the tests alone. A shim that fails these tests is not written to `lib/`.
 

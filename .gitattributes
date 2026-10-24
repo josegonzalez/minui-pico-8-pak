@@ -7,3 +7,4 @@ Makefile export-ignore
 /test export-ignore
 shim/Dockerfile export-ignore
 shim/test/** export-ignore
+/scripts/** export-ignore

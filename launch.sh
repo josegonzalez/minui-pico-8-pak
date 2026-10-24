@@ -523,16 +523,17 @@ get_pico_architecture() {
 
 # The menu's title is the name the game list shows: the cart's row in map.txt,
 # or its file name without the extension and the "1) " MinUI and NextUI sort by
-# and leave off. A multi-cart game is listed as its folder, the m3u's.
+# and leave off. A multi-cart game is listed as its folder, the m3u's. Every
+# step is the shell's own, as each command started costs time on these devices.
 get_cart_display_name() {
-  display_folder="$(dirname "$1")"
-  display_key="$(basename "$1")"
+  display_folder="${1%/*}"
+  display_key="${1##*/}"
   display_name="$display_key"
 
   if [ -f "$display_folder/${display_folder##*/}.m3u" ]; then
     display_key="${display_folder##*/}"
     display_name="$display_key"
-    display_folder="$(dirname "$display_folder")"
+    display_folder="${display_folder%/*}"
   else
     case "$display_name" in
     *.[pP][nN][gG]) display_name="${display_name%.*}" ;;
@@ -544,14 +545,21 @@ get_cart_display_name() {
 
   if [ -f "$display_folder/map.txt" ]; then
     # ENVIRON rather than awk -v, which would process backslash escapes in a name
-    display_mapped="$(DISPLAY_KEY="$display_key" awk -F'\t' '$1 == ENVIRON["DISPLAY_KEY"] { print $2; exit }' "$display_folder/map.txt" | tr -d '\r')"
+    display_mapped="$(DISPLAY_KEY="$display_key" awk -F'\t' '$1 == ENVIRON["DISPLAY_KEY"] { sub(/\r$/, "", $2); print $2; exit }' "$display_folder/map.txt")"
     if [ -n "$display_mapped" ]; then
       echo "$display_mapped"
       return 0
     fi
   fi
 
-  printf '%s\n' "$display_name" | sed 's/^[0-9][0-9]*) //'
+  display_prefix="${display_name%%) *}"
+  if [ "$display_prefix" != "$display_name" ] && [ -n "$display_prefix" ]; then
+    case "$display_prefix" in
+    *[!0-9]*) ;;
+    *) display_name="${display_name#"$display_prefix") }" ;;
+    esac
+  fi
+  echo "$display_name"
 }
 
 # The menu dresses as the launcher pico-8 was started from. NextUI keeps its
@@ -566,15 +574,23 @@ get_menu_style() {
   echo "minui"
 }
 
-# Nothing is printed when the device has no font, and the menu then draws with
-# a small one of its own.
+# Prints one key of NextUI's minuisettings.txt, the last if it is repeated, as
+# NextUI reads it, without a Windows line ending
+read_nextui_setting() {
+  SETTING_KEY="$1" awk -F= '
+    $1 == ENVIRON["SETTING_KEY"] { value = substr($0, length($1) + 2); sub(/\r$/, "", value) }
+    END { print value }' "$SHARED_USERDATA_PATH/minuisettings.txt"
+}
+
+# Takes the style get_menu_style printed. Nothing is printed when the device
+# has no font, and the menu then draws with a small one of its own.
 get_menu_font() {
   menu_res_dir="$SDCARD_PATH/.system/res"
 
-  if [ "$(get_menu_style)" = "nextui" ]; then
+  if [ "$1" = "nextui" ]; then
     # NextUI's own reading of font=, where 0 is font2 and 1 is font1, the
     # numbers older releases wrote, and anything else names a file
-    menu_font="$(sed -n 's/^font=//p' "$SHARED_USERDATA_PATH/minuisettings.txt" | tail -n 1 | tr -d '\r')"
+    menu_font="$(read_nextui_setting font)"
     case "$menu_font" in
     0) menu_font="font2.ttf" ;;
     "" | 1) menu_font="font1.ttf" ;;
@@ -591,23 +607,26 @@ get_menu_font() {
   fi
 }
 
-# NextUI's seven theme colours in order, joined with commas, with an empty
-# field for one it has not written. MinUI's look is fixed, so it has none.
+# Takes the style get_menu_style printed. Prints NextUI's seven theme colours
+# in order, joined with commas, with an empty field for one it has not
+# written, all from one read of the file. MinUI's look is fixed, so it has none.
 get_menu_colors() {
-  if [ "$(get_menu_style)" != "nextui" ]; then
+  if [ "$1" != "nextui" ]; then
     return 0
   fi
 
-  menu_colors=""
-  for menu_color_index in 1 2 3 4 5 6 7; do
-    menu_color="$(sed -n "s/^color$menu_color_index=//p" "$SHARED_USERDATA_PATH/minuisettings.txt" | tail -n 1 | tr -d '\r')"
-    if [ "$menu_color_index" -gt 1 ]; then
-      menu_colors="$menu_colors,"
-    fi
-    menu_colors="$menu_colors$menu_color"
-  done
-
-  echo "$menu_colors"
+  awk -F= '
+    $1 ~ /^color[1-7]$/ {
+      value = substr($0, length($1) + 2)
+      sub(/\r$/, "", value)
+      color[substr($1, 6)] = value
+    }
+    END {
+      for (i = 1; i <= 7; i++) {
+        printf "%s%s", (i > 1 ? "," : ""), color[i]
+      }
+      print ""
+    }' "$SHARED_USERDATA_PATH/minuisettings.txt"
 }
 
 # pico-8 cannot draw a bezel itself, so the shim draws one over every frame.
@@ -660,8 +679,8 @@ setup_display_preload() {
 
   PICO_PAK_CART_NAME="$(get_cart_display_name "$1")"
   PICO_PAK_MENU_STYLE="$(get_menu_style)"
-  PICO_PAK_MENU_FONT="$(get_menu_font)"
-  PICO_PAK_MENU_COLORS="$(get_menu_colors)"
+  PICO_PAK_MENU_FONT="$(get_menu_font "$PICO_PAK_MENU_STYLE")"
+  PICO_PAK_MENU_COLORS="$(get_menu_colors "$PICO_PAK_MENU_STYLE")"
   export PICO_PAK_CART_NAME PICO_PAK_MENU_STYLE PICO_PAK_MENU_FONT PICO_PAK_MENU_COLORS
   echo "In-game menu: $PICO_PAK_MENU_STYLE look, font ${PICO_PAK_MENU_FONT:-built-in}, titled $PICO_PAK_CART_NAME" 1>&2
 
@@ -952,7 +971,9 @@ apply_splore_artwork() {
   for rom_folder in "$SDCARD_PATH/Roms/"*"($PAK_NAME)"; do
     [ -d "$rom_folder" ] || continue
 
-    for splore_entry in "$rom_folder"/*; do
+    # the glob is is_splore_cart's own match, so the folder's other carts are
+    # never looked at one by one
+    for splore_entry in "$rom_folder"/*[Ss]plore*; do
       [ -f "$splore_entry" ] || continue
       splore_name="${splore_entry##*/}"
       is_splore_cart "$splore_name" || continue
@@ -1085,8 +1106,8 @@ launch_cart() {
 
   log_step "setting up pico-8"
   cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
-  install_config "$ROM_FOLDER"
-  set_cpu_speed
+  untraced install_config "$ROM_FOLDER"
+  untraced set_cpu_speed
 
   pico_bin="$(get_pico_bin)"
 
@@ -1099,11 +1120,12 @@ launch_cart() {
   inherited_library_path="${LD_LIBRARY_PATH:-}"
   export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   inherited_preload="${LD_PRELOAD:-}"
-  setup_sdl_preload
+  untraced setup_sdl_preload
   display_shim_loaded=false
-  if setup_display_preload "$ROM_PATH"; then
+  if untraced setup_display_preload "$ROM_PATH"; then
     display_shim_loaded=true
   fi
+  echo "Starting pico-8 with LD_LIBRARY_PATH=$LD_LIBRARY_PATH LD_PRELOAD=${LD_PRELOAD:-}" 1>&2
 
   # pico-8 is supplied by the user and links against whatever the device has, so
   # record that in the log: a library it cannot find is otherwise a silent
@@ -1166,26 +1188,25 @@ launch_cart() {
     unset LD_PRELOAD
   fi
 
-  # before the switcher preview, which copies the Splore cart's cover
-  log_step "applying the Splore artwork"
-  apply_splore_artwork
-
-  # NextUI added the cart to its recents before starting the pak, whether or
-  # not pico-8 went on to run it
-  log_step "writing the game switcher preview"
-  write_switcher_preview "$ROM_PATH"
-
+  # the saves pico-8 wrote on its way out reach the card before anything else
   log_step "syncing the SD card"
   sync
-  log_step "copying Splore carts"
-  # each traced command is its own write to the SD card, seconds over a cart scan
-  case $- in *x*) copy_traced=true ;; *) copy_traced=false ;; esac
-  set +x
-  copy_carts "$ROM_FOLDER"
-  if [ "$copy_traced" = "true" ]; then
-    set -x
-  fi
-  log_step "copied Splore carts"
+
+  # The artwork and the switcher preview run alongside the copy, which can
+  # take seconds over a large Splore cache. The preview copies the Splore
+  # cart's cover, so it follows the artwork, and NextUI added the cart to its
+  # recents before starting the pak, whether or not pico-8 went on to run it.
+  log_step "applying the Splore artwork, writing the game switcher preview and copying Splore carts"
+  (
+    untraced apply_splore_artwork
+    untraced write_switcher_preview "$ROM_PATH"
+  ) &
+  artwork_pid=$!
+  untraced copy_carts "$ROM_FOLDER"
+  wait "$artwork_pid"
+
+  log_step "syncing the SD card again"
+  sync
 
   # minui-power-control ends a session by signalling pico-8, and a status above
   # 128 is a signal, so it is not a failure worth putting on screen
@@ -1341,6 +1362,14 @@ show_confirmation() {
     --timeout 0
 }
 
+# minui-power-control as `make build` unpacks it from its release archive, so it
+# starts at once rather than checking and unpacking itself into /tmp first. It
+# gives up when pico-8 has not started within ten seconds, which a slow start
+# used to come close to.
+get_power_control() {
+  echo "$PAK_DIR/bin/power-control/launch"
+}
+
 # The cart lets a device without deep sleep, which powers off when left asleep,
 # start the cart again on its next boot. Power control bundles no presenter of
 # its own and shows its messages with the one in bin/$PLATFORM, which PATH
@@ -1351,7 +1380,13 @@ start_power_control() {
     return 0
   fi
 
-  minui-power-control "$(get_pico_bin)" "$1" &
+  power_control="$(get_power_control)"
+  if [ ! -f "$power_control" ]; then
+    echo "No power control at $power_control, deep sleep is unavailable" 1>&2
+    return 0
+  fi
+
+  "$power_control" "$(get_pico_bin)" "$1" &
 }
 
 # Marks a step of starting or tearing down in the log with the seconds since
@@ -1363,8 +1398,38 @@ log_step() {
   echo "[${step_time:-?}] $*" 1>&2
 }
 
+# Runs a command with tracing off and puts it back as it was. The log is on the
+# SD card, where every traced line is its own write costing tens of
+# milliseconds, which added seconds to starting and exiting a game. The steps
+# run this way log what matters themselves. Not for nesting: the shell has no
+# locals, so an inner call would overwrite the outer one's saved state.
+untraced() {
+  case $- in *x*) untraced_was_traced=true ;; *) untraced_was_traced=false ;; esac
+  set +x
+  "$@"
+  untraced_status=$?
+  if [ "$untraced_was_traced" = "true" ]; then
+    set -x
+  fi
+  return "$untraced_status"
+}
+
+# The steps main runs in the background while the cart is checked, which have
+# to finish before pico-8 starts, or before the pak exits when it never does
+background_pids=""
+
+wait_for_background() {
+  if [ -n "$background_pids" ]; then
+    # word splitting is wanted, the list is pids alone
+    # shellcheck disable=SC2086
+    wait $background_pids
+    background_pids=""
+  fi
+}
+
 cleanup() {
   log_step "cleaning up"
+  wait_for_background
   rm -f /tmp/stay_awake
   rm -f "$(get_network_probe_file)"
   rm -rf "$(get_copy_carts_tmp_dir)"
@@ -1399,29 +1464,34 @@ main() {
     return 1
   fi
 
-  # saves move to the folder MinUI and NextUI use before anything writes to
-  # either one
-  log_step "migrating saves"
-  migrate_saves
-
-  # seeding is best-effort and must never block a launch
-  log_step "seeding the Splore cart"
-  install_splore_cart
+  # Neither of these depends on the other or on the checks below, so they run
+  # alongside them. Saves move to the folder MinUI and NextUI use before
+  # anything writes to either one, which is pico-8 alone, and seeding is
+  # best-effort and must never block a launch. Both are waited for before
+  # pico-8 starts, and by cleanup when a check stops the launch.
+  log_step "migrating saves and seeding the Splore cart"
+  untraced migrate_saves &
+  background_pids="$!"
+  untraced install_splore_cart &
+  background_pids="$background_pids $!"
 
   log_step "checking the cart"
-  if ! verify_cart "$ROM_PATH"; then
+  if ! untraced verify_cart "$ROM_PATH"; then
     return 1
   fi
 
   log_step "installing the PICO-8 files"
-  if ! install_pico_files; then
+  if ! untraced install_pico_files; then
     return 1
   fi
 
   log_step "checking the Splore connection"
-  if ! verify_splore_connection "$ROM_PATH"; then
+  if ! untraced verify_splore_connection "$ROM_PATH"; then
     return 1
   fi
+
+  log_step "waiting for the saves and the Splore cart"
+  wait_for_background
 
   # minui-power-control also powers the device off on a long press, so there is
   # no shutdown left for the pak to handle once pico-8 exits

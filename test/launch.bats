@@ -521,12 +521,12 @@ teardown() {
   mkdir -p "$SDCARD_PATH/.system/res"
   : >"$SDCARD_PATH/.system/res/BPreplayBold-unhinted.otf"
 
-  run get_menu_font
+  run get_menu_font "$(get_menu_style)"
   [ "$output" = "$SDCARD_PATH/.system/res/BPreplayBold-unhinted.otf" ]
 }
 
 @test "get_menu_font names nothing on a card with no font" {
-  run get_menu_font
+  run get_menu_font "$(get_menu_style)"
   [ "$status" -eq 0 ]
   [ "$output" = "" ]
 }
@@ -537,19 +537,19 @@ teardown() {
   : >"$SDCARD_PATH/.system/res/font2.ttf"
 
   : >"$SHARED_USERDATA_PATH/minuisettings.txt"
-  run get_menu_font
+  run get_menu_font "$(get_menu_style)"
   [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
 
   printf 'font=1\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
-  run get_menu_font
+  run get_menu_font "$(get_menu_style)"
   [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
 
   printf 'font=0\r\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
-  run get_menu_font
+  run get_menu_font "$(get_menu_style)"
   [ "$output" = "$SDCARD_PATH/.system/res/font2.ttf" ]
 
   printf 'font=font2.ttf\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
-  run get_menu_font
+  run get_menu_font "$(get_menu_style)"
   [ "$output" = "$SDCARD_PATH/.system/res/font2.ttf" ]
 }
 
@@ -558,7 +558,7 @@ teardown() {
   : >"$SDCARD_PATH/.system/res/font1.ttf"
   printf 'font=mine.ttf\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
 
-  run get_menu_font
+  run get_menu_font "$(get_menu_style)"
   [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
 }
 
@@ -568,12 +568,12 @@ teardown() {
   printf 'color1=0xFFFFFFFF\r\ncolor2=0x9B2257FF\r\ncolor7=0x000000FF\r\nfont=1\r\n' \
     >"$SHARED_USERDATA_PATH/minuisettings.txt"
 
-  run get_menu_colors
+  run get_menu_colors "$(get_menu_style)"
   [ "$output" = "0xFFFFFFFF,0x9B2257FF,,,,,0x000000FF" ]
 }
 
 @test "get_menu_colors names none under MinUI" {
-  run get_menu_colors
+  run get_menu_colors "$(get_menu_style)"
   [ "$status" -eq 0 ]
   [ "$output" = "" ]
 }
@@ -1107,6 +1107,9 @@ teardown() {
 }
 
 @test "start_power_control runs on the platforms power control supports" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  stub_power_control "$PAK_DIR" "exit 0"
+
   for platform in h700 my355 rg35xxplus tg5040 tg5050; do
     PLATFORM="$platform" run start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
     [ "$status" -eq 0 ]
@@ -1114,12 +1117,24 @@ teardown() {
   done
 }
 
-@test "start_power_control hands power control the pico-8 binary and the cart" {
-  stub_power_control
+# make build unpacks power control from its release archive, so it starts at
+# once rather than checking and unpacking itself into /tmp first
+@test "start_power_control runs the unpacked power control the pak ships" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  stub_power_control "$PAK_DIR"
 
   PLATFORM=h700 start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
   wait_for_power_control
   [ "$(cat "$POWER_CONTROL_LOG")" = "pico8_64 $SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8" ]
+}
+
+@test "start_power_control says so when the pak ships no power control" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR"
+
+  PLATFORM=tg5040 run start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
+  [ "$status" -eq 0 ]
+  [ "$output" = "No power control at $PAK_DIR/bin/power-control/launch, deep sleep is unavailable" ]
 }
 
 @test "get_screen_mode defaults to the documented standard mode" {
@@ -2307,6 +2322,7 @@ teardown() {
   mkdir -p "$pak_dir"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
   ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+  stub_power_control "$pak_dir"
 
   make_bios
   stub_presenter 2
@@ -2321,7 +2337,7 @@ teardown() {
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 1 ]
-  ! grep -q "minui-power-control" "$LOGS_PATH/PICO.txt"
+  [ ! -e "$POWER_CONTROL_LOG" ]
 }
 
 @test "launch.sh starts splore when the user continues past the warning" {
@@ -2362,6 +2378,7 @@ teardown() {
   printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
   chmod +x "$pak_dir/pico8/pico8_64"
   : >"$pak_dir/pico8/pico8.dat"
+  stub_power_control "$pak_dir"
 
   make_bios
   stub_presenter 0
@@ -2381,7 +2398,8 @@ teardown() {
   grep -q -- "-run" "$LOGS_PATH/PICO.txt"
   grep -q "Freecell.p8" "$LOGS_PATH/PICO.txt"
   ! grep -q "does not support h700" "$LOGS_PATH/PICO.txt"
-  grep -q "minui-power-control pico8_64 .*Freecell.p8" "$LOGS_PATH/PICO.txt"
+  wait_for_power_control
+  [ "$(cat "$POWER_CONTROL_LOG")" = "pico8_64 $cart" ]
 
   # the h700 mapping and a config naming this device's card both land in $HOME
   cmp -s "$REPO_ROOT/controllers/h700.txt" "$SHARED_USERDATA_PATH/Pico-8-native/sdl_controllers.txt"
@@ -2412,11 +2430,7 @@ teardown() {
   mkdir -p "$pak_dir/bin/my355"
   cp "$STUB_BIN/minui-presenter" "$pak_dir/bin/my355/minui-presenter"
   presenter_log="$BATS_TEST_TMPDIR/power-control-presenter"
-  cat >"$STUB_BIN/minui-power-control" <<STUB
-#!/bin/sh
-command -v minui-presenter >"$presenter_log"
-STUB
-  chmod +x "$STUB_BIN/minui-power-control"
+  stub_power_control "$pak_dir" "printf '%s\n' \"\$*\" >>\"\$POWER_CONTROL_LOG\"; command -v minui-presenter >'$presenter_log'"
 
   run env PATH="$STUB_BIN:$PATH" PLATFORM=my355 DEVICE=my355 IS_NEXT=yes \
     PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
@@ -2428,7 +2442,8 @@ STUB
   [ "$status" -eq 0 ]
   grep -q "Freecell.p8" "$LOGS_PATH/PICO.txt"
   ! grep -q "does not support my355" "$LOGS_PATH/PICO.txt"
-  grep -q "minui-power-control pico8_64 .*Freecell.p8" "$LOGS_PATH/PICO.txt"
+  wait_for_power_control
+  [ "$(cat "$POWER_CONTROL_LOG")" = "pico8_64 $cart" ]
 
   for _ in $(seq 1 100); do
     [ -s "$presenter_log" ] && break
@@ -2590,6 +2605,121 @@ STUB
   grep -qx "sync LD_LIBRARY_PATH=/inherited" "$LOGS_PATH/PICO.txt"
 }
 
+@test "untraced runs a command with tracing off and puts it back" {
+  traced_inside() {
+    case $- in *x*) echo traced ;; *) echo untraced ;; esac
+    return 3
+  }
+
+  set -x
+  run untraced traced_inside
+  set +x
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"untraced"* ]]
+
+  set -x
+  untraced true
+  case $- in *x*) still_traced=true ;; *) still_traced=false ;; esac
+  set +x
+  [ "$still_traced" = "true" ]
+
+  untraced true
+  case $- in *x*) [ "untraced turned tracing on" = "" ] ;; esac
+}
+
+@test "get_cart_display_name drops only a number as the sorting prefix" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  run get_cart_display_name "$rom_folder/12) Celeste.p8"
+  [ "$output" = "Celeste" ]
+  run get_cart_display_name "$rom_folder/A) Celeste.p8"
+  [ "$output" = "A) Celeste" ]
+  run get_cart_display_name "$rom_folder/Celeste (Mountain) Edition.p8"
+  [ "$output" = "Celeste (Mountain) Edition" ]
+}
+
+# saves move in the background while the cart is checked, but pico-8 writes to
+# the folder they move to, so they have to be there before it starts
+@test "launch.sh finishes moving saves before pico-8 starts" {
+  pak_dir="$(make_pak 'ls "$SAVES_DIR"')"
+  mkdir -p "$SHARED_USERDATA_PATH/Pico-8-native/cdata"
+  : >"$SHARED_USERDATA_PATH/Pico-8-native/cdata/celeste.p8d.txt"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" SAVES_DIR="$SDCARD_PATH/Saves/PICO" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "celeste.p8d.txt" "$LOGS_PATH/PICO.txt"
+}
+
+# the switcher preview runs alongside the cart copy, but after the artwork,
+# as it copies the Splore cart's cover
+@test "launch.sh gives the switcher the Splore cover it has just applied" {
+  pak_dir="$(make_pak)"
+  echo "fancy" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+
+  make_bios
+  stub_presenter 0
+  stub_network up
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  mkdir -p "$rom_folder/.media"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/Splore.p8"
+  cp "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.media/Splore.png"
+  : >"$USERDATA_PATH/Pico-8-native/splore-installed"
+  stub_wget reachable
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= IS_NEXT=yes \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$rom_folder/Splore.p8"
+
+  [ "$status" -eq 0 ]
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$rom_folder/.media/Splore.png"
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" \
+    "$SHARED_USERDATA_PATH/.minui/PICO/Splore.p8.0.bmp"
+}
+
+# every traced line is its own write to the log on the SD card, which added
+# seconds to starting and exiting, so the slow steps log only what they say
+@test "launch.sh leaves the slow steps out of its trace" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  # an assignment each of the slow steps makes first, which a trace would show
+  for assignment in saves_dir marker_file cart_path overrides menu_res_dir display_folder \
+    splore_artwork copy_marker; do
+    ! grep -q "^+ $assignment=" "$LOGS_PATH/PICO.txt"
+  done
+  # the launch itself is still traced, and what it starts pico-8 with logged
+  grep -q "^Starting pico-8 with LD_LIBRARY_PATH=.* LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+  grep -q "^+ .*pico8_64 .*-run" "$LOGS_PATH/PICO.txt"
+}
+
 @test "log_step stamps a line with the seconds since boot" {
   printf '1234.56 7890.12\n' >"$BATS_TEST_TMPDIR/uptime"
 
@@ -2626,12 +2756,13 @@ STUB
 
   [ "$status" -eq 0 ]
   grep '^\[1234\.56\] ' "$LOGS_PATH/PICO.txt" | sed 's/^\[1234\.56\] //' >"$BATS_TEST_TMPDIR/steps"
-  printf '%s\n' "starting" "migrating saves" "seeding the Splore cart" "checking the cart" \
-    "installing the PICO-8 files" "checking the Splore connection" "starting power control" \
-    "setting up pico-8" "starting pico-8" "pico-8 exited with status 0" \
-    "applying the Splore artwork" "writing the game switcher preview" "syncing the SD card" \
-    "copying Splore carts" "copied Splore carts" "cleaning up" \
-    "done, returning to the launcher" >"$BATS_TEST_TMPDIR/expected"
+  printf '%s\n' "starting" "migrating saves and seeding the Splore cart" "checking the cart" \
+    "installing the PICO-8 files" "checking the Splore connection" \
+    "waiting for the saves and the Splore cart" "starting power control" \
+    "setting up pico-8" "starting pico-8" "pico-8 exited with status 0" "syncing the SD card" \
+    "applying the Splore artwork, writing the game switcher preview and copying Splore carts" \
+    "syncing the SD card again" "cleaning up" "done, returning to the launcher" \
+    >"$BATS_TEST_TMPDIR/expected"
   diff "$BATS_TEST_TMPDIR/expected" "$BATS_TEST_TMPDIR/steps"
 }
 

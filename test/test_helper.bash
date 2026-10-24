@@ -12,7 +12,7 @@ setup_launch() {
   STUB_BIN="$BATS_TEST_TMPDIR/stub"
   export STUB_BIN
   mkdir -p "$STUB_BIN"
-  for stub in minui-presenter killall wget minui-power-control; do
+  for stub in minui-presenter killall wget; do
     printf '#!/bin/sh\nexit 0\n' >"$STUB_BIN/$stub"
     chmod +x "$STUB_BIN/$stub"
   done
@@ -209,18 +209,25 @@ STUB
   chmod +x "$STUB_BIN/timeout"
 }
 
-# Replaces the minui-power-control stub with one that logs its arguments.
-# start_power_control backgrounds it, so wait_for_power_control waits for the
-# log rather than racing it.
+# Puts a power control in the pak at $1 that logs its arguments, where
+# `make build` unpacks the real one. start_power_control backgrounds it, so
+# wait_for_power_control waits for the log rather than racing it. Pass a shell
+# body to run in its place.
 stub_power_control() {
+  local pak_dir="$1"
+  local body
+  # shellcheck disable=SC2016 # expanded by the stub, not here
+  body='printf "%s\n" "$*" >>"$POWER_CONTROL_LOG"'
+  if [ "$#" -ge 2 ]; then
+    body="$2"
+  fi
+
   POWER_CONTROL_LOG="$BATS_TEST_TMPDIR/power-control.log"
   export POWER_CONTROL_LOG
 
-  cat >"$STUB_BIN/minui-power-control" <<'STUB'
-#!/bin/sh
-printf '%s\n' "$*" >>"$POWER_CONTROL_LOG"
-STUB
-  chmod +x "$STUB_BIN/minui-power-control"
+  mkdir -p "$pak_dir/bin/power-control"
+  printf '#!/bin/sh\n%s\n' "$body" >"$pak_dir/bin/power-control/launch"
+  chmod +x "$pak_dir/bin/power-control/launch"
 }
 
 wait_for_power_control() {

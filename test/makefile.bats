@@ -91,6 +91,31 @@ pak_platforms() {
   [ "$output" = "josegonzalez/minui-power-control" ]
 }
 
+# the release is a self-extracting archive that checks and unpacks itself into
+# /tmp on every launch, so the build unpacks it once to where launch.sh runs it
+@test "power control is unpacked into the folder launch.sh runs it from" {
+  run make --no-print-directory -C "$REPO_ROOT" -n -B bin/power-control/launch
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scripts/unpack-makeself.sh bin/minui-power-control.run bin/power-control"* ]]
+
+  PAK_DIR="$REPO_ROOT"
+  [ "$(get_power_control)" = "$REPO_ROOT/bin/power-control/launch" ]
+}
+
+@test "the unpacked power control is injected into the release archive" {
+  grep -qx "bin/power-control" "$REPO_ROOT/.gitarchiveinclude"
+  ! grep -qx "bin/minui-power-control" "$REPO_ROOT/.gitarchiveinclude"
+  run sh -c "cd '$REPO_ROOT' && git check-ignore -q bin/power-control/launch"
+  [ "$status" -eq 0 ]
+}
+
+@test "the build scripts are linted and do not ship with the pak" {
+  mk SHELL_FILES
+  [[ " $output " == *" scripts/unpack-makeself.sh "* ]]
+  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore scripts/unpack-makeself.sh"
+  [[ "$output" == *"export-ignore: set"* ]]
+}
+
 # launch.sh derives the architecture from uname -m and puts bin/$architecture on
 # PATH, so anything shipped per architecture has to cover both of its answers.
 @test "the architecture list matches what launch.sh can detect" {

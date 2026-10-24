@@ -33,18 +33,18 @@ MINUI_PRESENTER_ASSET_h700 := h700-nextui
 MINUI_PRESENTER_ASSET_my355 := my355-nextui
 MINUI_PRESENTER_ASSET_tg5050 := tg5050-nextui
 
-SHELL_FILES := launch.sh bin/h700/wget bin/my355/wget bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
+SHELL_FILES := launch.sh scripts/unpack-makeself.sh bin/h700/wget bin/my355/wget bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
 
 .PHONY: clean build release bump-version push lint format test print-%
 
 clean:
 	rm -f bin/*/minui-presenter || true
 	rm -f bin/*/pico8-data-extractor || true
-	rm -f bin/minui-power-control || true
+	rm -rf bin/power-control bin/minui-power-control.run || true
 	rm -f lib/h700/sdl-nosensor.so || true
 	rm -f $(DISPLAY_SHIMS) || true
 
-build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS)
+build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/power-control/launch lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS)
 
 # unlike the downloads above this is built from source in this repo, so it has
 # to name its prerequisites or a stale object survives every edit to them
@@ -64,10 +64,13 @@ bin/%/minui-presenter:
 	curl -f -o bin/$*/minui-presenter -sSL https://github.com/josegonzalez/minui-presenter/releases/download/$(MINUI_PRESENTER_VERSION)/minui-presenter-$(or $(MINUI_PRESENTER_ASSET_$*),$*)
 	chmod +x bin/$*/minui-presenter
 
-bin/minui-power-control:
+# released as a self-extracting archive, which would check and unpack itself on
+# every launch, so it is unpacked here once and shipped as plain files
+bin/power-control/launch: scripts/unpack-makeself.sh
 	mkdir -p bin
-	curl -f -o bin/minui-power-control -sSL https://github.com/$(MINUI_POWER_CONTROL_REPO)/releases/download/$(MINUI_POWER_CONTROL_VERSION)/minui-power-control
-	chmod +x bin/minui-power-control
+	curl -f -o bin/minui-power-control.run -sSL https://github.com/$(MINUI_POWER_CONTROL_REPO)/releases/download/$(MINUI_POWER_CONTROL_VERSION)/minui-power-control
+	sh scripts/unpack-makeself.sh bin/minui-power-control.run bin/power-control
+	rm -f bin/minui-power-control.run
 
 release: build
 	mkdir -p dist
