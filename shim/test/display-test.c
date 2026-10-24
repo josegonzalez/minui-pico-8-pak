@@ -229,7 +229,8 @@ static unsigned char square_pixels[2 * 2 * 4];
 static void make_fixtures(void)
 {
   static const char shortcuts[] =
-      "screenshot menu+x\nreset menu+y\nscreen-mode l1\noverlay menu+r2\n";
+      "screenshot menu+x\nreset menu+y\nscreen-mode l1\noverlay menu+r2\nsave-gif r3\n"
+      "cpu-meter l3\n";
   char path[8192];
   size_t i;
 
@@ -320,7 +321,10 @@ static void make_fixtures(void)
   snprintf(switcher_dir, sizeof switcher_dir, "%s/.minui/PICO", dir);
   setenv("PICO_PAK_SWITCHER_DIR", switcher_dir, 1);
 
-  /* MENU+X screenshot, MENU+Y reset, L1 alone screen mode, MENU+R2 overlay */
+  /*
+   * MENU+X screenshot, MENU+Y reset, L1 alone screen mode, MENU+R2 overlay,
+   * R3 alone a GIF and L3 alone the CPU meter
+   */
   snprintf(shortcuts_path, sizeof shortcuts_path, "%s/shortcuts", dir);
   write_file(shortcuts_path, shortcuts, strlen(shortcuts));
   setenv("PICO_PAK_SHORTCUTS", shortcuts_path, 1);
@@ -889,6 +893,8 @@ static void test_settings(void *pad)
 
 #define BUTTON_X 2
 #define BUTTON_Y 3
+#define BUTTON_L3 7
+#define BUTTON_R3 8
 #define BUTTON_L1 9
 #define BUTTON_R1 10
 #define SDL_KEYUP 0x301
@@ -917,6 +923,39 @@ static int find_screenshot(char *found, size_t size)
     usleep(10000);
   }
   return 0;
+}
+
+/* presses a button bound alone to a shortcut that presses Ctrl and scancode, and lets it all go */
+static void test_ctrl_key(void *pad, int button, uint32_t scancode, const char *name)
+{
+  int pushed = fake.pushed, i;
+  uint32_t event[14];
+
+  release_all();
+  fake.buttons[button] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  for (i = 0; i < 4; i++) {
+    SDL_RenderPresent(&renderer_b);
+    fake.ticks += 100;
+  }
+  check(fake.pushed == pushed + 4 && fake.pushed_events[pushed][4] == 224 &&
+            fake.pushed_events[pushed + 1][0] == SDL_KEYDOWN &&
+            fake.pushed_events[pushed + 1][4] == scancode &&
+            fake.pushed_events[pushed + 2][0] == SDL_KEYUP &&
+            fake.pushed_events[pushed + 2][4] == scancode &&
+            fake.pushed_events[pushed + 3][0] == SDL_KEYUP &&
+            fake.pushed_events[pushed + 3][4] == 224,
+        name);
+
+  memset(fake.queue, 0, sizeof fake.queue);
+  fake.queue[0][0] = SDL_KEYUP;
+  fake.queue[0][4] = 224;
+  fake.queued = 1;
+  fake.queue_head = 0;
+  SDL_PollEvent(event);
+  fake.queued = fake.queue_head = 0;
 }
 
 static void test_shortcuts(void *pad)
@@ -1056,17 +1095,23 @@ static void test_shortcuts(void *pad)
   }
   check(SDL_GetModState() == 0, "until pico-8 reads Ctrl being let go");
   fake.queued = fake.queue_head = 0;
+
+  /* R3 saves a GIF with Ctrl+9, into the screenshots folder, and L3 toggles the CPU meter */
+  test_ctrl_key(pad, BUTTON_R3, 38, "R3 presses Ctrl+9 for a GIF");
+  check(access(screenshots_dir, F_OK) == 0, "with the screenshots folder there for it");
+  test_ctrl_key(pad, BUTTON_L3, 19, "L3 presses Ctrl+P for the CPU meter");
 }
 
 /*
- * Binding in the menu: Options, up to its last row, Shortcuts, down to Quit,
- * A, then Menu held with B pressed. B backs out of each page after.
+ * Binding in the menu: Options, up to its last row, Shortcuts, down past
+ * Save GIF to Quit, A, then Menu held with B pressed. B backs out of each
+ * page after.
  */
 static void test_binding(void *pad)
 {
   static const uint32_t states[] = {
       BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_A), 0,
-      BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_GUIDE),
+      BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_GUIDE),
       BIT(BUTTON_GUIDE) | BIT(BUTTON_B), BIT(BUTTON_GUIDE), 0, BIT(BUTTON_B), 0, BIT(BUTTON_B), 0,
       BIT(BUTTON_B)};
   char line[256] = "";

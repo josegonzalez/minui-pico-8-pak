@@ -282,8 +282,7 @@ static int same_contents(const char *a, const char *b)
   return same;
 }
 
-/* makes path and any folder above it that is missing, as mkdir -p does */
-static int make_dirs(const char *path)
+int cart_make_dirs(const char *path)
 {
   char partial[4096];
   size_t i;
@@ -309,7 +308,7 @@ static int open_switcher(const char *switcher_dir, const char *cart_path, char *
   if (switcher_dir == NULL || *switcher_dir == '\0') {
     return 0;
   }
-  if (!make_dirs(switcher_dir)) {
+  if (!cart_make_dirs(switcher_dir)) {
     LOG("cannot make %s, the game switcher will show no preview\n", switcher_dir);
     return 0;
   }
@@ -482,7 +481,8 @@ int cart_write_screenshot(const char *dir, const char *cart_path, const uint32_t
   int png_size, ok;
   char *slash;
 
-  if (dir == NULL || *dir == '\0' || cart_path == NULL || w <= 0 || h <= 0 || !make_dirs(dir)) {
+  if (dir == NULL || *dir == '\0' || cart_path == NULL || w <= 0 || h <= 0 ||
+      !cart_make_dirs(dir)) {
     return 0;
   }
 

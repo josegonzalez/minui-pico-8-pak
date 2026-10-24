@@ -59,10 +59,12 @@ enum menu_option_row {
 /* what a shortcut does, one row each of the Shortcuts page */
 enum menu_shortcut {
   MENU_SHORTCUT_SCREENSHOT,
+  MENU_SHORTCUT_SAVE_GIF,
   MENU_SHORTCUT_QUIT,
   MENU_SHORTCUT_RESET,
   MENU_SHORTCUT_SCREEN_MODE,
   MENU_SHORTCUT_OVERLAY,
+  MENU_SHORTCUT_CPU_METER,
   MENU_SHORTCUT_COUNT,
 };
 

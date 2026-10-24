@@ -454,10 +454,11 @@ static const char *const button_labels[MENU_BINDABLE_BUTTONS] = {
 /* the button numbered as SDL's guide, which every mapping uses for Menu */
 #define MENU_BUTTON 5
 
-static const char *const shortcut_keys[MENU_SHORTCUT_COUNT] = {"screenshot", "quit", "reset",
-                                                               "screen-mode", "overlay"};
+static const char *const shortcut_keys[MENU_SHORTCUT_COUNT] = {
+    "screenshot", "save-gif", "quit", "reset", "screen-mode", "overlay", "cpu-meter"};
 static const char *const shortcut_labels[MENU_SHORTCUT_COUNT] = {
-    "Screenshot", "Quit", "Reset Game", "Cycle Screen Mode", "Cycle Overlay"};
+    "Screenshot",        "Save GIF",      "Quit",           "Reset Game",
+    "Cycle Screen Mode", "Cycle Overlay", "Toggle CPU Meter"};
 
 int menu_is_bindable(int button)
 {

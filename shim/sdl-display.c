@@ -96,8 +96,12 @@ typedef struct {
 #define SDL_QUIT 0x100
 #define SDL_KEYDOWN 0x300
 #define SDL_KEYUP 0x301
+#define SDL_SCANCODE_P 19
 #define SDL_SCANCODE_R 21
+#define SDL_SCANCODE_9 38
 #define SDL_SCANCODE_LCTRL 224
+#define SDLK_9 '9'
+#define SDLK_p 'p'
 #define SDLK_r 'r'
 #define SDLK_LCTRL 0x400000e0
 #define KMOD_LCTRL 0x0040
@@ -128,10 +132,10 @@ typedef struct {
 /* how far a trigger, which SDL reads from 0 to 32767, goes in to count as pressed */
 #define TRIGGER_DOWN 16384
 /*
- * pico-8 ignores an R that comes too soon after Ctrl, so the reset shortcut
- * waits this long between pressing Ctrl, pressing R, and letting each go
+ * pico-8 ignores a key that comes too soon after Ctrl, so a shortcut that
+ * presses one waits this long between pressing Ctrl, the key, and letting each go
  */
-#define RESET_STEP_MS 100
+#define CTRL_KEY_STEP_MS 100
 
 /*
  * The functions of the launcher's libmsettings the indicator reads. Every
@@ -252,11 +256,12 @@ static uint32_t notification_until;
 static void *notification_renderer;
 static void *notification_texture;
 static const char *notification_drawn;
-/* Ctrl is reported held from the reset shortcut until pico-8 reads its release */
-static int reset_ctrl_held;
-/* how far the reset shortcut has got in pressing Ctrl+R, 0 when it is not, and since when */
-static int reset_step;
-static uint32_t reset_step_at;
+/* Ctrl is reported held from a Ctrl key shortcut until pico-8 reads its release */
+static int ctrl_held;
+/* how far a shortcut has got in pressing Ctrl and a key, 0 when none is, and since when */
+static int ctrl_key_step;
+static uint32_t ctrl_key_step_at;
+static int32_t ctrl_key_scancode, ctrl_key_sym;
 
 static void wait_for_screenshot(void);
 
@@ -319,7 +324,7 @@ static int resolve_sdl(void)
   /* without these the frames after Quit show the game rather than black */
   RESOLVE(RenderGetDrawColor);
   RESOLVE(RenderSetDrawColor);
-  /* wrapped, for the reset shortcut's Ctrl */
+  /* wrapped, for the Ctrl a shortcut presses */
   RESOLVE(GetModState);
 
   resolved = RESOLVE(CreateRGBSurfaceFrom) && RESOLVE(CreateTextureFromSurface) &&
@@ -1503,55 +1508,74 @@ static void push_key(uint32_t type, int32_t scancode, int32_t sym, uint16_t mod)
 }
 
 /*
- * pico-8 restarts the cart on Ctrl+R, so the shortcut presses it: Ctrl down,
- * R down and up, then Ctrl up, a step every RESET_STEP_MS as the frames go
- * by. Until pico-8 reads that last release, Ctrl is also reported held to
- * SDL_GetModState, which is where pico-8 reads it from.
+ * Some shortcuts are pico-8's own, so the shim presses them for it: Ctrl
+ * down, the key down and up, then Ctrl up, a step every CTRL_KEY_STEP_MS as
+ * the frames go by. Until pico-8 reads that last release, Ctrl is also
+ * reported held to SDL_GetModState, which is where pico-8 reads it from.
  */
-static void reset_cart(void)
+static void press_ctrl_key(int32_t scancode, int32_t sym, const char *what)
 {
   if (sdl.PushEvent == NULL) {
-    LOG("this SDL2 has no SDL_PushEvent, cannot reset the cart\n");
+    LOG("this SDL2 has no SDL_PushEvent, cannot %s\n", what);
     return;
   }
-  if (reset_step != 0) {
+  if (ctrl_key_step != 0) {
+    LOG("still pressing the last Ctrl key, cannot %s\n", what);
     return;
   }
 
-  LOG("resetting the cart with Ctrl+R\n");
-  reset_ctrl_held = 1;
-  reset_step = 1;
-  reset_step_at = sdl.GetTicks();
+  LOG("pressing Ctrl+%c to %s\n", (char)sym, what);
+  ctrl_held = 1;
+  ctrl_key_step = 1;
+  ctrl_key_step_at = sdl.GetTicks();
+  ctrl_key_scancode = scancode;
+  ctrl_key_sym = sym;
   push_key(SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL, KMOD_LCTRL);
 }
 
-static void continue_reset(void)
+static void continue_ctrl_key(void)
 {
-  if (reset_step == 0 || sdl.GetTicks() - reset_step_at < RESET_STEP_MS) {
+  if (ctrl_key_step == 0 || sdl.GetTicks() - ctrl_key_step_at < CTRL_KEY_STEP_MS) {
     return;
   }
 
-  reset_step_at = sdl.GetTicks();
-  switch (reset_step++) {
+  ctrl_key_step_at = sdl.GetTicks();
+  switch (ctrl_key_step++) {
   case 1:
-    push_key(SDL_KEYDOWN, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
+    push_key(SDL_KEYDOWN, ctrl_key_scancode, ctrl_key_sym, KMOD_LCTRL);
     break;
   case 2:
-    push_key(SDL_KEYUP, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
+    push_key(SDL_KEYUP, ctrl_key_scancode, ctrl_key_sym, KMOD_LCTRL);
     break;
   default:
     push_key(SDL_KEYUP, SDL_SCANCODE_LCTRL, SDLK_LCTRL, 0);
-    reset_step = 0;
+    ctrl_key_step = 0;
     break;
   }
+}
+
+/* pico-8 saves its GIF to desktop_path, which launch.sh sets to the screenshots folder */
+static void save_gif(void)
+{
+  if (screenshots_dir == NULL || *screenshots_dir == '\0' || !cart_make_dirs(screenshots_dir)) {
+    LOG("cannot make the screenshots folder, not saving a GIF\n");
+    return;
+  }
+  press_ctrl_key(SDL_SCANCODE_9, SDLK_9, "save a GIF");
 }
 
 /* the shortcuts that change things before the frame is drawn */
 static void run_shortcut(int shortcut)
 {
   switch (shortcut) {
+  case MENU_SHORTCUT_SAVE_GIF:
+    save_gif();
+    break;
   case MENU_SHORTCUT_RESET:
-    reset_cart();
+    press_ctrl_key(SDL_SCANCODE_R, SDLK_r, "reset the cart");
+    break;
+  case MENU_SHORTCUT_CPU_METER:
+    press_ctrl_key(SDL_SCANCODE_P, SDLK_p, "toggle the CPU meter");
     break;
   case MENU_SHORTCUT_SCREEN_MODE:
     menu_cycle_screen_mode(&settings);
@@ -1585,7 +1609,7 @@ EXPORT void SDL_RenderPresent(void *renderer)
   update_buttons();
   if (sdl.GetTicks != NULL) {
     update_indicator(sdl.GetTicks(), menu_was_down);
-    continue_reset();
+    continue_ctrl_key();
   }
   /*
    * The menu reads the frame before the overlay is drawn over it, so the
@@ -1623,7 +1647,7 @@ EXPORT void SDL_RenderPresent(void *renderer)
 EXPORT int SDL_GetModState(void)
 {
   resolve_sdl();
-  return (sdl.GetModState != NULL ? sdl.GetModState() : 0) | (reset_ctrl_held ? KMOD_LCTRL : 0);
+  return (sdl.GetModState != NULL ? sdl.GetModState() : 0) | (ctrl_held ? KMOD_LCTRL : 0);
 }
 
 EXPORT int SDL_RenderCopy(void *renderer, void *texture, const SDL_Rect *src, const SDL_Rect *dst)
@@ -1662,10 +1686,10 @@ EXPORT int SDL_PollEvent(void *event)
     got = sdl.PollEvent(event);
   } while (got && swallow_event(event));
 
-  /* the reset shortcut's Ctrl is let go once pico-8 has read it being let go */
-  if (got && reset_ctrl_held && *(const uint32_t *)event == SDL_KEYUP &&
+  /* a shortcut's Ctrl is let go once pico-8 has read it being let go */
+  if (got && ctrl_held && *(const uint32_t *)event == SDL_KEYUP &&
       *(const int32_t *)((const unsigned char *)event + 16) == SDL_SCANCODE_LCTRL) {
-    reset_ctrl_held = 0;
+    ctrl_held = 0;
   }
 
   return got;

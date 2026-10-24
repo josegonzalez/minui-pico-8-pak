@@ -897,6 +897,9 @@ static void test_shortcuts_page(void)
   check(file_is(path, "screenshot menu+x\n"), "and saves it");
 
   press(&menu, MENU_DOWN);
+  check(strcmp(menu_shortcut_label(menu.shortcut_row), "Save GIF") == 0,
+        "Save GIF follows Screenshot");
+  press(&menu, MENU_DOWN);
   press(&menu, MENU_A);
   menu_bind(&menu, 2, 1);
   menu_binding_name(&settings.shortcuts[MENU_SHORTCUT_SCREENSHOT], name, sizeof name);
@@ -930,6 +933,14 @@ static void test_shortcuts_page(void)
   menu_read_shortcuts(path, read_back);
   check(read_back[MENU_SHORTCUT_QUIT].button == -1 && read_back[MENU_SHORTCUT_RESET].button == -1,
         "a binding to Menu, or to no button, reads as unbound");
+
+  write_file(path, "save-gif menu+a\ncpu-meter r1\n");
+  menu_read_shortcuts(path, read_back);
+  check(read_back[MENU_SHORTCUT_SAVE_GIF].button == 0 &&
+            read_back[MENU_SHORTCUT_SAVE_GIF].with_menu &&
+            read_back[MENU_SHORTCUT_CPU_METER].button == 10 &&
+            strcmp(menu_shortcut_label(MENU_SHORTCUT_CPU_METER), "Toggle CPU Meter") == 0,
+        "Save GIF and Toggle CPU Meter read back by their names");
 
   /* L2 and R2 are the triggers, numbered after SDL's buttons, and none in between can be bound */
   write_file(path, "quit l2\nreset menu+r2\n");

@@ -986,6 +986,15 @@ teardown() {
   ! grep -q "/mnt/" "$HOME/config.txt"
 }
 
+@test "install_config saves pico-8's GIFs to the screenshots folder" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  grep -qx "desktop_path $SDCARD_PATH/Screenshots/" "$HOME/config.txt"
+  [ "$(grep -c "^desktop_path" "$HOME/config.txt")" -eq 1 ]
+}
+
 @test "install_config keeps every other key from the template" {
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
 
@@ -1034,7 +1043,14 @@ teardown() {
     PLATFORM="$platform" install_config "$rom_folder"
     grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" "$HOME/config.txt"
     grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
+    grep -qx "desktop_path $SDCARD_PATH/Screenshots/" "$HOME/config.txt"
   done
+}
+
+@test "get_screenshots_dir names the folder nextui keeps screenshots in" {
+  run get_screenshots_dir
+  [ "$status" -eq 0 ]
+  [ "$output" = "$SDCARD_PATH/Screenshots" ]
 }
 
 @test "get_saves_dir names the folder minui and nextui keep saves in" {

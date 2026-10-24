@@ -55,6 +55,9 @@ int cart_preview_step(int w, int h);
 int cart_write_screenshot(const char *dir, const char *cart_path, const uint32_t *pixels, int w,
                           int h, time_t when, char *written, size_t size);
 
+/* makes path and any folder above it that is missing, as mkdir -p does, or returns 0 */
+int cart_make_dirs(const char *path);
+
 /*
  * Gives every Splore cart in the roms folders tagged "(<tag>)" the pak's
  * fancy or standard cover, under the names both launchers look for. Only

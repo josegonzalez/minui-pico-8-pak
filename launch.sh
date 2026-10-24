@@ -658,7 +658,8 @@ setup_display_preload() {
 
   # the shortcuts set in the menu, and where the screenshot one saves to
   export PICO_PAK_SHORTCUTS="$USERDATA_PATH/Pico-8-native/shortcuts"
-  export PICO_PAK_SCREENSHOTS_DIR="$SDCARD_PATH/Screenshots"
+  PICO_PAK_SCREENSHOTS_DIR="$(get_screenshots_dir)"
+  export PICO_PAK_SCREENSHOTS_DIR
 
   # the menu gives every Splore cart the cover it is set to, as it changes
   export PICO_PAK_ROMS_DIR="$SDCARD_PATH/Roms"
@@ -760,11 +761,18 @@ get_saves_dir() {
   echo "$SDCARD_PATH/Saves/$PAK_NAME"
 }
 
+# NextUI saves its screenshots here, and the pak saves its screenshots and GIFs
+# alongside them
+get_screenshots_dir() {
+  echo "$SDCARD_PATH/Screenshots"
+}
+
 # config.txt has no command line equivalent for cdata_path, and pico-8 writes
 # cart saves there, so it has to name the Saves folder on this device's SD card
 # rather than the mount the checked in template happened to be captured on.
 # root_path is rewritten alongside it so the file agrees with the -root_path
-# already passed on the command line.
+# already passed on the command line. desktop_path is where pico-8 saves the
+# GIFs the Save GIF shortcut asks for, so it names the screenshots folder.
 install_config() {
   rom_folder="$1"
   overrides="$(get_pico8_config_overrides)"
@@ -775,10 +783,12 @@ install_config() {
   # ENVIRON rather than awk -v, which would process backslash escapes in a path.
   # Only the settings the menu offers are taken from its file, and only as
   # numbers, so a stray line can never move cdata_path or root_path.
-  PICO_CDATA_PATH="$(get_saves_dir)/" PICO_ROOT_PATH="$rom_folder/" PICO_OVERRIDES="$overrides" awk '
+  PICO_CDATA_PATH="$(get_saves_dir)/" PICO_ROOT_PATH="$rom_folder/" \
+  PICO_DESKTOP_PATH="$(get_screenshots_dir)/" PICO_OVERRIDES="$overrides" awk '
     BEGIN {
       cdata = ENVIRON["PICO_CDATA_PATH"]
       root = ENVIRON["PICO_ROOT_PATH"]
+      desktop = ENVIRON["PICO_DESKTOP_PATH"]
       split("show_fps volume foreground_sleep_ms splore_filter check_for_cart_updates", keys, " ")
       for (i in keys) {
         offered[keys[i]] = 1
@@ -792,6 +802,7 @@ install_config() {
     }
     /^cdata_path / { print "cdata_path " cdata; next }
     /^root_path / { print "root_path " root; next }
+    /^desktop_path( |$)/ { print "desktop_path " desktop; next }
     ($1 in value) { print $1 " " value[$1]; next }
     { print }' "$overrides" "$PAK_DIR/config/$PLATFORM.txt" >"$(get_working_config)"
 
