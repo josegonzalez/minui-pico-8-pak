@@ -40,6 +40,11 @@
  * draws each frame with. launch.sh names every file the menu saves to in the
  * PICO_PAK_ variables read by init_display.
  *
+ * The Controls group remaps PICO-8's buttons as minarch's does. pico-8 polls
+ * each button of the pad it opened, so the buttons it reads as its own are
+ * answered with the physical button each control is bound to, from the next
+ * read, while the menu and the shortcuts go on reading the pad itself.
+ *
  * The Shaders group runs NextUI's shaders over the game as minarch does. When
  * pico-8's renderer is SDL's GLES one, the frame pico-8 uploads each time is
  * kept, and its copy to the screen is drawn through the shaders instead, in
@@ -131,6 +136,7 @@ typedef struct {
 #define SDL_CONTROLLER_BUTTON_A 0
 #define SDL_CONTROLLER_BUTTON_B 1
 #define SDL_CONTROLLER_BUTTON_X 2
+#define SDL_CONTROLLER_BUTTON_Y 3
 #define SDL_CONTROLLER_BUTTON_GUIDE 5
 #define SDL_CONTROLLER_BUTTON_DPAD_UP 11
 #define SDL_CONTROLLER_BUTTON_DPAD_DOWN 12
@@ -746,6 +752,8 @@ static void init_display(void)
   settings.installed_config_path = getenv("PICO_PAK_INSTALLED_CONFIG");
   settings.shortcuts_path = getenv("PICO_PAK_SHORTCUTS");
   menu_read_shortcuts(settings.shortcuts_path, settings.shortcuts);
+  settings.controls_path = getenv("PICO_PAK_CONTROLS");
+  menu_read_controls(settings.controls_path, settings.controls);
   screenshots_dir = getenv("PICO_PAK_SCREENSHOTS_DIR");
   notify_screenshot = getenv("PICO_PAK_NOTIFY_SCREENSHOT") == NULL ||
                       strcmp(getenv("PICO_PAK_NOTIFY_SCREENSHOT"), "0") != 0;
@@ -946,14 +954,68 @@ static int is_hidden(int button)
   return 0;
 }
 
+/* the control pico-8 reads from button, or -1 for a button it does not play with */
+static int button_control(int button)
+{
+  int control;
+
+  for (control = 0; control < MENU_CONTROL_COUNT; control++) {
+    if (menu_control_button(control) == button) {
+      return control;
+    }
+  }
+  return -1;
+}
+
+/*
+ * pico-8 plays with the d-pad, A and Y for O, B and X for X, and Start, and
+ * each of those now only comes from a control.
+ */
+static int is_game_button(int button)
+{
+  return button_control(button) >= 0 || button == SDL_CONTROLLER_BUTTON_Y ||
+         button == SDL_CONTROLLER_BUTTON_X;
+}
+
+/*
+ * Whether the physical button a control is bound to is down, with Menu held
+ * for a MENU+button one, as minarch reads them. A button hidden for a
+ * shortcut, or still held from the menu, is not.
+ */
+static int control_down(int control)
+{
+  const struct menu_binding *binding = &settings.controls[control];
+
+  if (!menu_is_bindable(binding->button) || (binding->with_menu && !menu_was_down)) {
+    return 0;
+  }
+  return pad_button(binding->button) && !is_hidden(binding->button);
+}
+
+/* the first control a button is bound to on its own, or -1 */
+static int bound_control(int button)
+{
+  int control;
+
+  for (control = 0; control < MENU_CONTROL_COUNT; control++) {
+    if (settings.controls[control].button == button && !settings.controls[control].with_menu) {
+      return control;
+    }
+  }
+  return -1;
+}
+
 /*
  * Covers pico-8 reading the pad from events as well as from its state. An
- * axis event has its axis where a button event has its button.
+ * axis event has its axis where a button event has its button. A button
+ * event is given the button of the control it is bound to, so the events
+ * agree with what SDL_GameControllerGetButton answers, and one for a button
+ * pico-8 plays with that no control uses is dropped.
  */
-static int swallow_event(const void *event)
+static int swallow_event(void *event)
 {
-  const SDL_ControllerButtonEvent *button = event;
-  int hidden_button;
+  SDL_ControllerButtonEvent *button = event;
+  int hidden_button, control;
 
   if (button->type == SDL_CONTROLLERAXISMOTION) {
     hidden_button = trigger_button(button->button);
@@ -964,7 +1026,19 @@ static int swallow_event(const void *event)
   }
 
   update_buttons();
-  return hidden_button >= 0 && is_hidden(hidden_button);
+  if (hidden_button >= 0 && is_hidden(hidden_button)) {
+    return 1;
+  }
+  if (button->type == SDL_CONTROLLERAXISMOTION || !menu_available()) {
+    return 0;
+  }
+
+  control = bound_control(button->button);
+  if (control >= 0) {
+    button->button = (uint8_t)menu_control_button(control);
+    return 0;
+  }
+  return is_game_button(button->button);
 }
 
 /*
@@ -2523,7 +2597,16 @@ EXPORT uint8_t SDL_GameControllerGetButton(void *pad, int button)
 
   init_display();
   if (pad == controller && pad != NULL) {
+    int control;
+
     update_buttons();
+    control = button_control(button);
+    if (menu_available() && control >= 0) {
+      return control_down(control);
+    }
+    if (menu_available() && is_game_button(button)) {
+      return 0;
+    }
     if (is_hidden(button)) {
       return 0;
     }

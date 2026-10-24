@@ -659,6 +659,7 @@ teardown() {
   [ "$PICO_PAK_SPLORE_COVERS" = "$PAK_DIR/splore" ]
   [ "$PICO_PAK_CART_PATH" = "$cart" ]
   [ "$PICO_PAK_SHORTCUTS" = "$USERDATA_PATH/Pico-8-native/shortcuts" ]
+  [ "$PICO_PAK_CONTROLS" = "$USERDATA_PATH/Pico-8-native/controls" ]
   [ "$PICO_PAK_SHADERS_DIR" = "$SDCARD_PATH/Shaders" ]
   [ "$PICO_PAK_SHADER_SETTINGS" = "$USERDATA_PATH/Pico-8-native/shaders" ]
   [ "$PICO_PAK_SCREENSHOTS_DIR" = "$SDCARD_PATH/Screenshots" ]

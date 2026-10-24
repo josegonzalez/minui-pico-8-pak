@@ -720,6 +720,8 @@ setup_display_preload() {
 
   # the shortcuts set in the menu, and where the screenshot one saves to
   export PICO_PAK_SHORTCUTS="$USERDATA_PATH/Pico-8-native/shortcuts"
+  # the button each of PICO-8's is remapped to in the menu
+  export PICO_PAK_CONTROLS="$USERDATA_PATH/Pico-8-native/controls"
   PICO_PAK_SCREENSHOTS_DIR="$(get_screenshots_dir)"
   export PICO_PAK_SCREENSHOTS_DIR
 

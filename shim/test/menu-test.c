@@ -519,8 +519,9 @@ static void test_drawing(const char *minui_font, const char *nextui_font)
           all_inside &= guards_intact(&canvas);
           cleared &= canvas.pixels[(size_t)(h - 1) * w] == gfx_background(&theme);
           press(&menu, MENU_A);
-          rows = group == MENU_GROUP_SHORTCUTS ? MENU_SHORTCUT_COUNT
-                                               : menu_group_size(&menu, group);
+          rows = group == MENU_GROUP_SHORTCUTS  ? MENU_SHORTCUT_COUNT
+                 : group == MENU_GROUP_CONTROLS ? MENU_CONTROL_ROWS
+                                                : menu_group_size(&menu, group);
           for (row = 0; row < rows; row++) {
             menu_draw(&menu, &canvas, frame, font, &theme, &batteries[f]);
             all_inside &= guards_intact(&canvas);
@@ -1020,6 +1021,164 @@ static void test_shortcuts_page(void)
             menu.option_row == MENU_GROUP_SHORTCUTS,
         "B goes back to Options on the Shortcuts row");
   unlink(path);
+}
+
+/* opens the Controls page from the root page */
+static struct menu open_controls(struct menu_settings *settings)
+{
+  struct menu menu = open_options(settings);
+
+  while (menu.option_row != MENU_GROUP_CONTROLS) {
+    press(&menu, MENU_DOWN);
+  }
+  press(&menu, MENU_A);
+  return menu;
+}
+
+static void test_controls_page(void)
+{
+  char path[8192], shortcuts_path[8192], name[64];
+  struct menu_settings settings;
+  struct menu menu;
+  struct menu_binding read_back[MENU_CONTROL_COUNT];
+  const char *labels[] = {"Up", "Down", "Left", "Right", "O", "X", "Pause"};
+  const char *buttons[] = {"UP", "DOWN", "LEFT", "RIGHT", "A", "B", "START"};
+  int i, defaults_shown = 1, labelled = 1;
+
+  snprintf(path, sizeof path, "%s/controls", dir);
+  snprintf(shortcuts_path, sizeof shortcuts_path, "%s/shortcuts", dir);
+  settings_for_test(&settings);
+  settings.controls_path = path;
+  settings.shortcuts_path = shortcuts_path;
+  menu_read_shortcuts(shortcuts_path, settings.shortcuts);
+  menu_read_controls(path, settings.controls);
+  for (i = 0; i < MENU_CONTROL_COUNT; i++) {
+    menu_binding_name(&settings.controls[i], name, sizeof name);
+    defaults_shown &= strcmp(name, buttons[i]) == 0;
+    labelled &= strcmp(menu_control_label(i), labels[i]) == 0;
+  }
+  check(defaults_shown, "with no file every control has the button PICO-8 reads it from");
+  check(labelled, "the controls are named for PICO-8's buttons, in minarch's order");
+  check(menu_control_button(MENU_CONTROL_O) == 0 && menu_control_button(MENU_CONTROL_X) == 1 &&
+            menu_control_button(MENU_CONTROL_PAUSE) == 6 &&
+            menu_control_button(MENU_CONTROL_UP) == 11,
+        "O is read from A, X from B and Pause from Start");
+
+  menu = open_controls(&settings);
+  check(MENU_GROUP_CONTROLS == MENU_GROUP_SHORTCUTS - 1 && menu.page == MENU_PAGE_CONTROLS &&
+            menu.control_row == 0,
+        "Controls comes before Shortcuts, and A on it opens its page");
+
+  for (i = 0; i < MENU_CONTROL_O; i++) {
+    press(&menu, MENU_DOWN);
+  }
+  press(&menu, MENU_A);
+  check(menu_is_binding(&menu), "A on a control waits for its button");
+  check(press(&menu, MENU_B) == MENU_STAY && menu_is_binding(&menu),
+        "while waiting the menu's own buttons do nothing");
+  menu_bind(&menu, 5, 0);
+  check(menu_is_binding(&menu), "Menu itself cannot be bound");
+  menu_bind(&menu, 9, 0);
+  menu_binding_name(&settings.controls[MENU_CONTROL_O], name, sizeof name);
+  check(!menu_is_binding(&menu) && strcmp(name, "L1") == 0, "a button pressed alone binds it alone");
+  check(file_is(path, "up up\ndown down\nleft left\nright right\no l1\nx b\npause start\n"),
+        "and every control is saved");
+
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_A);
+  menu_bind(&menu, 9, 0);
+  check(settings.controls[MENU_CONTROL_O].button == 9 && settings.controls[MENU_CONTROL_X].button == 9,
+        "two controls can share a button, as PICO-8 can read O and X together");
+
+  press(&menu, MENU_A);
+  menu_bind(&menu, 3, 1);
+  menu_binding_name(&settings.controls[MENU_CONTROL_X], name, sizeof name);
+  check(strcmp(name, "MENU+Y") == 0, "Menu held with Y binds MENU+Y");
+
+  press(&menu, MENU_A);
+  check(press(&menu, MENU_MENU) == MENU_STAY && !menu_is_binding(&menu) &&
+            settings.controls[MENU_CONTROL_X].button == 3,
+        "a tap of Menu gives up waiting, leaving the control as it was");
+
+  press(&menu, MENU_X);
+  menu_binding_name(&settings.controls[MENU_CONTROL_X], name, sizeof name);
+  check(strcmp(name, "None") == 0 &&
+            file_is(path, "up up\ndown down\nleft left\nright right\no l1\nx none\npause start\n"),
+        "X clears the control, which is saved as none");
+  menu_read_controls(path, read_back);
+  check(read_back[MENU_CONTROL_X].button == -1 && read_back[MENU_CONTROL_O].button == 9,
+        "and reads back as no button");
+
+  /* a shortcut on the button would keep it from the game, so the control takes it */
+  settings.shortcuts[MENU_SHORTCUT_RESET].button = 10;
+  settings.shortcuts[MENU_SHORTCUT_QUIT].button = 10;
+  settings.shortcuts[MENU_SHORTCUT_QUIT].with_menu = 1;
+  press(&menu, MENU_A);
+  menu_bind(&menu, 10, 0);
+  check(settings.controls[MENU_CONTROL_X].button == 10 &&
+            settings.shortcuts[MENU_SHORTCUT_RESET].button == -1 &&
+            settings.shortcuts[MENU_SHORTCUT_QUIT].button == 10,
+        "binding a control takes the button from a shortcut, but not MENU+ it");
+  check(file_is(shortcuts_path, "quit menu+r1\n"), "and saves the shortcuts too");
+
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_DOWN);
+  check(menu.control_row == MENU_CONTROL_RESTORE, "Restore Defaults is the last row");
+  press(&menu, MENU_X);
+  check(file_is(path, "up up\ndown down\nleft left\nright right\no l1\nx r1\npause start\n"),
+        "X does nothing on it");
+  press(&menu, MENU_A);
+  menu_binding_name(&settings.controls[MENU_CONTROL_O], name, sizeof name);
+  check(!menu_is_binding(&menu) && strcmp(name, "A") == 0 &&
+            settings.controls[MENU_CONTROL_X].button == 1 && access(path, F_OK) != 0,
+        "A on it gives every control its button back and removes the file");
+  press(&menu, MENU_DOWN);
+  check(menu.control_row == 0, "Down from it wraps to the top");
+
+  write_file(path, "o menu+x\npause menu+menu\nleft sideways\nnonsense a\nx\n");
+  menu_read_controls(path, read_back);
+  check(read_back[MENU_CONTROL_O].button == 2 && read_back[MENU_CONTROL_O].with_menu &&
+            read_back[MENU_CONTROL_PAUSE].button == 6 && read_back[MENU_CONTROL_LEFT].button == 13 &&
+            read_back[MENU_CONTROL_X].button == 1,
+        "a binding to Menu, to no known button, or missing, keeps the control's own");
+  write_file(path, "o l2\nx menu+r2\n");
+  menu_read_controls(path, read_back);
+  check(read_back[MENU_CONTROL_O].button == MENU_BUTTON_L2 &&
+            read_back[MENU_CONTROL_X].button == MENU_BUTTON_R2 && read_back[MENU_CONTROL_X].with_menu,
+        "the triggers can be bound to controls");
+
+  check(press(&menu, MENU_B) == MENU_STAY && menu.page == MENU_PAGE_OPTIONS &&
+            menu.option_row == MENU_GROUP_CONTROLS,
+        "B goes back to Options on the Controls row");
+  unlink(path);
+  unlink(shortcuts_path);
+}
+
+static void test_control_drawing(const char *minui_font)
+{
+  struct menu_settings settings;
+  struct menu menu;
+  gfx_font *font = gfx_font_open(minui_font);
+  gfx_theme theme;
+  gfx_canvas canvas = guarded_canvas(640, 480);
+  int row, inside = 1;
+
+  settings_for_test(&settings);
+  menu_default_controls(settings.controls);
+  gfx_theme_init(&theme, "minui", NULL);
+  menu = open_controls(&settings);
+  for (row = 0; row < MENU_CONTROL_ROWS; row++) {
+    menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
+    inside &= guards_intact(&canvas);
+    press(&menu, MENU_DOWN);
+  }
+  press(&menu, MENU_A);
+  menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
+  inside &= guards_intact(&canvas);
+  check(inside && menu_is_binding(&menu),
+        "the Controls page, waiting or not, stays inside the canvas");
+  free(canvas.pixels - GUARD);
+  gfx_font_close(font);
 }
 
 static void test_cycle_helpers(void)
@@ -1696,6 +1855,8 @@ int main(int argc, char **argv)
   test_preview_size();
   test_splore_covers();
   test_shortcuts_page();
+  test_controls_page();
+  test_control_drawing(minui_font);
   test_cycle_helpers();
   test_shaders();
   test_shader_drawing();

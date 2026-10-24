@@ -82,6 +82,8 @@ On `h700`, NextUI v6.14.0-rc11 or newer is needed for the buttons to map correct
 
 `Start` opens PICO-8's own pause menu on every platform, and `Menu` opens the pak's [in-game menu](#in-game-menu). On `tg5040` and `tg5050` the `Menu` button used to open PICO-8's pause menu, while `Start` did nothing.
 
+Which button does each of PICO-8's buttons can be changed in the in-game menu. See [Controls](#controls-1).
+
 ### In-game menu
 
 Press and release `Menu` to pause the game and open the same menu MinUI and NextUI show over their own emulators. It works from a game, Splore, or PICO-8's command prompt. The game and its sound stay paused until the menu closes. On `h700` this needs NextUI v6.14.0-rc11 or newer, the first release whose controller mapping includes the `Menu` button.
@@ -96,6 +98,28 @@ The menu has these entries:
 - `Quit` fades the screen to black, closes PICO-8 and returns to the game list. The screen stays black, and the game stays silent, until the launcher has drawn its menu again.
 
 The menu takes its look from the launcher, using NextUI's theme colours and font, or MinUI's font. If neither font is on the SD card, it draws with a small built-in font instead.
+
+#### Controls
+
+The `Controls` group of the options sets which button does each of PICO-8's buttons, as the controls in NextUI's own emulators do. A change takes effect straight away, in a game, in Splore and at PICO-8's prompt.
+
+| Control | Button to begin with |
+| ------- | -------------------- |
+| Up      | `Up`                 |
+| Down    | `Down`               |
+| Left    | `Left`               |
+| Right   | `Right`              |
+| O       | `A`                  |
+| X       | `B`                  |
+| Pause   | `Start`              |
+
+To change one, choose it and press `A`, then press the button to use. Hold `Menu` while pressing it to make the control `Menu` + that button. Tap `Menu` alone to give up, and press `X` on a control to clear it, so that nothing does it. Two controls can use the same button. `Restore Defaults`, the last row, gives every control its button back.
+
+PICO-8 itself also reads `Y` as `O` and `X` as `X`. Here they only do what a control binds them to, so to begin with `Y` and `X` do nothing in a game. The left stick still moves as it always has, whatever `Up`, `Down`, `Left` and `Right` are bound to.
+
+The in-game menu always uses the buttons as they are labelled, whatever the controls are. A button bound to a [shortcut](#shortcuts) does the shortcut rather than its control, so binding a control to a button takes it from any shortcut using it.
+
+The controls are saved to a file named `controls` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Delete the file to go back to the defaults.
 
 #### Shortcuts
 
@@ -130,7 +154,7 @@ The pak reads the volume and brightness from the launcher's own settings library
 
 #### Options
 
-`Options` lists five groups, as the options in MinUI and NextUI's own emulators are grouped: `Frontend`, `Emulator`, `Shaders`, `Splore` and `Shortcuts`. Press `A` or `Right` to open one and `B` to go back. In a group, use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. Each change is saved to the SD card straight away.
+`Options` lists six groups, as the options in MinUI and NextUI's own emulators are grouped: `Frontend`, `Emulator`, `Shaders`, `Splore`, `Controls` and `Shortcuts`. Press `A` or `Right` to open one and `B` to go back. In a group, use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. Each change is saved to the SD card straight away.
 
 | Group    | Setting            | Values                           | Takes effect                |
 | -------- | ------------------ | -------------------------------- | --------------------------- |
@@ -150,7 +174,7 @@ The pak reads the volume and brightness from the launcher's own settings library
 | Splore   | Hide Mature Carts  | Off, On                          | The next time a game starts |
 | Splore   | Check Cart Updates | Off, On                          | The next time a game starts |
 
-`Shortcuts` opens its own page, described [below](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Shaders](#shaders), [Save states](#save-states), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
+`Controls` and `Shortcuts` open pages of their own, described under [Controls](#controls-1) and [Shortcuts](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Shaders](#shaders), [Save states](#save-states), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
 
 - `Show FPS` draws the frame rate in the corner of the screen.
 - `Volume` is PICO-8's own volume, which applies under the device's volume.

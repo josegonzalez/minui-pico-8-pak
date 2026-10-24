@@ -116,6 +116,7 @@ static char pico8_config_path[4096];
 static char splore_artwork_path[4096];
 static char switcher_dir[4096];
 static char shortcuts_path[4096];
+static char controls_path[4096];
 static char screenshots_dir[4096];
 static char auto_resume_path[4096];
 static char auto_save_path[4096];
@@ -274,6 +275,7 @@ static void make_fixtures(int states)
   static const char shortcuts[] =
       "screenshot menu+x\nreset menu+y\nscreen-mode l1\noverlay menu+r2\nsave-gif r3\n"
       "cpu-meter l3\n";
+  static const char controls[] = "up menu+r1\nx x\n";
   char path[8192];
   size_t i;
 
@@ -381,6 +383,10 @@ static void make_fixtures(int states)
   snprintf(shortcuts_path, sizeof shortcuts_path, "%s/shortcuts", dir);
   write_file(shortcuts_path, shortcuts, strlen(shortcuts));
   setenv("PICO_PAK_SHORTCUTS", shortcuts_path, 1);
+  /* PICO-8's Up on MENU+R1 and its X on the X button, the rest as they start */
+  snprintf(controls_path, sizeof controls_path, "%s/controls", dir);
+  write_file(controls_path, controls, strlen(controls));
+  setenv("PICO_PAK_CONTROLS", controls_path, 1);
   snprintf(screenshots_dir, sizeof screenshots_dir, "%s/Screenshots", dir);
   setenv("PICO_PAK_SCREENSHOTS_DIR", screenshots_dir, 1);
   unsetenv("PICO_PAK_NOTIFY_SCREENSHOT");
@@ -1044,9 +1050,9 @@ static void test_shortcuts(void *pad)
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
 
-  /* X alone reaches pico-8, and MENU+X takes a screenshot */
+  /* X alone reaches pico-8 as its X, which pico-8 reads from B, and MENU+X takes a screenshot */
   fake.buttons[BUTTON_X] = 1;
-  check(SDL_GameControllerGetButton(pad, BUTTON_X) == 1,
+  check(SDL_GameControllerGetButton(pad, BUTTON_B) == 1,
         "a button bound with Menu still reaches pico-8 on its own");
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
@@ -1055,7 +1061,7 @@ static void test_shortcuts(void *pad)
   fake.buttons[BUTTON_GUIDE] = 1;
   SDL_GameControllerGetButton(pad, BUTTON_A);
   fake.buttons[BUTTON_X] = 1;
-  check(SDL_GameControllerGetButton(pad, BUTTON_X) == 0, "but not with Menu held");
+  check(SDL_GameControllerGetButton(pad, BUTTON_B) == 0, "but not with Menu held");
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
   copies = fake.copies;
@@ -1195,6 +1201,151 @@ static void test_binding(void *pad)
     fclose(file);
   }
   check(found, "Quit is bound to MENU+B in the shortcuts file");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+}
+
+/* queues one controller button event for SDL_PollEvent */
+static void queue_button(uint32_t type, int button)
+{
+  memset(fake.queue, 0, sizeof fake.queue);
+  fake.queue[0][0] = type;
+  ((uint8_t *)&fake.queue[0][3])[0] = (uint8_t)button;
+  fake.queued = 1;
+  fake.queue_head = 0;
+}
+
+/* the button an event queued for pico-8 reaches it as, or -1 when it is dropped */
+static int polled_button(uint32_t type, int button)
+{
+  uint32_t event[14];
+  int got;
+
+  queue_button(type, button);
+  got = SDL_PollEvent(event) == 1 ? ((uint8_t *)&event[3])[0] : -1;
+  fake.queued = fake.queue_head = 0;
+  return got;
+}
+
+/*
+ * The fixtures put PICO-8's Up on MENU+R1 and its X on the X button, which
+ * pico-8 reads as the buttons it plays with, Up and B.
+ */
+static void test_controls(void *pad)
+{
+  int reads = fake.reads;
+
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.buttons[BUTTON_A] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_A) == 1, "A still gives pico-8 its O");
+  release_all();
+  fake.buttons[BUTTON_X] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_B) == 1 &&
+            SDL_GameControllerGetButton(pad, BUTTON_X) == 0,
+        "X gives pico-8 its X, read from B, and no longer reads as X");
+  release_all();
+  fake.buttons[BUTTON_B] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_B) == 0 &&
+            SDL_GameControllerGetButton(pad, BUTTON_A) == 0,
+        "B, bound to no control, gives pico-8 nothing");
+  release_all();
+  fake.buttons[BUTTON_Y] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_Y) == 0 &&
+            SDL_GameControllerGetButton(pad, BUTTON_A) == 0,
+        "nor does Y, which pico-8 would read as O");
+  release_all();
+  fake.buttons[BUTTON_DPAD_UP] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_DPAD_UP) == 0, "Up on the d-pad, moved away, does nothing");
+  release_all();
+  fake.buttons[BUTTON_BACK] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_BACK) == 1,
+        "a button pico-8 does not play with is left alone");
+  release_all();
+  fake.axes[0] = -32768;
+  check(SDL_GameControllerGetAxis(pad, 0) == -32768, "and so is the stick");
+  release_all();
+
+  fake.buttons[BUTTON_R1] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_DPAD_UP) == 0, "R1 alone is not MENU+R1");
+  fake.buttons[BUTTON_GUIDE] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_DPAD_UP) == 1, "but with Menu held gives pico-8 Up");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == reads, "and letting go of Menu then opens no menu");
+
+  check(polled_button(SDL_CONTROLLERBUTTONDOWN, BUTTON_X) == BUTTON_B,
+        "X's event reaches pico-8 as B's, as its state does");
+  check(polled_button(SDL_CONTROLLERBUTTONUP, BUTTON_B) == -1 &&
+            polled_button(SDL_CONTROLLERBUTTONDOWN, BUTTON_Y) == -1,
+        "and the events of B and Y, bound to nothing, are dropped");
+  check(polled_button(SDL_CONTROLLERBUTTONDOWN, BUTTON_A) == BUTTON_A &&
+            polled_button(SDL_CONTROLLERBUTTONDOWN, BUTTON_BACK) == BUTTON_BACK,
+        "while A's and Select's reach it as they were");
+  check(polled_button(SDL_CONTROLLERBUTTONDOWN, BUTTON_L3) == -1,
+        "and a shortcut's button still never reaches it");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+}
+
+/*
+ * Remapping in the menu: Options, up past Shortcuts to Controls, down to O,
+ * A, then Y. B backs out of each page after.
+ */
+static void test_control_binding(void *pad)
+{
+  static const uint32_t bind[] = {
+      BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_DPAD_UP), 0,
+      BIT(BUTTON_A), 0, BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_DOWN),
+      0, BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_Y), 0, BIT(BUTTON_B), 0,
+      BIT(BUTTON_B), 0, BIT(BUTTON_B)};
+  /* the same way in, then up from Up to Restore Defaults */
+  static const uint32_t restore[] = {
+      BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_DPAD_UP), 0,
+      BIT(BUTTON_A), 0, BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_A), 0, BIT(BUTTON_B), 0,
+      BIT(BUTTON_B), 0, BIT(BUTTON_B)};
+  char line[256] = "";
+  FILE *file;
+  int found = 0;
+
+  release_all();
+  tap_menu(pad);
+  set_script(bind, (int)(sizeof bind / sizeof *bind));
+  SDL_RenderPresent(&renderer_b);
+  check(fake.delays == (int)(sizeof bind / sizeof *bind), "binding a control leaves the menu open");
+
+  file = fopen(controls_path, "r");
+  while (file != NULL && fgets(line, sizeof line, file) != NULL) {
+    found |= strcmp(line, "o y\n") == 0;
+  }
+  if (file != NULL) {
+    fclose(file);
+  }
+  check(found, "O is bound to Y in the controls file");
+
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.buttons[BUTTON_Y] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_A) == 1, "and Y gives pico-8 its O straight away");
+  release_all();
+  fake.buttons[BUTTON_A] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_A) == 0, "while A no longer does");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  tap_menu(pad);
+  set_script(restore, (int)(sizeof restore / sizeof *restore));
+  SDL_RenderPresent(&renderer_b);
+  check(fake.delays == (int)(sizeof restore / sizeof *restore) && access(controls_path, F_OK) != 0,
+        "Restore Defaults removes the controls file");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.buttons[BUTTON_A] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_A) == 1, "and A gives pico-8 its O again");
+  release_all();
+  fake.buttons[BUTTON_B] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_B) == 1, "as B gives it its X");
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
 }
@@ -1882,6 +2033,8 @@ int main(int argc, char **argv)
   test_settings(pad);
   test_shortcuts(pad);
   test_binding(pad);
+  test_controls(pad);
+  test_control_binding(pad);
   test_indicator();
   test_quit(pad);
   test_crash();
