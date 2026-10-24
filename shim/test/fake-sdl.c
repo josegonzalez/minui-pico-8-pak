@@ -243,6 +243,7 @@ int SDL_RenderReadPixels(void *renderer, const fake_rect *rect, uint32_t format,
   fake.read_format = format;
   fake.read_pitch = pitch;
   record_state(&fake.read_state);
+  fake.copies_at_read = fake.copies;
   for (i = 0; i < FAKE_OUTPUT_W * FAKE_OUTPUT_H; i++) {
     out[i] = fake.frame_colour;
   }

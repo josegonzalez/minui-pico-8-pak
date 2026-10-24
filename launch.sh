@@ -521,47 +521,6 @@ get_pico_architecture() {
   echo "arm"
 }
 
-# The menu's title is the name the game list shows: the cart's row in map.txt,
-# or its file name without the extension and the "1) " MinUI and NextUI sort by
-# and leave off. A multi-cart game is listed as its folder, the m3u's. Every
-# step is the shell's own, as each command started costs time on these devices.
-get_cart_display_name() {
-  display_folder="${1%/*}"
-  display_key="${1##*/}"
-  display_name="$display_key"
-
-  if [ -f "$display_folder/${display_folder##*/}.m3u" ]; then
-    display_key="${display_folder##*/}"
-    display_name="$display_key"
-    display_folder="${display_folder%/*}"
-  else
-    case "$display_name" in
-    *.[pP][nN][gG]) display_name="${display_name%.*}" ;;
-    esac
-    case "$display_name" in
-    *.[pP]8) display_name="${display_name%.*}" ;;
-    esac
-  fi
-
-  if [ -f "$display_folder/map.txt" ]; then
-    # ENVIRON rather than awk -v, which would process backslash escapes in a name
-    display_mapped="$(DISPLAY_KEY="$display_key" awk -F'\t' '$1 == ENVIRON["DISPLAY_KEY"] { sub(/\r$/, "", $2); print $2; exit }' "$display_folder/map.txt")"
-    if [ -n "$display_mapped" ]; then
-      echo "$display_mapped"
-      return 0
-    fi
-  fi
-
-  display_prefix="${display_name%%) *}"
-  if [ "$display_prefix" != "$display_name" ] && [ -n "$display_prefix" ]; then
-    case "$display_prefix" in
-    *[!0-9]*) ;;
-    *) display_name="${display_name#"$display_prefix") }" ;;
-    esac
-  fi
-  echo "$display_name"
-}
-
 # The menu dresses as the launcher pico-8 was started from. NextUI keeps its
 # theme in minuisettings.txt and ships font1.ttf and font2.ttf, while MinUI has
 # neither and draws everything with BPreplay.
@@ -646,10 +605,18 @@ has_overlays() {
   return 1
 }
 
+# NextUI's game switcher folder, which the display shim gives the cart's
+# preview. MinUI reads the same files to offer a resume, so it gets none.
+get_switcher_dir() {
+  if [ "$IS_NEXT" = "yes" ]; then
+    echo "$SHARED_USERDATA_PATH/.minui/$PAK_NAME"
+  fi
+}
+
 # The shim also draws the in-game menu, so it is loaded whenever the pak ships
-# it, overlays or not. Takes the cart being started, for the menu's title.
-# Returns non-zero when it is not loaded, so the caller knows to stretch
-# pico-8 itself.
+# it, overlays or not. Takes the cart being started, which the shim works out
+# the menu's title and the switcher's preview from. Returns non-zero when it is
+# not loaded, so the caller knows to stretch pico-8 itself.
 setup_display_preload() {
   overlay_dir="$(get_overlay_dir)"
   display_shim="$PAK_DIR/lib/$(get_pico_architecture)/sdl-display.so"
@@ -677,12 +644,18 @@ setup_display_preload() {
   export PICO_PAK_PICO8_CONFIG
   export PICO_PAK_INSTALLED_CONFIG="$HOME/config.txt"
 
-  PICO_PAK_CART_NAME="$(get_cart_display_name "$1")"
+  # the menu gives every Splore cart the cover it is set to, as it changes
+  export PICO_PAK_ROMS_DIR="$SDCARD_PATH/Roms"
+  export PICO_PAK_TAG="$PAK_NAME"
+  export PICO_PAK_SPLORE_COVERS="$PAK_DIR/splore"
+
+  export PICO_PAK_CART_PATH="$1"
+  PICO_PAK_SWITCHER_DIR="$(get_switcher_dir)"
   PICO_PAK_MENU_STYLE="$(get_menu_style)"
   PICO_PAK_MENU_FONT="$(get_menu_font "$PICO_PAK_MENU_STYLE")"
   PICO_PAK_MENU_COLORS="$(get_menu_colors "$PICO_PAK_MENU_STYLE")"
-  export PICO_PAK_CART_NAME PICO_PAK_MENU_STYLE PICO_PAK_MENU_FONT PICO_PAK_MENU_COLORS
-  echo "In-game menu: $PICO_PAK_MENU_STYLE look, font ${PICO_PAK_MENU_FONT:-built-in}, titled $PICO_PAK_CART_NAME" 1>&2
+  export PICO_PAK_SWITCHER_DIR PICO_PAK_MENU_STYLE PICO_PAK_MENU_FONT PICO_PAK_MENU_COLORS
+  echo "In-game menu: $PICO_PAK_MENU_STYLE look, font ${PICO_PAK_MENU_FONT:-built-in}" 1>&2
 
   export LD_PRELOAD="$display_shim${LD_PRELOAD:+:$LD_PRELOAD}"
 }
@@ -949,50 +922,6 @@ get_splore_artwork() {
   echo "$PAK_DIR/splore/Splore.p8.png"
 }
 
-is_pak_splore_artwork() {
-  cmp -s "$1" "$PAK_DIR/splore/Splore.p8.png" || cmp -s "$1" "$PAK_DIR/splore/Splore-fancy.p8.png"
-}
-
-# Gives every Splore cart in a roms folder the cover chosen in the in-game menu,
-# under the names both launchers look for, renamed carts included. Artwork that
-# is neither of the pak's covers is the user's own, and is left alone, as is a
-# cart with no artwork at all.
-apply_splore_artwork() {
-  splore_artwork="$(get_splore_artwork)"
-  if [ ! -f "$splore_artwork" ]; then
-    echo "Splore artwork $splore_artwork is missing, leaving the covers alone" 1>&2
-    return 0
-  fi
-  if ! command -v cmp >/dev/null 2>&1; then
-    echo "No cmp on this device, cannot tell the pak's Splore covers from your own" 1>&2
-    return 0
-  fi
-
-  for rom_folder in "$SDCARD_PATH/Roms/"*"($PAK_NAME)"; do
-    [ -d "$rom_folder" ] || continue
-
-    # the glob is is_splore_cart's own match, so the folder's other carts are
-    # never looked at one by one
-    for splore_entry in "$rom_folder"/*[Ss]plore*; do
-      [ -f "$splore_entry" ] || continue
-      splore_name="${splore_entry##*/}"
-      is_splore_cart "$splore_name" || continue
-
-      for splore_cover in "$rom_folder/.media/${splore_name%.*}.png" "$rom_folder/.res/$splore_name.png"; do
-        if [ ! -f "$splore_cover" ] || ! is_pak_splore_artwork "$splore_cover" ||
-          cmp -s "$splore_artwork" "$splore_cover"; then
-          continue
-        fi
-
-        echo "Using ${splore_artwork##*/} as the cover of $splore_name in $rom_folder" 1>&2
-        cp -f "$splore_artwork" "$splore_cover"
-      done
-    done
-  done
-
-  return 0
-}
-
 install_splore_cart() {
   marker_file="$USERDATA_PATH/Pico-8-native/splore-installed"
   if [ -f "$marker_file" ]; then
@@ -1037,63 +966,6 @@ install_splore_cart() {
   if [ "$seeded" = "true" ]; then
     true >"$marker_file"
     sync
-  fi
-
-  return 0
-}
-
-# Every png starts with the byte 0x89 followed by PNG, and a text cart starts
-# with its pico-8 cartridge header instead.
-is_png_file() {
-  [ "$(dd if="$1" bs=1 skip=1 count=3 2>/dev/null)" = "PNG" ]
-}
-
-# NextUI's game switcher lists every recent game but only draws a preview, and
-# only offers to remove one, when <rom>.txt names a save slot and <rom>.<slot>.bmp
-# holds its screenshot. pico-8 has no save states, so the cart's artwork stands in
-# for the screenshot. NextUI loads the image by its content rather than its name,
-# so a png under a .bmp name works. MinUI reads the same files to offer a resume,
-# which is why this only runs under NextUI.
-write_switcher_preview() {
-  if [ "$IS_NEXT" != "yes" ]; then
-    return 0
-  fi
-
-  switcher_folder="$(dirname "$1")"
-  switcher_name="$(basename "$1")"
-  switcher_art=""
-
-  # NextUI keys a multi-cart game by its m3u, and draws the folder entry with
-  # artwork from the folder above it
-  switcher_m3u="$switcher_folder/${switcher_folder##*/}.m3u"
-  if [ -f "$switcher_m3u" ]; then
-    switcher_name="${switcher_m3u##*/}"
-    if [ -f "${switcher_folder%/*}/.media/${switcher_folder##*/}.png" ]; then
-      switcher_art="${switcher_folder%/*}/.media/${switcher_folder##*/}.png"
-    fi
-  fi
-
-  if [ -z "$switcher_art" ] && [ -f "$switcher_folder/.media/${switcher_name%.*}.png" ]; then
-    switcher_art="$switcher_folder/.media/${switcher_name%.*}.png"
-  fi
-
-  # a cart is usually itself an image of its label, whether it is named .p8.png
-  # or only .p8, so its signature decides rather than its name. A text cart
-  # would leave NextUI a slot whose preview it cannot load.
-  if [ -z "$switcher_art" ] && is_png_file "$1"; then
-    switcher_art="$1"
-  fi
-
-  if [ -z "$switcher_art" ]; then
-    echo "No artwork for $switcher_name, the game switcher will show no preview" 1>&2
-    return 0
-  fi
-
-  switcher_dir="$SHARED_USERDATA_PATH/.minui/$PAK_NAME"
-  if ! mkdir -p "$switcher_dir" ||
-    ! cp -f "$switcher_art" "$switcher_dir/$switcher_name.0.bmp" ||
-    ! echo 0 >"$switcher_dir/$switcher_name.txt"; then
-    echo "Unable to write a game switcher preview for $switcher_name to $switcher_dir" 1>&2
   fi
 
   return 0
@@ -1192,21 +1064,15 @@ launch_cart() {
   log_step "syncing the SD card"
   sync
 
-  # The artwork and the switcher preview run alongside the copy, which can
-  # take seconds over a large Splore cache. The preview copies the Splore
-  # cart's cover, so it follows the artwork, and NextUI added the cart to its
-  # recents before starting the pak, whether or not pico-8 went on to run it.
-  log_step "applying the Splore artwork, writing the game switcher preview and copying Splore carts"
-  (
-    untraced apply_splore_artwork
-    untraced write_switcher_preview "$ROM_PATH"
-  ) &
-  artwork_pid=$!
-  untraced copy_carts "$ROM_FOLDER"
-  wait "$artwork_pid"
-
-  log_step "syncing the SD card again"
-  sync
+  # Splore is what downloads carts, so after any other cart there is nothing
+  # new to copy and the scan of its cache is skipped. copy_carts syncs what it
+  # copies itself.
+  if is_splore_cart "$ROM_NAME"; then
+    log_step "copying Splore carts"
+    untraced copy_carts "$ROM_FOLDER"
+  else
+    echo "Not a Splore session, so no carts to copy" 1>&2
+  fi
 
   # minui-power-control ends a session by signalling pico-8, and a status above
   # 128 is a signal, so it is not a failure worth putting on screen

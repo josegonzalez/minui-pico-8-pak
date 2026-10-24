@@ -63,6 +63,9 @@ static char screen_mode_path[4096];
 static char copy_carts_dir[4096];
 static char pico8_config_path[4096];
 static char splore_artwork_path[4096];
+static char switcher_dir[4096];
+
+static int preview_is_frame(int w, int h, uint32_t colour);
 static char input_path[4096];
 static char renderer_a, renderer_b, game_texture;
 static void *fake_library;
@@ -295,7 +298,12 @@ static void make_fixtures(void)
   setenv("PICO_PAK_PICO8_CONFIG", pico8_config_path, 1);
   snprintf(splore_artwork_path, sizeof splore_artwork_path, "%s/splore-artwork", dir);
   setenv("PICO_PAK_SPLORE_ARTWORK", splore_artwork_path, 1);
-  setenv("PICO_PAK_CART_NAME", "Celeste", 1);
+  /* a cart that is its own label, and NextUI's switcher folder, not there yet */
+  snprintf(path, sizeof path, "%s/Celeste.p8", dir);
+  write_file(path, "\x89PNG\r\n\x1a\nlabel", 13);
+  setenv("PICO_PAK_CART_PATH", path, 1);
+  snprintf(switcher_dir, sizeof switcher_dir, "%s/.minui/PICO", dir);
+  setenv("PICO_PAK_SWITCHER_DIR", switcher_dir, 1);
   /* no font, so the menu draws with its built-in one */
   unsetenv("PICO_PAK_MENU_FONT");
 }
@@ -385,7 +393,13 @@ static void test_select_combos(void *pad)
 static void test_overlays(void *pad)
 {
   struct fake_copy *copy;
-  int copies;
+  char path[8192];
+  int copies, surfaces;
+
+  snprintf(path, sizeof path, "%s/Celeste.p8.0.bmp", switcher_dir);
+  check(file_is(path, "\x89PNG\r"), "the cart's artwork is the switcher's preview from the start");
+  snprintf(path, sizeof path, "%s/Celeste.p8.txt", switcher_dir);
+  check(file_is(path, "0"), "with slot 0 named for it");
 
   /* pico-8 letterboxes with every one of these, and the overlay must not */
   fake.logical_w = fake.logical_h = 128;
@@ -455,8 +469,9 @@ static void test_overlays(void *pad)
 
   SDL_DestroyRenderer(&renderer_a);
   copies = fake.copies;
+  surfaces = fake.surfaces;
   SDL_RenderPresent(&renderer_b);
-  check(fake.surfaces == 3 && fake.copies == copies + 1,
+  check(fake.surfaces == surfaces + 1 && fake.copies == copies + 1,
         "a new renderer gets the overlay loaded again");
 }
 
@@ -487,6 +502,8 @@ static void test_menu(void *pad)
             rect_is(fake.read_state.viewport, 0, 0, FAKE_OUTPUT_W, FAKE_OUTPUT_H) &&
             !fake.read_state.clip_enabled,
         "the frame is read with the letterboxing cleared");
+  check(fake.copies_at_read == 0 && fake.copies > 1,
+        "the frame is read before the overlay is drawn, which is drawn after the menu");
   check(fake.updated[0] == 0xff7f3f1f, "the menu is drawn over the frame dimmed by half");
   check(fake.updates >= 2 && fake.updated[fake.updates - 1] == (frame | 0xff000000u),
         "the undimmed frame is put back when the menu closes");
@@ -578,6 +595,8 @@ static void test_quit(void *pad)
             fake.updated[fake.updates - 2] != 0xff000000u,
         "Quit fades the menu out to black");
   check(fake.audio_resumes == resumes, "pico-8's audio stays paused after Quit");
+  check(preview_is_frame(1024, 768, 0x00ff8040),
+        "Quit gives the switcher the game's last frame as its preview");
 
   copies = fake.copies;
   black_clears = fake.black_clears;
@@ -611,6 +630,28 @@ static void test_quit_event(void *pad)
   check(fake.delays == 8 && fake.updates >= 8 && fake.updated[fake.updates - 1] == 0xff000000u,
         "it fades out to black from the game, as the menu never drew");
   fake.queued = fake.queue_head = 0;
+}
+
+/* the preview is a 24-bit BMP of the frame, whose bottom left pixel is colour */
+static int preview_is_frame(int w, int h, uint32_t colour)
+{
+  char path[8192];
+  unsigned char header[57];
+  FILE *file;
+  int ok;
+
+  snprintf(path, sizeof path, "%s/Celeste.p8.0.bmp", switcher_dir);
+  file = fopen(path, "rb");
+  if (file == NULL) {
+    return 0;
+  }
+  ok = fread(header, 1, sizeof header, file) == sizeof header;
+  fclose(file);
+
+  return ok && header[0] == 'B' && header[1] == 'M' &&
+         (header[18] | header[19] << 8) == w && (header[22] | header[23] << 8) == h &&
+         header[54] == (colour & 0xff) && header[55] == ((colour >> 8) & 0xff) &&
+         header[56] == ((colour >> 16) & 0xff);
 }
 
 static void append_volume_key(void)

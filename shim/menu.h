@@ -75,8 +75,12 @@ struct menu_settings {
   /* the copy-carts markers are read from both folders and written to the first */
   const char *copy_carts_dir;
   const char *shared_copy_carts_dir;
-  /* the cover launch.sh gives the Splore cart in the game list when it exits */
+  /* the Splore cover chosen, which the menu gives the Splore carts as it changes */
   const char *splore_artwork_path;
+  /* the roms folders, the tag that marks this pak's, and the pak's two covers */
+  const char *roms_dir;
+  const char *tag;
+  const char *splore_covers_dir;
   /* the PICO-8 settings the menu has changed, which launch.sh puts in config.txt */
   const char *pico8_config_path;
   /* the config.txt pico-8 was started with, for the settings never changed */

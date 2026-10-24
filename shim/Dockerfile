@@ -41,7 +41,7 @@ ADD --checksum=sha256:b653557e79afa5c63ac5fd2a8c4e16c1a55c5addb6cbaf767b4bf4e57c
 FROM --platform=linux/arm64 ${BASE_IMAGE} AS build-arm64
 
 COPY sdl-nosensor.c /src/sdl-nosensor.c
-COPY sdl-display.c menu.c menu.h gfx.c gfx.h /src/
+COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h /src/
 COPY --from=stb /stb_image.h /stb_truetype.h /src/
 
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
@@ -50,7 +50,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
 # Hidden by default, so only the SDL wrappers are exported and nothing of the
 # menu can be bound to a function of the same name in pico-8.
 RUN gcc -shared -fPIC -fvisibility=hidden -O2 -Wall -Wextra -Werror \
-  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c -ldl
+  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c -ldl
 
 # The display shim has to export every wrapper and nothing of the decoders or
 # the menu, must not go looking for an SDL2_image at runtime, and must take
@@ -64,7 +64,7 @@ RUN readelf -V /display.so | grep -q 'GLIBC_2.17' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_DestroyRenderer$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_OpenAudioDevice$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_OpenAudio$' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu)_' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu|cart)_' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
@@ -82,11 +82,11 @@ RUN readelf -V /out.so | grep -q 'GLIBC_2.17' \
 
 FROM --platform=linux/arm/v7 ${BASE_IMAGE} AS build-arm
 
-COPY sdl-display.c menu.c menu.h gfx.c gfx.h /src/
+COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h /src/
 COPY --from=stb /stb_image.h /stb_truetype.h /src/
 
 RUN gcc -shared -fPIC -fvisibility=hidden -O2 -Wall -Wextra -Werror \
-  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c -ldl
+  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c -ldl
 
 # GLIBC_2.4 is the armhf base version, so the same ceiling holds here
 RUN readelf -h /display.so | grep -q 'ARM$' \
@@ -99,7 +99,7 @@ RUN readelf -h /display.so | grep -q 'ARM$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_DestroyRenderer$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_OpenAudioDevice$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_OpenAudio$' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu)_' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu|cart)_' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
@@ -118,7 +118,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/display-test /src/test/display-test.c \
   /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test -ldl \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/menu-test /src/test/menu-test.c \
-  /src/menu.c /src/gfx.c -lm
+  /src/menu.c /src/gfx.c /src/cart.c -lm
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-event \
@@ -134,7 +134,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/display-test /src/test/display-test.c \
   /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test -ldl \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/menu-test /src/test/menu-test.c \
-  /src/menu.c /src/gfx.c -lm
+  /src/menu.c /src/gfx.c /src/cart.c -lm
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-event \

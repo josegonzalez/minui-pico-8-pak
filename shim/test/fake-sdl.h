@@ -66,6 +66,8 @@ struct fake_state {
   uint32_t read_format;
   int read_pitch;
   struct fake_copy read_state;
+  /* how many copies there had been when the frame was read */
+  int copies_at_read;
 
   /* the first pixel of each SDL_UpdateTexture, and how many there were */
   int updates;

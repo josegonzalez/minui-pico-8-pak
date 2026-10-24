@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../cart.h"
 #include "../gfx.h"
 #include "../menu.h"
 
@@ -676,6 +677,200 @@ static void test_battery(void)
         "the battery's capacity is read, kept to 100, with its charging state");
 }
 
+static void make_dirs(const char *path)
+{
+  char partial[8192];
+  size_t i;
+
+  snprintf(partial, sizeof partial, "%s", path);
+  for (i = 1; partial[i] != '\0'; i++) {
+    if (partial[i] == '/') {
+      partial[i] = '\0';
+      mkdir(partial, 0755);
+      partial[i] = '/';
+    }
+  }
+  mkdir(partial, 0755);
+}
+
+static void put_file(const char *folder, const char *name, const char *text)
+{
+  char path[16384];
+
+  make_dirs(folder);
+  snprintf(path, sizeof path, "%s/%s", folder, name);
+  write_file(path, text);
+}
+
+static int same_text(const char *path, const char *expected)
+{
+  return file_is(path, expected);
+}
+
+static void test_cart_title(void)
+{
+  char roms[8192], cart[16384], title[256];
+
+  snprintf(roms, sizeof roms, "%s/titles/Pico-8 (PICO)", dir);
+  make_dirs(roms);
+
+  snprintf(cart, sizeof cart, "%s/Celeste.p8.png", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "Celeste") == 0, "a cart's title drops .p8.png");
+  snprintf(cart, sizeof cart, "%s/Celeste.P8", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "Celeste") == 0, "a cart's title drops .p8 whatever its case");
+  snprintf(cart, sizeof cart, "%s/Celeste.png", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "Celeste") == 0, "a cart's title drops .png");
+
+  snprintf(cart, sizeof cart, "%s/1) Splore.p8", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "Splore") == 0, "a cart's title drops the number it is sorted by");
+  snprintf(cart, sizeof cart, "%s/A) Celeste.p8", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "A) Celeste") == 0, "but only a number");
+  snprintf(cart, sizeof cart, "%s/2048.p8", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "2048") == 0, "a title that is a number is kept");
+
+  put_file(roms, "map.txt", "other.p8.png\tOther\r\n15133.p8.png\tCeleste Classic 2\r\n");
+  snprintf(cart, sizeof cart, "%s/15133.p8.png", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "Celeste Classic 2") == 0, "a cart's row in map.txt names it");
+  snprintf(cart, sizeof cart, "%s/unlisted.p8", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "unlisted") == 0, "a cart map.txt does not list is named by its file");
+
+  snprintf(cart, sizeof cart, "%s/Poom", roms);
+  put_file(cart, "Poom.m3u", "poom_0.p8\n");
+  snprintf(cart, sizeof cart, "%s/Poom/poom_0.p8", roms);
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "Poom") == 0, "a multi-cart game is named after its folder");
+  put_file(roms, "map.txt", "Poom\tPOOM 1.9\n");
+  cart_title(cart, title, sizeof title);
+  check(strcmp(title, "POOM 1.9") == 0, "or its folder's row in map.txt");
+}
+
+static void test_switcher_preview(void)
+{
+  char roms[8192], switcher[8192], cart[16384], path[16384], artwork[16384];
+  uint32_t frame[2 * 3];
+  unsigned char bmp[256];
+  FILE *file;
+  size_t got;
+  int i;
+
+  snprintf(roms, sizeof roms, "%s/preview/Pico-8 (PICO)", dir);
+  snprintf(switcher, sizeof switcher, "%s/preview/.minui/PICO", dir);
+  make_dirs(roms);
+
+  put_file(roms, "Text.p8", "pico-8 cartridge // http://www.pico-8.com\n");
+  snprintf(cart, sizeof cart, "%s/Text.p8", roms);
+  check(!cart_artwork(cart, artwork, sizeof artwork) &&
+            !cart_write_preview_artwork(switcher, cart),
+        "a text cart with no artwork gives the switcher no preview");
+  snprintf(path, sizeof path, "%s/Text.p8.txt", switcher);
+  check(access(path, F_OK) != 0, "and no slot, as NextUI would show one it cannot load");
+
+  put_file(roms, "Label.p8", "\x89PNG\r\n\x1a\nlabel");
+  snprintf(cart, sizeof cart, "%s/Label.p8", roms);
+  check(cart_write_preview_artwork(switcher, cart), "a .p8 cart that is a PNG is its own preview");
+  snprintf(path, sizeof path, "%s/Label.p8.0.bmp", switcher);
+  check(same_text(path, "\x89PNG\r\n\x1a\nlabel"), "copied under the name the switcher reads");
+  snprintf(path, sizeof path, "%s/Label.p8.txt", switcher);
+  check(same_text(path, "0\n"), "with slot 0 named for it");
+
+  snprintf(path, sizeof path, "%s/.media", roms);
+  put_file(path, "Label.png", "media artwork");
+  check(cart_artwork(cart, artwork, sizeof artwork) && strstr(artwork, "/.media/Label.png") != NULL,
+        "artwork in .media is preferred to the cart");
+
+  snprintf(path, sizeof path, "%s/Poom", roms);
+  put_file(path, "Poom.m3u", "poom_0.p8\n");
+  put_file(path, "poom_0.p8", "\x89PNG\r\n\x1a\npoom");
+  snprintf(path, sizeof path, "%s/.media", roms);
+  put_file(path, "Poom.png", "folder artwork");
+  snprintf(cart, sizeof cart, "%s/Poom/poom_0.p8", roms);
+  check(cart_write_preview_artwork(switcher, cart),
+        "a multi-cart game gets the preview of its folder");
+  snprintf(path, sizeof path, "%s/Poom.m3u.0.bmp", switcher);
+  check(same_text(path, "folder artwork"), "keyed by its m3u, with the folder's artwork");
+
+  for (i = 0; i < 6; i++) {
+    frame[i] = 0xff000000u | (uint32_t)(i * 0x101010);
+  }
+  snprintf(cart, sizeof cart, "%s/Label.p8", roms);
+  check(cart_write_preview_frame(switcher, cart, frame, 2, 3), "a frame becomes the preview");
+  snprintf(path, sizeof path, "%s/Label.p8.0.bmp", switcher);
+  file = fopen(path, "rb");
+  got = file != NULL ? fread(bmp, 1, sizeof bmp, file) : 0;
+  if (file != NULL) {
+    fclose(file);
+  }
+  /* 2x3 at 3 bytes a pixel is 6 bytes a row, padded to 8, bottom row first */
+  check(got == 54 + 8 * 3 && bmp[0] == 'B' && bmp[1] == 'M' && bmp[18] == 2 && bmp[22] == 3 &&
+            bmp[28] == 24,
+        "written as a 24-bit BMP of the frame's size");
+  check(bmp[54] == 0x40 && bmp[54 + 3] == 0x50 && bmp[54 + 16] == 0x00 && bmp[54 + 16 + 3] == 0x10,
+        "with the bottom row first and every pixel blue, green, red");
+
+  check(!cart_write_preview_artwork(NULL, cart) && !cart_write_preview_artwork("", cart),
+        "nothing is written without a switcher folder, as under MinUI");
+}
+
+static void test_splore_covers(void)
+{
+  char covers[8192], roms[8192], folder[16384], other[16384], path[32768];
+  struct menu_settings settings;
+  struct menu menu;
+
+  snprintf(covers, sizeof covers, "%s/covers", dir);
+  put_file(covers, "Splore.p8.png", "standard cover");
+  put_file(covers, "Splore-fancy.p8.png", "fancy cover");
+
+  snprintf(roms, sizeof roms, "%s/covers-roms", dir);
+  snprintf(folder, sizeof folder, "%s/Pico-8 (PICO)", roms);
+  put_file(folder, "1) Splore.p8", "cart");
+  put_file(folder, "Celeste.p8", "cart");
+  snprintf(path, sizeof path, "%s/.media", folder);
+  put_file(path, "1) Splore.png", "standard cover");
+  put_file(path, "Celeste.png", "standard cover");
+  snprintf(path, sizeof path, "%s/.res", folder);
+  put_file(path, "1) Splore.p8.png", "my own cover");
+  snprintf(other, sizeof other, "%s/Game Boy (GB)", roms);
+  put_file(other, "Splore.gb", "rom");
+  snprintf(path, sizeof path, "%s/.media", other);
+  put_file(path, "Splore.png", "standard cover");
+
+  settings_for_test(&settings);
+  settings.roms_dir = roms;
+  settings.tag = "PICO";
+  settings.splore_covers_dir = covers;
+  menu = open_options(&settings);
+  select_row(&menu, MENU_SPLORE_ARTWORK);
+  press(&menu, MENU_RIGHT);
+
+  snprintf(path, sizeof path, "%s/.media/1) Splore.png", folder);
+  check(same_text(path, "fancy cover"), "the menu gives a renamed Splore cart the fancy cover at once");
+  snprintf(path, sizeof path, "%s/.res/1) Splore.p8.png", folder);
+  check(same_text(path, "my own cover"), "a cover of the user's own is left alone");
+  snprintf(path, sizeof path, "%s/.media/Celeste.png", folder);
+  check(same_text(path, "standard cover"), "a cart without Splore in its name is left alone");
+  snprintf(path, sizeof path, "%s/.media/Splore.png", other);
+  check(same_text(path, "standard cover"), "as is a roms folder for another emulator");
+
+  press(&menu, MENU_RIGHT);
+  snprintf(path, sizeof path, "%s/.media/1) Splore.png", folder);
+  check(same_text(path, "standard cover"), "stepping back gives it the standard cover again");
+  check(cart_apply_splore_artwork(roms, "PICO", covers, 0) == 0,
+        "a cover already set is not written again");
+  snprintf(path, sizeof path, "%s/missing", dir);
+  check(cart_apply_splore_artwork(roms, "PICO", path, 1) == 0,
+        "nothing changes when the pak's covers are missing");
+  unlink(splore_artwork_path);
+}
+
 /* logs one line with stderr sent to a file, and reads it back */
 static void capture_log(const char *message, char *line, size_t size)
 {
@@ -759,6 +954,9 @@ int main(int argc, char **argv)
   test_battery();
   test_gfx();
   test_log();
+  test_cart_title();
+  test_switcher_preview();
+  test_splore_covers();
 
   printf("1..%d\n", tests);
   return failures == 0 ? 0 : 1;

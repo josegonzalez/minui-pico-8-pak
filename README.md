@@ -109,8 +109,8 @@ Use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. 
 | ------------------ | ----------------------- | --------------------------- |
 | Screen Mode        | Standard, Stretched     | When the menu closes        |
 | Overlay            | None, or any overlay    | When the menu closes        |
-| Copy Splore Carts  | Off, All, Favourites    | When you exit the cart      |
-| Splore Artwork     | Standard, Fancy         | When you exit the cart      |
+| Copy Splore Carts  | Off, All, Favourites    | When you exit Splore        |
+| Splore Artwork     | Standard, Fancy         | Straight away               |
 | Show FPS           | Off, On                 | The next time a game starts |
 | Volume             | 0%, 25%, 50%, 75%, 100% | The next time a game starts |
 | Battery Saver      | Off, On                 | The next time a game starts |
@@ -139,7 +139,11 @@ You can also exit from PICO-8's own pause menu:
 
 ### Game switcher
 
-NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so when you exit a cart on NextUI, the pak gives the switcher the cart's artwork instead. It uses the cart's image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The image and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card, and refreshed each time you exit the cart.
+NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so on NextUI the pak gives the switcher a picture of its own.
+
+When you choose `Quit` in the [in-game menu](#in-game-menu), the picture is the game as it was when you opened the menu, without any overlay. Until then, and when a game ends any other way, it is the cart's artwork: its image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The artwork is written as soon as PICO-8 starts.
+
+The picture and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card.
 
 Because NextUI treats that as a save state, the switcher labels the `A` button `RESUME` and the game list offers `X` to resume the cart. Both start the cart from the beginning. Press `Y` in the switcher to remove a cart from it.
 
@@ -175,7 +179,7 @@ The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead o
 
 The library is only loaded on `h700`, and only when it is present. A copy the device cannot load is skipped with a line in the log rather than stopping the launch.
 
-Overlays, switching the screen mode in game and the in-game menu come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c` and `shim/gfx.c` in this pak.
+Overlays, switching the screen mode in game, the in-game menu and NextUI's game switcher preview come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c` and `shim/cart.c` in this pak.
 
 ### In-Game saves
 
@@ -215,7 +219,7 @@ To exit Splore, choose a game and follow the normal process of exiting a game.
 
 You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png` and `.res/1) Splore.p8.png`.
 
-The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover. To use it, set `Splore Artwork` in the [in-game menu](#in-game-menu)'s options to `Fancy`, and set it back to `Standard` to return to the usual one. The choice is saved to a file named `splore-artwork` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. When you next exit a cart, the cover of every Splore cart in a roms folder tagged `(PICO)` is changed to match, renamed carts included. Only covers that are still one of the pak's two are changed, so artwork of your own, or a cart with no artwork, is left alone. A Splore cart the pak creates later gets the chosen cover from the start.
+The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover. To use it, set `Splore Artwork` in the [in-game menu](#in-game-menu)'s options to `Fancy`, and set it back to `Standard` to return to the usual one. The choice is saved to a file named `splore-artwork` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. As soon as you change it, the cover of every Splore cart in a roms folder tagged `(PICO)` is changed to match, renamed carts included. Only covers that are still one of the pak's two are changed, so artwork of your own, or a cart with no artwork, is left alone. A Splore cart the pak creates later gets the chosen cover from the start.
 
 ### Copying Splore carts into your roms folder
 
@@ -225,7 +229,7 @@ You can also create a file named `copy-carts` yourself, in either the `/.userdat
 
 Every cart Splore has downloaded is copied, whether or not you favourited it. To copy only your favourites, name the file `copy-carts-favourites` instead, or `copy-carts-favorites` if you prefer that spelling. Either file on its own turns the copying on. Favourites are read from the `favourites.txt` PICO-8 writes in `/.userdata/shared/Pico-8-native`, and from `.lexaloffle/pico-8/favourites.txt` under that folder if it exists. If no cart is favourited, nothing is copied.
 
-The copy runs when you exit a cart, into the roms folder that cart was launched from. A message is shown while carts are being copied - do not turn the device off until it goes away. Like the Splore cart itself, the new games will not appear until you leave the folder and enter it again.
+The copy runs when you exit Splore, into the roms folder it was launched from. Exiting any other cart copies nothing, as only Splore downloads carts. A message is shown while carts are being copied - do not turn the device off until it goes away. Like the Splore cart itself, the new games will not appear until you leave the folder and enter it again.
 
 Carts keep the filename Splore gave them, which is usually an id or a slug. Their names in the game list come from a `map.txt` file the pak writes in the roms folder. A favourited cart is named with the title Splore shows for it, from `favourites.txt`. Otherwise the name is the title comment on the first line of the cart's code - the same title PICO-8 shows on the cart's label - unless that comment is a code label such as `main` or `global variables`. A cart with neither is named after its filename, without the revision number Splore adds to the end, so `kalikan_menu-6.p8.png` is listed as `Kalikan Menu`. A version number or dashes at the end of a title are dropped, so `pico world race 1.1` is listed as `Pico World Race`. Rows in `map.txt` for your own games are left alone, and so is any name you edit yourself - the pak reuses what is already there rather than overwriting it. That also means a cart keeps the name it was first given, so to have the pak name a cart again, delete its row from `map.txt`, or the whole file, and exit a cart again. Cover art is written for both NextUI and MinUI, in the `.media` and `.res` folders.
 
@@ -341,7 +345,7 @@ The log records the library search path PICO-8 is started with and the `ldd` out
 
 Each step of starting and exiting a game is marked in the log with the number of seconds since the device was turned on, such as `[1234.56] syncing the SD card`. The lines from the in-game menu and the rest of the display library, such as `[1240.03] sdl-display: Quit chosen in the menu, quitting pico-8`, are marked the same way. Comparing the marks shows how long each step took, from PICO-8 starting until it drew its first frame, to the time between choosing `Quit` and returning to the launcher.
 
-The log lists every command the pak runs, except inside the steps that would otherwise make starting and exiting slow, such as checking the cart, preparing the menu and copying carts, as each listed command is written to the SD card on its own. Those steps log what they find instead. Moving older saves and creating the Splore cart run alongside checking the cart, and the Splore artwork and game switcher preview are written alongside copying carts, so their lines can be interleaved in the log.
+The log lists every command the pak runs, except inside the steps that would otherwise make starting and exiting slow, such as checking the cart, preparing the menu and copying carts, as each listed command is written to the SD card on its own. Those steps log what they find instead. Moving older saves and creating the Splore cart run alongside checking the cart, so their lines can be interleaved in the log.
 
 ## Development
 

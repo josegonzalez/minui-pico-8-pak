@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "cart.h"
 #include "menu.h"
 
 #define LOG(...) gfx_log(__VA_ARGS__)
@@ -71,8 +72,8 @@ static const char *const option_labels[MENU_CONFIG_FIRST] = {"Screen Mode", "Ove
 static const char *const option_descriptions[MENU_CONFIG_FIRST] = {
     "Standard keeps the game square, Stretched fills the screen.",
     "A PNG from /Overlays/PICO drawn over the game in Standard mode.",
-    "Copies the carts Splore downloaded into the roms folder.\nApplies when the cart exits.",
-    "The cover the Splore cart shows in the game list.\nApplies when the cart exits.",
+    "Copies the carts Splore downloaded into the roms folder.\nApplies when Splore exits.",
+    "The cover the Splore cart shows in the game list.\nApplies straight away.",
 };
 
 void menu_read_line(const char *path, char *line, size_t size)
@@ -425,6 +426,8 @@ static void step_option(struct menu *menu, int row, int step)
     menu->splore_artwork = choice;
     LOG("set Splore Artwork to %s\n", menu_splore_artworks[choice]);
     menu_write_line(settings->splore_artwork_path, menu_splore_artworks[choice]);
+    cart_apply_splore_artwork(settings->roms_dir, settings->tag, settings->splore_covers_dir,
+                              choice == 1);
     break;
   default:
     menu->config[row - MENU_CONFIG_FIRST] = choice;

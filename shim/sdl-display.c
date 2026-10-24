@@ -18,6 +18,11 @@
  * black, and every frame pico-8 presents until it exits is black, so the
  * screen stays dark while it and launch.sh finish rather than showing the game.
  *
+ * Under NextUI it also gives the game switcher its preview of the cart: the
+ * cart's artwork once pico-8 starts, and the game's last frame on Quit. The
+ * menu works out its title from the cart the first time it opens, and gives
+ * the Splore carts their cover as the setting changes. cart.c holds all three.
+ *
  * Nothing else draws the volume and brightness keymon changes over pico-8, so
  * this reads them from the launcher's own libmsettings and draws minarch's
  * indicator over the game, or in the menu in place of the battery, while they
@@ -48,6 +53,7 @@
 #include <unistd.h>
 
 #include "gfx.h"
+#include "cart.h"
 #include "menu.h"
 
 /*
@@ -207,7 +213,11 @@ static int quitting;
 /* the device pico-8 plays through, paused while the menu is open */
 static uint32_t audio_device;
 
-static const char *cart_name;
+/* the cart pico-8 was started with, and the menu's title for it, worked out on first use */
+static const char *cart_path;
+static char cart_name[256];
+/* NextUI's game switcher folder, unset under MinUI, which reads it for resuming */
+static const char *switcher_dir;
 static const char *power_supply_dir;
 static gfx_font *menu_font;
 static gfx_theme menu_theme;
@@ -504,9 +514,17 @@ static void init_display(void)
   settings.copy_carts_dir = getenv("PICO_PAK_COPY_CARTS_DIR");
   settings.shared_copy_carts_dir = getenv("PICO_PAK_SHARED_COPY_CARTS_DIR");
   settings.splore_artwork_path = getenv("PICO_PAK_SPLORE_ARTWORK");
+  settings.roms_dir = getenv("PICO_PAK_ROMS_DIR");
+  settings.tag = getenv("PICO_PAK_TAG");
+  settings.splore_covers_dir = getenv("PICO_PAK_SPLORE_COVERS");
   settings.pico8_config_path = getenv("PICO_PAK_PICO8_CONFIG");
   settings.installed_config_path = getenv("PICO_PAK_INSTALLED_CONFIG");
-  cart_name = getenv("PICO_PAK_CART_NAME");
+  cart_path = getenv("PICO_PAK_CART_PATH");
+  switcher_dir = getenv("PICO_PAK_SWITCHER_DIR");
+  /* the artwork stands in until Quit gives the switcher a frame of the game */
+  if (cart_path != NULL && *cart_path != '\0') {
+    cart_write_preview_artwork(switcher_dir, cart_path);
+  }
   power_supply_dir = getenv("PICO_PAK_POWER_SUPPLY_DIR");
   if (power_supply_dir == NULL || *power_supply_dir == '\0') {
     power_supply_dir = "/sys/class/power_supply";
@@ -1057,6 +1075,9 @@ static void run_menu(void *renderer)
   load_menu_look();
   paused = pause_audio();
   LOG("opening the menu%s\n", paused ? " and pausing pico-8's audio" : "");
+  if (cart_name[0] == '\0' && cart_path != NULL && *cart_path != '\0') {
+    cart_title(cart_path, cart_name, sizeof cart_name);
+  }
   menu_open(&menu, &settings, cart_name);
   menu.indicator = indicator;
   menu.indicator_value = indicator_value;
@@ -1116,10 +1137,25 @@ static void run_menu(void *renderer)
   }
 
   if (result == MENU_QUIT) {
-    /* the cart's sound stays paused, and every frame left is black */
+    /*
+     * The cart's sound stays paused and every frame left is black. The game
+     * as the menu found it becomes the switcher's preview, written once the
+     * screen is dark, as the fade draws over the copy it was read into.
+     */
+    uint32_t *last_frame = switcher_dir != NULL && *switcher_dir != '\0'
+                               ? malloc((size_t)width * height * sizeof *last_frame)
+                               : NULL;
+
+    if (last_frame != NULL) {
+      memcpy(last_frame, menu_frame, (size_t)width * height * sizeof *last_frame);
+    }
     fade_out(renderer, texture, &canvas, drawn);
     quitting = 1;
     LOG("faded out, every frame is black until pico-8 exits\n");
+    if (last_frame != NULL && cart_path != NULL && *cart_path != '\0') {
+      cart_write_preview_frame(switcher_dir, cart_path, last_frame, width, height);
+    }
+    free(last_frame);
   } else {
     show_pixels(renderer, texture, menu_frame, width);
     if (paused) {
@@ -1169,13 +1205,22 @@ EXPORT void SDL_RenderPresent(void *renderer)
   if (sdl.GetTicks != NULL) {
     update_indicator(sdl.GetTicks(), menu_was_down);
   }
-  draw_overlay(renderer);
+  /*
+   * The menu reads the frame before the overlay is drawn over it, so the
+   * switcher's preview after Quit is the game alone. The frame it puts back
+   * then gets the overlay as any other frame would.
+   */
   if (menu_requested) {
     menu_requested = 0;
     run_menu(renderer);
-  } else {
-    draw_indicator(renderer);
+    if (quitting) {
+      clear_to_black(renderer);
+      sdl.RenderPresent(renderer);
+      return;
+    }
   }
+  draw_overlay(renderer);
+  draw_indicator(renderer);
   sdl.RenderPresent(renderer);
 }
 
