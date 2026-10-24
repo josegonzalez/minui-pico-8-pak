@@ -14,7 +14,8 @@
 // The Deeplay-keys and Anbernic-RGCubeXX lines are the pads MinUI reports, and
 // NextUI before rc11. Bytes 3 and 4 of each of their GUIDs are a CRC16 of the
 // name the kernel reports, and a crc: field overrides them, so each line's crc:
-// has to match its own GUID.
+// has to match its own GUID. MinUI reads its Menu button as joystick button 8
+// on these pads, so they report it as guide like every other platform does.
 19000000010000000100000000016e01,ANBERNIC-keys,a:b1,b:b0,x:b3,y:b2,back:b6,start:b7,guide:b8,leftshoulder:b4,rightshoulder:b5,lefttrigger:a2,righttrigger:a5,leftx:a0,lefty:a1,rightx:a3,righty:a4,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,platform:Linux
-1900d60b010000000100000000010000,Deeplay-keys,a:b0,b:b1,x:b3,y:b2,back:b6,start:b7,leftshoulder:b4,rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,rightx:a0,righty:a1,lefttrigger:b10,righttrigger:b11,crc:0bd6,platform:Linux
-19002cb4010000000100000000010000,Anbernic-RGCubeXX,a:b0,b:b1,x:b3,y:b2,back:b6,start:b7,leftshoulder:b4,rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,rightx:a0,righty:a1,lefttrigger:b10,righttrigger:b11,crc:b42c,platform:Linux
+1900d60b010000000100000000010000,Deeplay-keys,a:b0,b:b1,x:b3,y:b2,back:b6,start:b7,guide:b8,leftshoulder:b4,rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,rightx:a0,righty:a1,lefttrigger:b10,righttrigger:b11,crc:0bd6,platform:Linux
+19002cb4010000000100000000010000,Anbernic-RGCubeXX,a:b0,b:b1,x:b3,y:b2,back:b6,start:b7,guide:b8,leftshoulder:b4,rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,rightx:a0,righty:a1,lefttrigger:b10,righttrigger:b11,crc:b42c,platform:Linux

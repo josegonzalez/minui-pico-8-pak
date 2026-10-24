@@ -78,6 +78,8 @@ Choosing a file with any other extension, or one that is missing from the SD car
 
 On `h700`, NextUI v6.14.0-rc11 or newer is needed for the buttons to map correctly. From that release, the buttons match the TrimUI devices on every Anbernic model.
 
+`Start` opens PICO-8's own pause menu on every platform. On `tg5040` and `tg5050` this used to be the `Menu` button, while `Start` did nothing.
+
 ### Exiting a game
 
 To exit a game:
@@ -86,7 +88,7 @@ To exit a game:
 - select `Options`
 - select `shutdown Pico-8`
 
-On `tg5040`, `tg5050`, `my355` and `h700`, you can also hold `Select` and press `Menu` to quit straight away, from a game, Splore, or PICO-8's command prompt. On `h700` this needs NextUI v6.14.0-rc11 or newer, the first release whose controller mapping includes the `Menu` button. `rg35xxplus` has no such shortcut, as MinUI's controller mapping does not include the `Menu` button.
+You can also hold `Select` and press `Menu` to quit straight away, from a game, Splore, or PICO-8's command prompt. On `h700` this needs NextUI v6.14.0-rc11 or newer, the first release whose controller mapping includes the `Menu` button.
 
 ### Game switcher
 

@@ -367,21 +367,11 @@ teardown() {
   [ "$output" = "arm" ]
 }
 
-@test "get_menu_button names the button each mapping reports for Menu" {
-  for platform in tg5040 tg5050; do
-    PLATFORM="$platform" run get_menu_button
-    [ "$output" = "start" ]
-  done
-  for platform in h700 my355; do
+@test "get_menu_button names guide as Menu on every platform" {
+  for platform in $SUPPORTED_PLATFORMS; do
     PLATFORM="$platform" run get_menu_button
     [ "$output" = "guide" ]
   done
-}
-
-# MinUI's pads map no Menu button, and Start is the real Start there
-@test "get_menu_button names nothing on rg35xxplus" {
-  PLATFORM=rg35xxplus run get_menu_button
-  [ "$output" = "" ]
 }
 
 # called without run so the exports survive
@@ -400,7 +390,7 @@ teardown() {
   [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
   [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
   [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
-  [ "$PICO_PAK_MENU_BUTTON" = "start" ]
+  [ "$PICO_PAK_MENU_BUTTON" = "guide" ]
 }
 
 # the shim also switches the screen mode in game, which needs no overlay
@@ -458,19 +448,6 @@ teardown() {
   setup_display_preload
 
   [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm/sdl-display.so" ]
-  [ "$PICO_PAK_MENU_BUTTON" = "" ]
-}
-
-@test "setup_display_preload passes the guide button as Menu on h700" {
-  PAK_DIR="$BATS_TEST_TMPDIR/pak"
-  mkdir -p "$PAK_DIR/lib/arm64"
-  : >"$PAK_DIR/lib/arm64/sdl-display.so"
-
-  PLATFORM=h700
-  architecture=arm64
-  LD_PRELOAD=
-  setup_display_preload
-
   [ "$PICO_PAK_MENU_BUTTON" = "guide" ]
 }
 
@@ -588,6 +565,30 @@ teardown() {
   for field in a:b1 b:b0 x:b3 y:b2 back:b6 start:b7 leftshoulder:b4 \
     rightshoulder:b5 leftx:a0 lefty:a1; do
     [[ ",$line," == *",$field,"* ]]
+  done
+}
+
+# MinUI and NextUI both number Start 7 and Menu 8 on the TrimUI pads, and Start
+# used to sit on Menu's button, which left the real Start doing nothing
+@test "the TrimUI mappings put Start and Menu on their own buttons" {
+  for platform in tg5040 tg5050; do
+    line="$(grep "^030003f05e0400008e02000014010000," "$REPO_ROOT/controllers/$platform.txt")"
+    [ -n "$line" ]
+    [[ ",$line," == *",start:b7,"* ]]
+    [[ ",$line," == *",guide:b8,"* ]]
+  done
+}
+
+# the shim reads Menu as the guide button, so a pad that maps none has no Menu
+@test "every pad a supported platform maps reports Menu as guide" {
+  for platform in $SUPPORTED_PLATFORMS; do
+    PLATFORM="$platform"
+    while IFS= read -r line; do
+      case "$line" in
+      //* | "") continue ;;
+      esac
+      [[ ",$line," == *",guide:b8,"* ]]
+    done <"$REPO_ROOT/controllers/$(get_controller_file)"
   done
 }
 

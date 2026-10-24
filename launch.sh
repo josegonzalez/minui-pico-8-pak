@@ -522,18 +522,10 @@ get_pico_architecture() {
 }
 
 # The pad button each platform's controller mapping reports for Menu, which the
-# shim pairs with Select to quit. TrimUI's mapping puts Menu on the pad's Start,
-# and the h700 and my355 mappings on its guide button. rg35xxplus has none:
-# MinUI's pads map no Menu button, and Select + Start would take Start from games.
+# shim pairs with Select to quit. Every mapping in controllers/ puts Menu on the
+# pad's guide button, leaving Start for pico-8's own pause menu.
 get_menu_button() {
-  case "$PLATFORM" in
-  tg5040 | tg5050)
-    echo "start"
-    ;;
-  h700 | my355)
-    echo "guide"
-    ;;
-  esac
+  echo "guide"
 }
 
 # pico-8 cannot draw a bezel itself, so the shim draws one over every frame.
