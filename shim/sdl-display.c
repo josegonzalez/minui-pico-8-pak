@@ -18,10 +18,15 @@
  * black, and every frame pico-8 presents until it exits is black, so the
  * screen stays dark while it and launch.sh finish rather than showing the game.
  *
- * Under NextUI it also gives the game switcher its preview of the cart: the
- * cart's artwork once pico-8 starts, and the game's last frame on Quit. The
- * menu works out its title from the cart the first time it opens, and gives
- * the Splore carts their cover as the setting changes. cart.c holds all three.
+ * Save and Load in the menu save pico-8's memory to a slot and put it back,
+ * with state.c, and Quit saves the slot NextUI's game switcher and MinUI's
+ * game list resume, as does power control's SIGTERM on shutdown. A state is
+ * saved with a frame of the game as its preview, and the slot to resume
+ * comes from launch.sh and is put back once the cart has started. Under
+ * NextUI the switcher shows the cart's artwork until the cart has a state.
+ * The menu works out its title from the cart the first time it opens, and
+ * gives the Splore carts their cover as the setting changes. cart.c holds the
+ * files of all of these.
  *
  * Nothing else draws the volume and brightness keymon changes over pico-8, so
  * this reads them from the launcher's own libmsettings and draws minarch's
@@ -46,6 +51,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -58,15 +64,19 @@
 #include "cart.h"
 #include "crash.h"
 #include "menu.h"
+#include "state.h"
 
 /*
- * Only the PNG decoder is compiled, static so none of it is exported into
- * pico-8, and without the HDR paths that would pull in libm. Its warnings are
- * its own, so they are silenced for the include alone.
+ * Only the PNG and BMP decoders are compiled, for overlays and the save
+ * states' previews, static so none of it is exported into pico-8, and without
+ * the HDR paths that would pull in libm. Both are needed for a preview, as the
+ * artwork the switcher shows before there is a state is a PNG under a .bmp
+ * name. Its warnings are its own, so they are silenced for the include alone.
  */
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
+#define STBI_ONLY_BMP
 /* STBI_ONLY_PNG implies it, but too late to keep its declaration out */
 #define STBI_NO_GIF
 #define STBI_NO_HDR
@@ -124,6 +134,15 @@ typedef struct {
 #define INPUT_DEVICES 16
 /* how long the volume or brightness stays on screen after it last changed, as in minarch */
 #define INDICATOR_MS 500
+/*
+ * How long a SIGTERM waits for the frame that saves the resume slot before
+ * ending pico-8 without it, inside the five seconds power control waits
+ */
+#define TERMINATE_WAIT_S 4
+/* how long the save toast takes to fade in, how long "Saved" stays, and how long it fades out over */
+#define TOAST_FADE_IN_MS 250
+#define TOAST_HOLD_MS 1000
+#define TOAST_FADE_OUT_MS 500
 /* how long a notice such as "Screenshot saved" stays up */
 #define NOTIFICATION_MS 1500
 /* the steps the menu fades to black in after Quit, and how long each lasts */
@@ -168,6 +187,7 @@ static struct {
   void (*DestroyTexture)(void *);
   void (*FreeSurface)(void *);
   int (*SetTextureBlendMode)(void *, int);
+  int (*SetTextureAlphaMod)(void *, uint8_t);
   int (*SetTextureScaleMode)(void *, int);
   const char *(*GetError)(void);
   int (*RenderCopy)(void *, void *, const SDL_Rect *, const SDL_Rect *);
@@ -192,6 +212,8 @@ static struct {
   int (*OpenAudio)(void *, void *);
   void (*PauseAudioDevice)(uint32_t, int);
   int (*GetAudioDeviceStatus)(uint32_t);
+  void (*LockAudioDevice)(uint32_t);
+  void (*UnlockAudioDevice)(uint32_t);
   int (*GetModState)(void);
 } sdl;
 
@@ -268,8 +290,40 @@ static void wait_for_screenshot(void);
 /* the cart pico-8 was started with, and the menu's title for it, worked out on first use */
 static const char *cart_path;
 static char cart_name[256];
-/* NextUI's game switcher folder, unset under MinUI, which reads it for resuming */
+/* the folder NextUI's game switcher and MinUI's game list read a cart's slot and previews from */
 static const char *switcher_dir;
+/* the cart's artwork and last frame stand in for a state's preview, as NextUI's switcher shows them */
+static int stateless_previews;
+
+/* where states are saved, unset for Splore, and the slot to put back once the cart starts, or -1 */
+static const char *states_dir;
+static int resume_slot = -1;
+/* added to SDL's clock for pico-8, so its time carries on from when a loaded state was saved */
+static uint32_t tick_offset;
+/* power control's SIGTERM, which saves the resume slot and quits as Quit does */
+static volatile sig_atomic_t terminating;
+/* NextUI's and MinUI's file naming the game to start at boot, and this cart's name in it */
+static const char *auto_resume_path;
+static const char *auto_resume_rom;
+/* each slot's preview while the menu is open, read the first time the slot is shown */
+static uint32_t *slot_previews[MENU_SLOTS];
+static int slot_previews_read[MENU_SLOTS];
+/* the state being written in the background, and whether writing it failed */
+static pthread_t state_thread;
+static int state_running;
+static int writing_slot = -1;
+static volatile sig_atomic_t state_written;
+static volatile sig_atomic_t state_write_failed;
+/*
+ * The toast at the bottom right while a state is written: "Saving..." fading
+ * in until the write finishes, then how it went, which fades out
+ */
+static enum { TOAST_NONE, TOAST_SAVING, TOAST_DONE } toast_phase;
+static const char *toast_text;
+static uint32_t toast_at;
+static void *toast_renderer;
+static void *toast_texture;
+static const char *toast_drawn;
 static const char *power_supply_dir;
 static gfx_font *menu_font;
 static gfx_theme menu_theme;
@@ -321,6 +375,12 @@ static int resolve_sdl(void)
   /* without these the menu still opens, over a game whose sound keeps playing */
   RESOLVE(PauseAudioDevice);
   RESOLVE(GetAudioDeviceStatus);
+  /* fades the save toast, which without it shows and goes at once */
+  RESOLVE(SetTextureAlphaMod);
+  /* save states hold pico-8's audio while they run, and its clock is wrapped */
+  RESOLVE(LockAudioDevice);
+  RESOLVE(UnlockAudioDevice);
+  RESOLVE(GetTicks);
   /* without these the frames after Quit show the game rather than black */
   RESOLVE(RenderGetDrawColor);
   RESOLVE(RenderSetDrawColor);
@@ -553,6 +613,43 @@ static int update_indicator(uint32_t now, int menu_held)
   return indicator != was || indicator_value != was_value;
 }
 
+static void on_terminate(int signal)
+{
+  (void)signal;
+  terminating = 1;
+  /* a pico-8 that presents no frame to save from is ended as SIGTERM would have */
+  alarm(TERMINATE_WAIT_S);
+}
+
+/*
+ * SDL turns SIGTERM into a quit event, which would end pico-8 before the
+ * resume slot is saved, so with states this takes it instead and the next
+ * frame saves and quits. The slot to resume is launch.sh's, from the launcher.
+ */
+static void init_states(void)
+{
+  const char *resume = getenv("PICO_PAK_RESUME_SLOT");
+  struct sigaction action;
+
+  if (!state_available() || states_dir == NULL || *states_dir == '\0' || cart_path == NULL ||
+      *cart_path == '\0') {
+    return;
+  }
+
+  memset(&action, 0, sizeof action);
+  action.sa_handler = on_terminate;
+  action.sa_flags = SA_RESTART;
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGTERM, &action, NULL) != 0) {
+    LOG("cannot take SIGTERM, shutting down will not save the resume slot\n");
+  }
+
+  if (resume != NULL && resume[0] >= '0' && resume[0] <= '9' && resume[1] == '\0') {
+    resume_slot = resume[0] - '0';
+    LOG("resuming slot %d once the cart starts\n", resume_slot);
+  }
+}
+
 static void init_display(void)
 {
   static int done;
@@ -573,6 +670,8 @@ static void init_display(void)
   settings.copy_carts_dir = getenv("PICO_PAK_COPY_CARTS_DIR");
   settings.shared_copy_carts_dir = getenv("PICO_PAK_SHARED_COPY_CARTS_DIR");
   settings.splore_artwork_path = getenv("PICO_PAK_SPLORE_ARTWORK");
+  settings.auto_save_path = getenv("PICO_PAK_AUTO_SAVE");
+  settings.auto_save = menu_read_auto_save(settings.auto_save_path);
   settings.roms_dir = getenv("PICO_PAK_ROMS_DIR");
   settings.tag = getenv("PICO_PAK_TAG");
   settings.splore_covers_dir = getenv("PICO_PAK_SPLORE_COVERS");
@@ -585,8 +684,15 @@ static void init_display(void)
                       strcmp(getenv("PICO_PAK_NOTIFY_SCREENSHOT"), "0") != 0;
   cart_path = getenv("PICO_PAK_CART_PATH");
   switcher_dir = getenv("PICO_PAK_SWITCHER_DIR");
-  /* the artwork stands in until Quit gives the switcher a frame of the game */
-  if (cart_path != NULL && *cart_path != '\0') {
+  stateless_previews = getenv("PICO_PAK_STATELESS_PREVIEWS") != NULL &&
+                       strcmp(getenv("PICO_PAK_STATELESS_PREVIEWS"), "1") == 0;
+  states_dir = getenv("PICO_PAK_STATES_DIR");
+  auto_resume_path = getenv("PICO_PAK_AUTO_RESUME_PATH");
+  auto_resume_rom = getenv("PICO_PAK_AUTO_RESUME_ROM");
+  init_states();
+  /* the artwork stands in until the cart has a state, whose preview is a frame of the game */
+  if (stateless_previews && cart_path != NULL && *cart_path != '\0' &&
+      !cart_has_state(states_dir, cart_path)) {
     cart_write_preview_artwork(switcher_dir, cart_path);
   }
   power_supply_dir = getenv("PICO_PAK_POWER_SUPPLY_DIR");
@@ -1164,6 +1270,282 @@ static void fade_out(void *renderer, void *texture, gfx_canvas *canvas, int draw
   }
 }
 
+static int states_ready(void)
+{
+  return state_available() && states_dir != NULL && *states_dir != '\0' && cart_path != NULL &&
+         *cart_path != '\0';
+}
+
+/* the audio thread is held off pico-8's memory while a state is taken or put back */
+static void hold_audio(int hold)
+{
+  if (audio_device == 0 || sdl.LockAudioDevice == NULL || sdl.UnlockAudioDevice == NULL) {
+    return;
+  }
+  if (hold) {
+    sdl.LockAudioDevice(audio_device);
+  } else {
+    sdl.UnlockAudioDevice(audio_device);
+  }
+}
+
+static void notify(const char *text)
+{
+  if (sdl.GetTicks != NULL) {
+    notification = text;
+    notification_until = sdl.GetTicks() + NOTIFICATION_MS;
+  }
+}
+
+/* a state being written in the background, and its preview */
+struct state_job {
+  struct state_snapshot *snapshot;
+  char path[8192];
+  int slot;
+  uint32_t *frame;
+  int width, height;
+};
+
+static void *write_state(void *data)
+{
+  struct state_job *job = data;
+  uint32_t started = sdl.GetTicks();
+
+  if (state_write(job->snapshot, job->path)) {
+    cart_write_preview_frame(switcher_dir, cart_path, job->frame, job->width, job->height, job->slot);
+    LOG("wrote slot %d and its preview in %u ms\n", job->slot, (unsigned)(sdl.GetTicks() - started));
+  } else {
+    state_write_failed = 1;
+  }
+  state_free(job->snapshot);
+  free(job->frame);
+  free(job);
+  state_written = 1;
+  return NULL;
+}
+
+/* a state still being written is finished before another is saved or loaded, or pico-8 exits */
+static void wait_for_state(void)
+{
+  if (state_running) {
+    pthread_join(state_thread, NULL);
+    state_running = 0;
+  }
+  writing_slot = -1;
+}
+
+/*
+ * Saves a slot, with frame, the game as the menu found it, as its preview.
+ * pico-8 only waits for its memory to be copied, and the card is written on a
+ * thread of its own, unless pico-8 is about to exit.
+ */
+static int save_slot(int slot, const uint32_t *frame, int width, int height, int background)
+{
+  static int waits_at_exit;
+  struct state_snapshot *snapshot;
+  struct state_job *job;
+  char path[8192];
+  uint32_t started;
+  int saved;
+
+  wait_for_state();
+  if (state_busy()) {
+    LOG("pico-8 is downloading, not saving slot %d\n", slot);
+    notify("Cannot save while downloading");
+    return 0;
+  }
+  if (!cart_state_path(states_dir, cart_path, slot, path, sizeof path) ||
+      !cart_make_dirs(states_dir)) {
+    LOG("cannot make %s, not saving slot %d\n", states_dir, slot);
+    notify("Save failed");
+    return 0;
+  }
+
+  started = sdl.GetTicks();
+  hold_audio(1);
+  snapshot = state_capture(cart_path, started + tick_offset);
+  hold_audio(0);
+  if (snapshot == NULL) {
+    LOG("cannot copy pico-8's memory, not saving slot %d\n", slot);
+    notify("Save failed");
+    return 0;
+  }
+  LOG("copied pico-8's memory for slot %d in %u ms\n", slot, (unsigned)(sdl.GetTicks() - started));
+
+  job = background ? calloc(1, sizeof *job) : NULL;
+  if (job != NULL) {
+    job->frame = malloc((size_t)width * height * sizeof *job->frame);
+  }
+  if (job != NULL && job->frame != NULL) {
+    job->snapshot = snapshot;
+    snprintf(job->path, sizeof job->path, "%s", path);
+    job->slot = slot;
+    memcpy(job->frame, frame, (size_t)width * height * sizeof *job->frame);
+    job->width = width;
+    job->height = height;
+    if (!waits_at_exit) {
+      atexit(wait_for_state);
+      waits_at_exit = 1;
+    }
+    state_written = 0;
+    toast_phase = TOAST_SAVING;
+    toast_text = "Saving...";
+    toast_at = sdl.GetTicks();
+    if (pthread_create(&state_thread, NULL, write_state, job) == 0) {
+      state_running = 1;
+      writing_slot = slot;
+    } else {
+      write_state(job);
+    }
+    return 1;
+  }
+  if (job != NULL) {
+    free(job);
+  }
+
+  saved = state_write(snapshot, path);
+  state_free(snapshot);
+  if (!saved) {
+    notify("Save failed");
+    return 0;
+  }
+  cart_write_preview_frame(switcher_dir, cart_path, frame, width, height, slot);
+  return 1;
+}
+
+/* puts a slot back, and pico-8's clock carries on from when it was saved */
+static int load_slot(int slot)
+{
+  char path[8192];
+  uint32_t ticks;
+  int loaded;
+
+  wait_for_state();
+  if (!cart_state_path(states_dir, cart_path, slot, path, sizeof path)) {
+    return 0;
+  }
+  hold_audio(1);
+  loaded = state_load(path, cart_path, &ticks);
+  if (loaded) {
+    tick_offset = ticks - sdl.GetTicks();
+  }
+  hold_audio(0);
+  if (!loaded) {
+    notify("Load failed");
+  }
+  return loaded;
+}
+
+/* the cart is started again at boot, as minarch's quicksave on powering off is */
+static void write_auto_resume(void)
+{
+  FILE *file;
+
+  if (auto_resume_path == NULL || *auto_resume_path == '\0' || auto_resume_rom == NULL ||
+      *auto_resume_rom == '\0') {
+    return;
+  }
+  /* the launchers read the whole file as the path, so it has no line ending */
+  file = fopen(auto_resume_path, "w");
+  if (file == NULL || fputs(auto_resume_rom, file) < 0 || fclose(file) != 0) {
+    LOG("cannot write %s, the cart will not resume at boot\n", auto_resume_path);
+    return;
+  }
+  LOG("the cart resumes at the next boot\n");
+}
+
+/* stb_image gives RGBA bytes, and the menu draws 0xAARRGGBB */
+static uint32_t *read_preview(const char *path, int *width, int *height)
+{
+  unsigned char *rgba = stbi_load(path, width, height, NULL, 4);
+  uint32_t *pixels;
+  size_t i, count;
+
+  if (rgba == NULL) {
+    return NULL;
+  }
+  count = (size_t)*width * *height;
+  pixels = malloc(count * sizeof *pixels);
+  for (i = 0; pixels != NULL && i < count; i++) {
+    pixels[i] = 0xff000000u | (uint32_t)rgba[i * 4] << 16 | (uint32_t)rgba[i * 4 + 1] << 8 |
+                rgba[i * 4 + 2];
+  }
+  stbi_image_free(rgba);
+  return pixels;
+}
+
+/* which slots hold a state, and their pictures, starting on the last slot used as minarch does */
+static void open_slots(struct menu *menu)
+{
+  struct menu_states *states = &menu->states;
+  char path[8192];
+  int slot;
+
+  states->available = states_ready();
+  if (!states->available) {
+    return;
+  }
+  /* the slot a save is still writing counts as saved, and names itself once it is written */
+  slot = writing_slot >= 0 ? writing_slot : cart_read_slot(switcher_dir, cart_path);
+  states->slot = slot >= 0 && slot < MENU_SLOTS ? slot : 0;
+  for (slot = 0; slot < MENU_SLOTS; slot++) {
+    states->saving[slot] = slot == writing_slot && !state_written;
+    states->exists[slot] = states->saving[slot] ||
+                           (cart_state_path(states_dir, cart_path, slot, path, sizeof path) &&
+                            access(path, F_OK) == 0);
+    slot_previews_read[slot] = 0;
+  }
+}
+
+/*
+ * A slot's preview is read the first time Save or Load shows the slot, so the
+ * menu opens without reading every one. A slot still being written shows its
+ * preview once it is there.
+ */
+static void show_slot_preview(struct menu *menu)
+{
+  struct menu_states *states = &menu->states;
+  int slot = states->slot;
+  char path[8192];
+
+  if (!states->available) {
+    return;
+  }
+  /* the save in the background has finished, so its slot shows what was written */
+  if (writing_slot >= 0 && state_written) {
+    int written = writing_slot;
+
+    wait_for_state();
+    if (states->saving[written]) {
+      states->saving[written] = 0;
+      states->exists[written] = cart_state_path(states_dir, cart_path, written, path, sizeof path) &&
+                                access(path, F_OK) == 0;
+      menu->dirty = 1;
+    }
+  }
+  if ((menu->root_row != MENU_SAVE && menu->root_row != MENU_LOAD) ||
+      menu->page != MENU_PAGE_ROOT || !states->exists[slot] || states->saving[slot] ||
+      slot_previews_read[slot]) {
+    return;
+  }
+  slot_previews_read[slot] = 1;
+  if (cart_preview_path(switcher_dir, cart_path, slot, path, sizeof path)) {
+    slot_previews[slot] = read_preview(path, &states->preview_w[slot], &states->preview_h[slot]);
+    states->preview[slot] = slot_previews[slot];
+    menu->dirty = 1;
+  }
+}
+
+static void close_slots(void)
+{
+  int slot;
+
+  for (slot = 0; slot < MENU_SLOTS; slot++) {
+    free(slot_previews[slot]);
+    slot_previews[slot] = NULL;
+  }
+}
+
 /*
  * The cart waits here, in the middle of presenting a frame, until the menu
  * closes. The frame it was presenting is drawn again on the way out, for the
@@ -1214,7 +1596,8 @@ static void run_menu(void *renderer, int quit_now)
   load_menu_look();
   paused = pause_audio();
   if (quit_now) {
-    LOG("quitting from the shortcut%s\n", paused ? " and pausing pico-8's audio" : "");
+    LOG("quitting %s%s\n", terminating ? "for the shutdown" : "from the shortcut",
+        paused ? " and pausing pico-8's audio" : "");
   } else {
     LOG("opening the menu%s\n", paused ? " and pausing pico-8's audio" : "");
   }
@@ -1222,6 +1605,7 @@ static void run_menu(void *renderer, int quit_now)
     cart_title(cart_path, cart_name, sizeof cart_name);
   }
   menu_open(&menu, &settings, cart_name);
+  open_slots(&menu);
   menu.indicator = indicator;
   menu.indicator_value = indicator_value;
   battery = gfx_read_battery(power_supply_dir);
@@ -1239,6 +1623,9 @@ static void run_menu(void *renderer, int quit_now)
       if (event[0] == SDL_QUIT) {
         result = MENU_QUIT;
       }
+    }
+    if (terminating) {
+      result = MENU_QUIT;
     }
     if (result != MENU_STAY) {
       break;
@@ -1288,6 +1675,7 @@ static void run_menu(void *renderer, int quit_now)
     }
 
     result = menu_update(&menu, pressed, held, sdl.GetTicks());
+    show_slot_preview(&menu);
     was_held = held;
 
     if (menu_font != NULL && menu.dirty && result != MENU_QUIT) {
@@ -1301,16 +1689,47 @@ static void run_menu(void *renderer, int quit_now)
     }
   }
 
+  close_slots();
+  /* the slot saved or loaded is the one the launchers resume, as in minarch */
+  if (result == MENU_SAVE_STATE) {
+    if (save_slot(menu.states.slot, menu_frame, width, height, 1)) {
+      LOG("saved slot %d\n", menu.states.slot);
+    }
+    result = MENU_CLOSE;
+  } else if (result == MENU_LOAD_STATE) {
+    if (load_slot(menu.states.slot)) {
+      cart_write_slot(switcher_dir, cart_path, menu.states.slot);
+      LOG("loaded slot %d\n", menu.states.slot);
+    }
+    result = MENU_CLOSE;
+  }
+
   if (result == MENU_QUIT) {
     /*
-     * The cart's sound stays paused and every frame left is black. The game
-     * as the menu found it becomes the switcher's preview, written once the
-     * screen is dark, as the fade draws over the copy it was read into.
+     * The cart's sound stays paused and every frame left is black. A shutdown
+     * saves the game to the slot the launchers resume, as minarch does before
+     * sleeping or powering off, and Quit does too when Auto Save on Exit is
+     * on, before the fade draws over the frame the menu read. A cart with no
+     * state at all gives the switcher that frame instead, written once the
+     * screen is dark. Otherwise the slot to resume stays the last one used.
      */
-    uint32_t *last_frame = switcher_dir != NULL && *switcher_dir != '\0'
-                               ? malloc((size_t)width * height * sizeof *last_frame)
-                               : NULL;
+    uint32_t *last_frame;
+    int saved;
 
+    /* the save has started, so a shutdown waits for it */
+    if (terminating) {
+      alarm(0);
+    }
+    saved = states_ready() && (terminating || settings.auto_save) &&
+            save_slot(CART_RESUME_SLOT, menu_frame, width, height, 0);
+    last_frame = !saved && stateless_previews && switcher_dir != NULL && *switcher_dir != '\0' &&
+                         !cart_has_state(states_dir, cart_path)
+                     ? malloc((size_t)width * height * sizeof *last_frame)
+                     : NULL;
+
+    if (saved && terminating) {
+      write_auto_resume();
+    }
     if (last_frame != NULL) {
       memcpy(last_frame, menu_frame, (size_t)width * height * sizeof *last_frame);
     }
@@ -1318,7 +1737,7 @@ static void run_menu(void *renderer, int quit_now)
     quitting = 1;
     LOG("faded out, every frame is black until pico-8 exits\n");
     if (last_frame != NULL && cart_path != NULL && *cart_path != '\0') {
-      cart_write_preview_frame(switcher_dir, cart_path, last_frame, width, height);
+      cart_write_preview_frame(switcher_dir, cart_path, last_frame, width, height, 0);
     }
     free(last_frame);
   } else {
@@ -1494,6 +1913,97 @@ static void draw_notification(void *renderer)
   restore_letterbox(renderer, &saved);
 }
 
+/* how opaque the toast is now, moving it on to its next part as the write finishes and time passes */
+static int toast_alpha(uint32_t now)
+{
+  uint32_t elapsed;
+
+  if (toast_phase == TOAST_SAVING && state_written) {
+    toast_phase = TOAST_DONE;
+    toast_text = state_write_failed ? "Save failed" : "Saved";
+    toast_at = now;
+    state_write_failed = 0;
+  }
+
+  elapsed = now - toast_at;
+  if (toast_phase == TOAST_SAVING) {
+    return elapsed < TOAST_FADE_IN_MS ? (int)(255 * elapsed / TOAST_FADE_IN_MS) : 255;
+  }
+  if (toast_phase == TOAST_DONE) {
+    if (elapsed < TOAST_HOLD_MS) {
+      return 255;
+    }
+    if (elapsed < TOAST_HOLD_MS + TOAST_FADE_OUT_MS) {
+      return (int)(255 - 255 * (elapsed - TOAST_HOLD_MS) / TOAST_FADE_OUT_MS);
+    }
+    toast_phase = TOAST_NONE;
+  }
+  return 0;
+}
+
+/* NextUI's toast at the bottom right, from a texture redrawn only when its text changes */
+static void draw_toast(void *renderer)
+{
+  static int texture_w, texture_h;
+  struct letterbox saved;
+  gfx_canvas canvas;
+  SDL_Rect dst;
+  int width, height, w, h, alpha, margin;
+  uint32_t *pixels;
+
+  if (toast_phase == TOAST_NONE || sdl.GetTicks == NULL) {
+    return;
+  }
+  alpha = toast_alpha(sdl.GetTicks());
+  if (alpha <= 0 || overlay_broken || menu_broken ||
+      sdl.GetRendererOutputSize(renderer, &width, &height) != 0) {
+    return;
+  }
+  /* without fading, the toast is only shown once it would be mostly there */
+  if (sdl.SetTextureAlphaMod == NULL && alpha < 128) {
+    return;
+  }
+
+  load_menu_look();
+  menu_toast_size(width, height, menu_font, toast_text, &w, &h);
+  if (renderer != toast_renderer || w != texture_w || h != texture_h || toast_text != toast_drawn) {
+    if (toast_texture != NULL && renderer == toast_renderer) {
+      sdl.DestroyTexture(toast_texture);
+    }
+    toast_renderer = renderer;
+    toast_drawn = NULL;
+    toast_texture = sdl.CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                                      SDL_TEXTUREACCESS_STREAMING, w, h);
+    pixels = calloc((size_t)w * h, sizeof *pixels);
+    if (toast_texture == NULL || pixels == NULL) {
+      free(pixels);
+      return;
+    }
+    canvas.pixels = pixels;
+    canvas.w = w;
+    canvas.h = h;
+    menu_draw_toast(&canvas, width, height, &menu_theme, menu_font, 0, 0, toast_text);
+    sdl.UpdateTexture(toast_texture, NULL, pixels, w * (int)sizeof *pixels);
+    sdl.SetTextureBlendMode(toast_texture, SDL_BLENDMODE_BLEND);
+    free(pixels);
+    texture_w = w;
+    texture_h = h;
+    toast_drawn = toast_text;
+  }
+
+  if (sdl.SetTextureAlphaMod != NULL) {
+    sdl.SetTextureAlphaMod(toast_texture, (uint8_t)alpha);
+  }
+  margin = menu_toast_margin(width, height);
+  dst.x = width - margin - w;
+  dst.y = height - margin - h;
+  dst.w = w;
+  dst.h = h;
+  clear_letterbox(renderer, &saved);
+  sdl.RenderCopy(renderer, toast_texture, NULL, &dst);
+  restore_letterbox(renderer, &saved);
+}
+
 static void push_key(uint32_t type, int32_t scancode, int32_t sym, uint16_t mod)
 {
   /* SDL_KeyboardEvent: the state at byte 12, then the scancode, symbol and modifiers */
@@ -1586,6 +2096,40 @@ static void run_shortcut(int shortcut)
   }
 }
 
+/*
+ * The slot to resume goes back once the cart has started, as pico-8 sets up
+ * the cart after its first frame and would undo a state put back before then.
+ * Until then the screen is black rather than the cart starting afresh.
+ * Returns whether the frame is to be kept dark.
+ */
+static int resume(void)
+{
+  static int waited, started;
+  char path[8192];
+
+  if (resume_slot < 0) {
+    return 0;
+  }
+  if ((!state_cart_started() || state_busy()) && ++waited < 600) {
+    return 1;
+  }
+  /* one frame more, so the cart has run its first */
+  if (state_cart_started() && !state_busy() && started++ == 0) {
+    return 1;
+  }
+
+  if (!cart_state_path(states_dir, cart_path, resume_slot, path, sizeof path) ||
+      access(path, F_OK) != 0) {
+    LOG("no state in slot %d, starting the cart afresh\n", resume_slot);
+  } else if (!state_cart_started() || state_busy()) {
+    LOG("the cart did not start in time, not resuming slot %d\n", resume_slot);
+  } else if (load_slot(resume_slot)) {
+    LOG("resumed slot %d\n", resume_slot);
+  }
+  resume_slot = -1;
+  return 1;
+}
+
 EXPORT void SDL_RenderPresent(void *renderer)
 {
   static int presented;
@@ -1606,6 +2150,13 @@ EXPORT void SDL_RenderPresent(void *renderer)
     return;
   }
 
+  state_frame();
+  if (resume()) {
+    clear_to_black(renderer);
+    sdl.RenderPresent(renderer);
+    return;
+  }
+
   update_buttons();
   if (sdl.GetTicks != NULL) {
     update_indicator(sdl.GetTicks(), menu_was_down);
@@ -1616,12 +2167,17 @@ EXPORT void SDL_RenderPresent(void *renderer)
    * switcher's preview after Quit is the game alone. The frame it puts back
    * then gets the overlay as any other frame would.
    */
-  if (menu_requested || pending_shortcut == MENU_SHORTCUT_QUIT) {
-    int quit_now = !menu_requested;
+  if (menu_requested || pending_shortcut == MENU_SHORTCUT_QUIT || terminating) {
+    int quit_now = terminating || !menu_requested;
 
     menu_requested = 0;
     pending_shortcut = -1;
     run_menu(renderer, quit_now);
+    /* a shutdown quits even when the menu could not be drawn */
+    if (terminating && !quitting) {
+      quitting = 1;
+      request_quit();
+    }
     if (quitting) {
       clear_to_black(renderer);
       sdl.RenderPresent(renderer);
@@ -1641,7 +2197,15 @@ EXPORT void SDL_RenderPresent(void *renderer)
   }
   draw_indicator(renderer);
   draw_notification(renderer);
+  draw_toast(renderer);
   sdl.RenderPresent(renderer);
+}
+
+/* pico-8's clock, which after a load carries on from when the state was saved */
+EXPORT uint32_t SDL_GetTicks(void)
+{
+  resolve_sdl();
+  return sdl.GetTicks != NULL ? sdl.GetTicks() + tick_offset : 0;
 }
 
 EXPORT int SDL_GetModState(void)
@@ -1820,6 +2384,10 @@ EXPORT void SDL_DestroyRenderer(void *renderer)
   if (renderer == notification_renderer) {
     notification_renderer = NULL;
     notification_texture = NULL;
+  }
+  if (renderer == toast_renderer) {
+    toast_renderer = NULL;
+    toast_texture = NULL;
   }
 
   if (sdl.DestroyRenderer != NULL) {

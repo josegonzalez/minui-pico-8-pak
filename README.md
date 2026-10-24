@@ -91,7 +91,7 @@ Press and release `Menu` to pause the game and open the same menu MinUI and Next
 The menu has these entries:
 
 - `Continue` closes the menu and carries on with the game. `B` and a tap of `Menu` close it too.
-- `Save` and `Load` are shown but cannot be chosen yet, as the pak has no save states.
+- `Save` saves the game to a slot, and `Load` puts a slot back. See [Save states](#save-states).
 - `Options` opens the settings below.
 - `Quit` fades the screen to black, closes PICO-8 and returns to the game list. The screen stays black, and the game stays silent, until the launcher has drawn its menu again.
 
@@ -138,12 +138,13 @@ The pak reads the volume and brightness from the launcher's own settings library
 | Frontend | Show FPS           | Off, On                 | The next time a game starts |
 | Emulator | Volume             | 0%, 25%, 50%, 75%, 100% | The next time a game starts |
 | Emulator | Battery Saver      | Off, On                 | The next time a game starts |
+| Emulator | Auto Save on Exit  | Off, On                 | Straight away               |
 | Splore   | Copy Splore Carts  | Off, All, Favourites    | When you exit Splore        |
 | Splore   | Splore Artwork     | Standard, Fancy         | Straight away               |
 | Splore   | Hide Mature Carts  | Off, On                 | The next time a game starts |
 | Splore   | Check Cart Updates | Off, On                 | The next time a game starts |
 
-`Shortcuts` opens its own page, described [below](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
+`Shortcuts` opens its own page, described [below](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Save states](#save-states), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
 
 - `Show FPS` draws the frame rate in the corner of the screen.
 - `Volume` is PICO-8's own volume, which applies under the device's volume.
@@ -163,25 +164,35 @@ You can also exit from PICO-8's own pause menu:
 - select `Options`
 - select `shutdown Pico-8`
 
+### Save states
+
+`Save` and `Load` in the [in-game menu](#in-game-menu) work as they do in MinUI and NextUI's own emulators. With either selected, `Left` and `Right` choose one of eight slots, and the right of the screen shows the game as it was in that slot, or `Empty Slot`. `Save` saves the game to the slot and closes the menu. `Load` puts the slot back and closes the menu, and is greyed out for an empty slot.
+
+A state holds the whole of PICO-8's memory, so the game carries on exactly where it was, in the middle of a level or a song. Each one takes about 2 to 3 MB: it is packed with [LZ4](https://github.com/lz4/lz4), and the data PICO-8 loads from `pico8.dat` is left out while it is unchanged. The game carries on as soon as you choose `Save`, while the state is written to the SD card in the background. A "Saving..." notice fades in at the bottom right of the screen while it is written, and "Saved" fades out once it is done. Until then the slot shows "Saving..." in the menu. States are saved to `/.userdata/$PLATFORM/Pico-8-native/states` on your SD card, named for the cart and the slot, such as `Celeste.p8.st2`. Their pictures go to `/.userdata/shared/.minui/PICO`, where the launchers look for them.
+
+[Shutting down](#deep-sleep--shutdown) saves the game to a ninth slot before PICO-8 closes, as MinUI and NextUI's own emulators do before sleeping or powering off. `Quit` only does so when `Auto Save on Exit` is on in the `Emulator` options, which it is not to begin with. Resuming a cart from the game switcher or the game list puts back the slot you last saved or loaded, or the ninth slot after it was saved. See [Game switcher](#game-switcher).
+
+- A state only loads in the build of PICO-8 that saved it, so states saved before updating PICO-8 are not loaded. The log says why a state was not loaded.
+- Splore has no save states, and `Save` and `Load` cannot be chosen there.
+- Nothing is saved while PICO-8 is downloading a cart in the background, which it does for a cart from the BBS as it starts when `Check Cart Updates` is on. `Save` shows "Cannot save while downloading" instead.
+
 ### Game switcher
 
-NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so on NextUI the pak gives the switcher a picture of its own.
+NextUI's game switcher lists every game you have played recently, with the picture of its last save state. Choosing `RESUME` in the switcher, or pressing `X` in the game list of NextUI or MinUI, starts the cart and puts back the slot you last saved or loaded, or the ninth slot after shutting down, or quitting with `Auto Save on Exit` on. Press `Y` in the switcher to remove a cart from it.
 
-When you choose `Quit` in the [in-game menu](#in-game-menu), the picture is the game as it was when you opened the menu, without any overlay. Until then, and when a game ends any other way, it is the cart's artwork: its image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The artwork is written as soon as PICO-8 starts.
+Until a cart has a state, NextUI's switcher shows the cart's artwork instead: its image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The artwork is written as soon as PICO-8 starts. Resuming a cart with only its artwork starts it from the beginning. For a cart with no state, Splore among them, `Quit` gives the switcher the game as it was when you opened the menu, without any overlay.
 
-The picture and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card.
+The pictures, and a file naming the slot to resume, are written to `/.userdata/shared/.minui/PICO` on your SD card. MinUI reads the same files to offer resuming a game, so under MinUI they are only written for a cart that has a state.
 
-Because NextUI treats that as a save state, the switcher labels the `A` button `RESUME` and the game list offers `X` to resume the cart. Both start the cart from the beginning. Press `Y` in the switcher to remove a cart from it.
-
-A cart saved as plain text, rather than as an image, still shows no picture unless it has an image in the `.media` folder. See [Artwork](#artwork) for where to put one. MinUI reads the same files to offer resuming a game, so nothing is written there.
+A cart saved as plain text, rather than as an image, still shows no picture until it has a state, unless it has an image in the `.media` folder. See [Artwork](#artwork) for where to put one.
 
 ### Deep Sleep & Shutdown
 
-Deep sleep is supported on compatible devices, including the `h700` devices and the Miyoo Flip running NextUI. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. **Note:** Shutdown does not save the game and any unsaved progress will be lost.
+Deep sleep is supported on compatible devices, including the `h700` devices and the Miyoo Flip running NextUI. Click the power button to enter deep sleep. Click again to resume the game. To shut down, hold the power button for 2 seconds. Shutting down saves the game to a slot of its own, and the next time the device is turned on it starts the same cart again and puts that slot back, as MinUI and NextUI's own emulators do. Power control pauses PICO-8 for deep sleep without warning, so the game is saved when a sleeping device powers off rather than when it goes to sleep. See [Save states](#save-states).
 
 On the Miyoo Flip, closing the lid also puts the device to sleep, and opening it resumes the game.
 
-On devices without deep sleep, which includes every device running MinUI, clicking the power button pauses the game and turns the screen off instead, and clicking again resumes it. A device left like that for two minutes, while not charging, shuts down, and starts the same cart again the next time it is turned on. The cart starts from the beginning, as PICO-8 has no save states.
+On devices without deep sleep, which includes every device running MinUI, clicking the power button pauses the game and turns the screen off instead, and clicking again resumes it. A device left like that for two minutes, while not charging, saves the game and shuts down, and starts the same cart again where it was the next time it is turned on.
 
 The power button is handled by [MinUI Power Control](https://github.com/ben16w/minui-power-control). The pak uses [a fork](https://github.com/josegonzalez/minui-power-control) that adds `h700` support, turns the Miyoo Flip's screen off during deep sleep under NextUI, and sleeps when the Flip's lid closes, until those changes are part of the original. Its messages, such as "Powering off", are shown with the pak's own copy of minui-presenter. See either for more information and known issues.
 
@@ -205,7 +216,9 @@ The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead o
 
 The library is only loaded on `h700`, and only when it is present. A copy the device cannot load is skipped with a line in the log rather than stopping the launch.
 
-Overlays, switching the screen mode in game, the in-game menu and NextUI's game switcher preview come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c`, `shim/cart.c` and `shim/crash.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
+Overlays, switching the screen mode in game, the in-game menu, save states and the game switcher's previews come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c`, `shim/cart.c`, `shim/crash.c` and `shim/state.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
+
+For save states, the library gives PICO-8 every block of memory it asks for from an area at a fixed address, managed by Doug Lea's public domain malloc, so a state can save that area and put it back where it was. States are packed with LZ4, which is BSD licensed. PICO-8's 64-bit binary loads at a different address each time it runs, so with save states on the library starts it a second time with that turned off. In Splore it does neither.
 
 ### In-Game saves
 

@@ -61,6 +61,9 @@ struct fake_state {
 
   int textures_live;
   int streaming_textures;
+  /* how many times a texture's alpha was set, and the last it was set to */
+  int alpha_mods;
+  uint8_t last_alpha;
 
   /* SDL_RenderReadPixels fills the frame with this, and records how it was asked */
   uint32_t frame_colour;
@@ -92,6 +95,9 @@ struct fake_state {
   int audio_status;
   int audio_pauses;
   int audio_resumes;
+  /* held while a save state is taken or put back */
+  int audio_locks;
+  int audio_unlocks;
 
   int pushed;
   uint32_t pushed_type;

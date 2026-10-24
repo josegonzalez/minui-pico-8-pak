@@ -854,7 +854,7 @@ static void test_switcher_preview(void)
     frame[i] = 0xff000000u | (uint32_t)(i * 0x101010);
   }
   snprintf(cart, sizeof cart, "%s/Label.p8", roms);
-  check(cart_write_preview_frame(switcher, cart, frame, 2, 3), "a frame becomes the preview");
+  check(cart_write_preview_frame(switcher, cart, frame, 2, 3, 0), "a frame becomes the preview");
   snprintf(path, sizeof path, "%s/Label.p8.0.bmp", switcher);
   file = fopen(path, "rb");
   got = file != NULL ? fread(bmp, 1, sizeof bmp, file) : 0;
@@ -899,7 +899,7 @@ static void test_preview_size(void)
   snprintf(switcher, sizeof switcher, "%s/brick/.minui/PICO", dir);
   put_file(roms, "Celeste.p8", "cart");
   snprintf(cart, sizeof cart, "%s/Celeste.p8", roms);
-  check(cart_write_preview_frame(switcher, cart, brick, 1024, 768), "a Brick frame is written");
+  check(cart_write_preview_frame(switcher, cart, brick, 1024, 768, 0), "a Brick frame is written");
 
   snprintf(path, sizeof path, "%s/Celeste.p8.0.bmp", switcher);
   file = fopen(path, "rb");
@@ -1228,6 +1228,200 @@ static void test_gfx(void)
   check(gfx_blend(GFX_BLACK, 0x80ffffff) == GFX_ARGB(0x808080), "half white over black is grey");
 }
 
+/* with save states, Save and Load can be chosen and Left and Right step through the slots */
+static void test_slots(void)
+{
+  struct menu_settings settings;
+  struct menu menu;
+
+  settings_for_test(&settings);
+  menu_open(&menu, &settings, "Cart");
+  check(!menu.states.available, "a menu opens with no save states until they are filled in");
+  menu.states.available = 1;
+  menu.states.exists[2] = 1;
+
+  press(&menu, MENU_RIGHT);
+  check(menu.states.slot == 0, "Right on Continue changes no slot");
+  press(&menu, MENU_DOWN);
+  check(menu.root_row == MENU_SAVE, "with save states Down stops on Save");
+  press(&menu, MENU_RIGHT);
+  check(menu.states.slot == 1 && menu.dirty, "Right on Save goes to the next slot");
+  press(&menu, MENU_LEFT);
+  press(&menu, MENU_LEFT);
+  check(menu.states.slot == MENU_SLOTS - 1, "Left from the first slot wraps to the last");
+  press(&menu, MENU_RIGHT);
+  check(menu.states.slot == 0, "and Right from the last back to the first");
+  check(press(&menu, MENU_A) == MENU_SAVE_STATE && menu.states.slot == 0,
+        "A on Save saves to the slot shown");
+
+  press(&menu, MENU_DOWN);
+  check(menu.root_row == MENU_LOAD, "Load comes after Save");
+  check(press(&menu, MENU_A) == MENU_STAY, "A on Load does nothing for an empty slot");
+  press(&menu, MENU_RIGHT);
+  press(&menu, MENU_RIGHT);
+  check(press(&menu, MENU_A) == MENU_LOAD_STATE && menu.states.slot == 2,
+        "and loads a slot that holds a state");
+  press(&menu, MENU_DOWN);
+  check(menu.root_row == MENU_OPTIONS, "Options follows Load");
+}
+
+static void test_slot_drawing(const char *minui_font)
+{
+  /* the Brick's scale is 3: a frame of 12 around half the screen, and 54 more below it */
+  int x = 1024 - 536 - 15 + 12, y = (768 - 438) / 2 + 12;
+  gfx_canvas canvas = guarded_canvas(1024, 768);
+  gfx_font *font = gfx_font_open(minui_font);
+  struct menu_settings settings;
+  uint32_t *frame = malloc((size_t)1024 * 768 * sizeof *frame);
+  uint32_t preview[4 * 3];
+  gfx_theme theme;
+  struct menu menu;
+  size_t i;
+
+  for (i = 0; i < (size_t)1024 * 768; i++) {
+    frame[i] = GFX_ARGB(0xc0c0c0);
+  }
+  for (i = 0; i < 12; i++) {
+    preview[i] = GFX_ARGB(0x123456);
+  }
+  preview[11] = GFX_ARGB(0x654321);
+  gfx_theme_init(&theme, "minui", NULL);
+  settings_for_test(&settings);
+  menu_open(&menu, &settings, "Cart");
+  menu.states.available = 1;
+  menu.states.exists[1] = 1;
+  menu.states.preview[1] = preview;
+  menu.states.preview_w[1] = 4;
+  menu.states.preview_h[1] = 3;
+
+  menu_draw(&menu, &canvas, frame, font, &theme, NULL);
+  check(canvas.pixels[(size_t)(y + 192) * 1024 + x + 256] == GFX_ARGB(0x5f5f5f),
+        "no slot is shown on Continue");
+
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_RIGHT);
+  menu_draw(&menu, &canvas, frame, font, &theme, NULL);
+  check(guards_intact(&canvas), "the slot stays inside the canvas");
+  check(canvas.pixels[(size_t)(y + 192) * 1024 + x + 256] == GFX_ARGB(0x123456),
+        "a slot's preview fills half the screen at the right");
+  check(canvas.pixels[(size_t)(y + 383) * 1024 + x + 511] == GFX_ARGB(0x654321),
+        "stretched to fit, its last pixel at the corner");
+  check(canvas.pixels[(size_t)(y + 192) * 1024 + x - 6] == GFX_WHITE, "inside a white frame");
+
+  press(&menu, MENU_LEFT);
+  menu_draw(&menu, &canvas, frame, font, &theme, NULL);
+  check(canvas.pixels[(size_t)(y + 2) * 1024 + x + 2] == GFX_BLACK &&
+            has_colour(&canvas, x, y + 150, 512, 84, GFX_WHITE),
+        "an empty slot is black with its message in the middle");
+
+  press(&menu, MENU_RIGHT);
+  menu.states.saving[1] = 1;
+  menu_draw(&menu, &canvas, frame, font, &theme, NULL);
+  check(canvas.pixels[(size_t)(y + 192) * 1024 + x + 256] != GFX_ARGB(0x123456) &&
+            has_colour(&canvas, x, y + 150, 512, 84, GFX_WHITE),
+        "a slot still being written says so rather than showing what it held");
+
+  gfx_font_close(font);
+  free(frame);
+  free(canvas.pixels - GUARD);
+}
+
+static void test_auto_save(void)
+{
+  char path[8192];
+  struct menu_settings settings;
+  struct menu menu;
+
+  snprintf(path, sizeof path, "%s/auto-save-on-exit", dir);
+  check(!menu_read_auto_save(path), "Auto Save on Exit is off without its file");
+  write_file(path, "yes\n");
+  check(!menu_read_auto_save(path), "and off for anything but on");
+
+  settings_for_test(&settings);
+  settings.auto_save_path = path;
+  menu = open_options(&settings);
+  select_setting(&menu, MENU_AUTO_SAVE);
+  check(menu.option_row == MENU_GROUP_EMULATOR, "it is one of the Emulator settings");
+  press(&menu, MENU_A);
+  check(settings.auto_save && file_is(path, "on\n") && menu_read_auto_save(path),
+        "turning it on saves on to its file");
+  press(&menu, MENU_LEFT);
+  check(!settings.auto_save && file_is(path, "off\n"), "and turning it off saves off");
+}
+
+static void test_toast(const char *nextui_font)
+{
+  gfx_font *font = gfx_font_open(nextui_font);
+  gfx_theme minui, nextui;
+  gfx_canvas canvas;
+  int w, h, other_w, other_h;
+
+  gfx_theme_init(&minui, "minui", NULL);
+  gfx_theme_init(&nextui, "nextui", ",0x112233FF,,,,,");
+  check(gfx_toast_pill(&minui) == minui.color[1] && gfx_toast_pill(&nextui) == GFX_ARGB(0x112233),
+        "the toast is NextUI's accent under either launcher");
+  check(menu_toast_margin(1024, 768) == 36, "and sits 12 units in from the corner");
+
+  menu_toast_size(1024, 768, font, "Saving...", &w, &h);
+  menu_toast_size(1024, 768, font, "Saved", &other_w, &other_h);
+  check(w > other_w && h == other_h && h > 24, "its width follows its text, padded 8 by 4 units");
+
+  canvas = guarded_canvas(w, h);
+  gfx_clear(&canvas, 0);
+  menu_draw_toast(&canvas, 1024, 768, &nextui, font, 0, 0, "Saving...");
+  check(guards_intact(&canvas), "the toast stays inside its canvas");
+  check(canvas.pixels[(size_t)(h / 2) * w + 4] == gfx_toast_pill(&nextui) && canvas.pixels[0] == 0,
+        "a pill, its corners left clear for the game");
+  check(has_colour(&canvas, 0, 0, w, h, gfx_toast_text(&nextui)), "with its text in NextUI's colour 1");
+
+  free(canvas.pixels - GUARD);
+  gfx_font_close(font);
+}
+
+static void test_state_files(void)
+{
+  char roms[8192], switcher[8192], states[8192], cart[16384], path[16384], expected[16384];
+  uint32_t frame[2 * 3] = {0};
+
+  snprintf(roms, sizeof roms, "%s/states/Pico-8 (PICO)", dir);
+  snprintf(switcher, sizeof switcher, "%s/states/.minui/PICO", dir);
+  snprintf(states, sizeof states, "%s/states/saves", dir);
+  put_file(roms, "Celeste.p8", "cart");
+  snprintf(cart, sizeof cart, "%s/Celeste.p8", roms);
+
+  snprintf(expected, sizeof expected, "%s/Celeste.p8.st3", states);
+  check(cart_state_path(states, cart, 3, path, sizeof path) && strcmp(path, expected) == 0,
+        "a slot's state is named as minarch names its own");
+  check(!cart_state_path(NULL, cart, 3, path, sizeof path) &&
+            !cart_state_path("", cart, 3, path, sizeof path),
+        "and has no path without a folder, as in Splore");
+  snprintf(expected, sizeof expected, "%s/Celeste.p8.3.bmp", switcher);
+  check(cart_preview_path(switcher, cart, 3, path, sizeof path) && strcmp(path, expected) == 0,
+        "its preview goes where the switcher looks");
+
+  check(cart_read_slot(switcher, cart) == -1, "a cart with no .txt has no slot to resume");
+  check(cart_write_slot(switcher, cart, 5) && cart_read_slot(switcher, cart) == 5,
+        "the slot a Load names is the one read back");
+  snprintf(path, sizeof path, "%s/Celeste.p8.txt", switcher);
+  check(same_text(path, "5\n"), "written as minarch writes it");
+
+  check(!cart_has_state(states, cart), "a cart with no state file has no state");
+  put_file(states, "Celeste.p8.st9", "state");
+  check(cart_has_state(states, cart), "the resume slot counts as a state");
+
+  check(cart_write_preview_frame(switcher, cart, frame, 2, 3, 4), "a slot's preview is written");
+  snprintf(path, sizeof path, "%s/Celeste.p8.4.bmp", switcher);
+  check(access(path, F_OK) == 0 && cart_read_slot(switcher, cart) == 4,
+        "under the slot's name, which becomes the one to resume");
+
+  snprintf(path, sizeof path, "%s/Poom", roms);
+  put_file(path, "Poom.m3u", "poom_0.p8\n");
+  snprintf(cart, sizeof cart, "%s/Poom/poom_0.p8", roms);
+  snprintf(expected, sizeof expected, "%s/Poom.m3u.st1", states);
+  check(cart_state_path(states, cart, 1, path, sizeof path) && strcmp(path, expected) == 0,
+        "a multi-cart game's states are keyed by its m3u");
+}
+
 int main(int argc, char **argv)
 {
   const char *minui_font = argc > 1 ? argv[1] : "";
@@ -1257,6 +1451,11 @@ int main(int argc, char **argv)
   test_cycle_helpers();
   test_shortcut_drawing(minui_font);
   test_screenshot_file();
+  test_slots();
+  test_slot_drawing(minui_font);
+  test_toast(nextui_font);
+  test_auto_save();
+  test_state_files();
 
   printf("1..%d\n", tests);
   return failures == 0 ? 0 : 1;

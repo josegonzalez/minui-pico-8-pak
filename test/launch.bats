@@ -523,14 +523,116 @@ teardown() {
   [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
 }
 
-# MinUI reads the same files to offer a resume, which a cart cannot do
-@test "get_switcher_dir names NextUI's game switcher folder and nothing under MinUI" {
+# both launchers resume a cart from the same folder, now that a cart has states
+@test "get_switcher_dir names the launchers' resume folder under NextUI and MinUI" {
   IS_NEXT=yes run get_switcher_dir
   [ "$output" = "$SHARED_USERDATA_PATH/.minui/PICO" ]
 
   IS_NEXT= run get_switcher_dir
+  [ "$output" = "$SHARED_USERDATA_PATH/.minui/PICO" ]
+}
+
+# MinUI would offer to resume a cart that only has artwork, which restarts it
+@test "get_stateless_previews is on under NextUI alone" {
+  IS_NEXT=yes run get_stateless_previews
+  [ "$output" = "1" ]
+
+  IS_NEXT= run get_stateless_previews
+  [ "$output" = "0" ]
+}
+
+@test "get_states_dir keeps states per platform, and Splore has none" {
+  SPLORE_SESSION=false run get_states_dir
+  [ "$output" = "$USERDATA_PATH/Pico-8-native/states" ]
+
+  SPLORE_SESSION=true run get_states_dir
   [ "$status" -eq 0 ]
   [ "$output" = "" ]
+}
+
+# called without run so the exports survive
+@test "setup_display_preload turns save states on for a cart and off for Splore" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+  PLATFORM=tg5040
+  architecture=arm64
+  LD_PRELOAD=
+  cart="$(make_rom_folder "Pico-8 (PICO)")/Celeste.p8"
+
+  SPLORE_SESSION=false
+  setup_display_preload "$cart"
+  [ "$PICO_PAK_STATES_DIR" = "$USERDATA_PATH/Pico-8-native/states" ]
+  [ "$PICO_PAK_AUTO_RESUME_PATH" = "$SHARED_USERDATA_PATH/.minui/auto_resume.txt" ]
+  [ "$PICO_PAK_AUTO_RESUME_ROM" = "/Roms/Pico-8 (PICO)/Celeste.p8" ]
+  [ "$PICO_PAK_AUTO_SAVE" = "$USERDATA_PATH/Pico-8-native/auto-save-on-exit" ]
+  [ "$PICO_PAK_STATELESS_PREVIEWS" = "0" ]
+
+  SPLORE_SESSION=true
+  LD_PRELOAD=
+  setup_display_preload "$(dirname "$cart")/Splore.p8"
+  [ -z "${PICO_PAK_STATES_DIR+set}" ]
+}
+
+@test "read_resume_slot exports the slot the launcher named and removes its file" {
+  export PICO_PAK_RESUME_SLOT_FILE="$BATS_TEST_TMPDIR/resume_slot.txt"
+  printf '9' >"$PICO_PAK_RESUME_SLOT_FILE"
+
+  SPLORE_SESSION=false
+  read_resume_slot
+  [ "$PICO_PAK_RESUME_SLOT" = "9" ]
+  [ ! -f "$PICO_PAK_RESUME_SLOT_FILE" ]
+}
+
+@test "read_resume_slot exports nothing without a file" {
+  export PICO_PAK_RESUME_SLOT_FILE="$BATS_TEST_TMPDIR/resume_slot.txt"
+  PICO_PAK_RESUME_SLOT=4
+
+  SPLORE_SESSION=false
+  read_resume_slot
+  [ -z "${PICO_PAK_RESUME_SLOT+set}" ]
+}
+
+@test "read_resume_slot ignores anything but a slot, and resumes nothing in Splore" {
+  export PICO_PAK_RESUME_SLOT_FILE="$BATS_TEST_TMPDIR/resume_slot.txt"
+
+  printf '12\n' >"$PICO_PAK_RESUME_SLOT_FILE"
+  SPLORE_SESSION=false
+  read_resume_slot
+  [ -z "${PICO_PAK_RESUME_SLOT+set}" ]
+  [ ! -f "$PICO_PAK_RESUME_SLOT_FILE" ]
+
+  printf '2\n' >"$PICO_PAK_RESUME_SLOT_FILE"
+  SPLORE_SESSION=true
+  read_resume_slot
+  [ -z "${PICO_PAK_RESUME_SLOT+set}" ]
+  [ ! -f "$PICO_PAK_RESUME_SLOT_FILE" ]
+}
+
+# power control removes the file as it starts, so pico-8 only gets the slot if
+# launch.sh read it before then
+@test "launch.sh hands pico-8 the slot to resume, read before power control starts" {
+  pak_dir="$(make_pak 'echo "pico8 PICO_PAK_RESUME_SLOT=$PICO_PAK_RESUME_SLOT"')"
+  make_bios
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+  resume_file="$BATS_TEST_TMPDIR/resume_slot.txt"
+  printf '3' >"$resume_file"
+  mkdir -p "$pak_dir/bin/power-control"
+  printf '#!/bin/sh\nrm -f "%s"\n' "$resume_file" >"$pak_dir/bin/power-control/launch"
+  chmod +x "$pak_dir/bin/power-control/launch"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_RESUME_SLOT_FILE="$resume_file" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -q "^pico8 PICO_PAK_RESUME_SLOT=3$" "$LOGS_PATH/PICO.txt"
+  [ ! -f "$resume_file" ]
 }
 
 @test "setup_display_preload names every file the menu reads and writes" {

@@ -619,12 +619,67 @@ get_notify_screenshot() {
   echo "1"
 }
 
-# NextUI's game switcher folder, which the display shim gives the cart's
-# preview. MinUI reads the same files to offer a resume, so it gets none.
+# The folder NextUI's game switcher and MinUI's game list read a cart's slot
+# to resume from, where the display shim names the slot each save state goes
+# to and writes its preview.
 get_switcher_dir() {
+  echo "$SHARED_USERDATA_PATH/.minui/$PAK_NAME"
+}
+
+# 1 under NextUI, whose switcher shows a cart's artwork, or its last frame,
+# before the cart has any state. MinUI offers a resume whenever the switcher
+# folder names a slot, so there the shim names one only once it holds a state.
+get_stateless_previews() {
   if [ "$IS_NEXT" = "yes" ]; then
-    echo "$SHARED_USERDATA_PATH/.minui/$PAK_NAME"
+    echo "1"
+    return 0
   fi
+
+  echo "0"
+}
+
+# Save states are kept per platform, unlike the shared HOME, as a state only
+# loads under the build of PICO-8 that saved it. Splore has none.
+get_states_dir() {
+  if [ "$SPLORE_SESSION" != true ]; then
+    echo "$USERDATA_PATH/Pico-8-native/states"
+  fi
+}
+
+# Both launchers name the slot to resume in this file before starting a pak,
+# and power control removes it as it starts, so main reads it before then. The
+# path is overridable so the test suite can supply one.
+get_resume_slot_file() {
+  echo "${PICO_PAK_RESUME_SLOT_FILE:-/tmp/resume_slot.txt}"
+}
+
+# Exports the slot the launcher asked to resume, for the display shim to put
+# back once the cart starts. The file is removed either way, as minarch would
+# otherwise load the slot the next time it starts a game. A normal launch names
+# slot 8, minarch's hidden default, which the pak never saves, so the cart
+# starts afresh.
+read_resume_slot() {
+  resume_slot_file="$(get_resume_slot_file)"
+  unset PICO_PAK_RESUME_SLOT
+  if [ ! -f "$resume_slot_file" ]; then
+    return 0
+  fi
+
+  resume_slot="$(cat "$resume_slot_file")"
+  rm -f "$resume_slot_file"
+  case "$resume_slot" in
+  [0-9]) ;;
+  *)
+    echo "Ignoring the resume slot \"$resume_slot\"" 1>&2
+    return 0
+    ;;
+  esac
+  if [ "$SPLORE_SESSION" = true ]; then
+    return 0
+  fi
+
+  echo "Resuming slot $resume_slot if it holds a state" 1>&2
+  export PICO_PAK_RESUME_SLOT="$resume_slot"
 }
 
 # The shim also draws the in-game menu, so it is loaded whenever the pak ships
@@ -670,6 +725,21 @@ setup_display_preload() {
 
   export PICO_PAK_CART_PATH="$1"
   PICO_PAK_SWITCHER_DIR="$(get_switcher_dir)"
+  PICO_PAK_STATELESS_PREVIEWS="$(get_stateless_previews)"
+  export PICO_PAK_STATELESS_PREVIEWS
+
+  # save states, and the cart a shutdown has the launcher start again at boot,
+  # named as power control names it, from the root of the SD card
+  PICO_PAK_STATES_DIR="$(get_states_dir)"
+  if [ -n "$PICO_PAK_STATES_DIR" ]; then
+    export PICO_PAK_STATES_DIR
+  else
+    unset PICO_PAK_STATES_DIR
+  fi
+  export PICO_PAK_AUTO_RESUME_PATH="$SHARED_USERDATA_PATH/.minui/auto_resume.txt"
+  # whether Quit also saves the slot to resume, which only shutting down does unless it is on
+  export PICO_PAK_AUTO_SAVE="$USERDATA_PATH/Pico-8-native/auto-save-on-exit"
+  export PICO_PAK_AUTO_RESUME_ROM="${1#"$SDCARD_PATH"}"
   PICO_PAK_MENU_STYLE="$(get_menu_style)"
   PICO_PAK_MENU_FONT="$(get_menu_font "$PICO_PAK_MENU_STYLE")"
   PICO_PAK_MENU_COLORS="$(get_menu_colors "$PICO_PAK_MENU_STYLE")"
@@ -1415,6 +1485,7 @@ main() {
 
   ROM_PATH="$1"
   set_splore_session "$ROM_PATH"
+  read_resume_slot
 
   if ! verify_platform; then
     return 1

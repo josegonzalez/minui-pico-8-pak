@@ -164,6 +164,14 @@ int SDL_SetTextureBlendMode(void *texture, int mode)
   return 0;
 }
 
+int SDL_SetTextureAlphaMod(void *texture, uint8_t alpha)
+{
+  (void)texture;
+  fake.alpha_mods++;
+  fake.last_alpha = alpha;
+  return 0;
+}
+
 int SDL_SetTextureScaleMode(void *texture, int mode)
 {
   (void)texture;
@@ -351,6 +359,20 @@ void SDL_PauseAudioDevice(uint32_t device, int pause_on)
     fake.audio_pauses++;
   } else {
     fake.audio_resumes++;
+  }
+}
+
+void SDL_LockAudioDevice(uint32_t device)
+{
+  if (device == FAKE_AUDIO_DEVICE) {
+    fake.audio_locks++;
+  }
+}
+
+void SDL_UnlockAudioDevice(uint32_t device)
+{
+  if (device == FAKE_AUDIO_DEVICE) {
+    fake.audio_unlocks++;
   }
 }
 

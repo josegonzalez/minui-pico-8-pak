@@ -1,9 +1,10 @@
 /*
  * The in-game menu, laid out as minarch's: Continue, Save, Load, Options and
- * Quit over the dimmed game, with Save and Load shown but unavailable until
- * the pak has save states, and an Options page of groups, Frontend, Emulator,
- * Splore and Shortcuts, for the pak's settings and the PICO-8 settings it
- * writes into config.txt.
+ * Quit over the dimmed game, with a slot for Save and Load chosen with Left
+ * and Right and a preview of what it holds, and an Options page of groups,
+ * Frontend, Emulator, Splore and Shortcuts, for the pak's settings and the
+ * PICO-8 settings it writes into config.txt. Save and Load are shown but
+ * unavailable where there are no save states, as in Splore.
  *
  * Every setting is saved the moment it changes, to the same files launch.sh
  * reads, so there is no page for saving them. Like gfx.c, nothing here calls
@@ -30,7 +31,8 @@ enum {
   MENU_X = 1 << 7,
 };
 
-enum menu_result { MENU_STAY, MENU_CLOSE, MENU_QUIT };
+/* Save and Load leave the slot in menu->states.slot for sdl-display.c to carry out */
+enum menu_result { MENU_STAY, MENU_CLOSE, MENU_QUIT, MENU_SAVE_STATE, MENU_LOAD_STATE };
 
 /* which setting minarch's indicator shows, in place of the battery */
 enum menu_indicator { MENU_INDICATOR_NONE, MENU_INDICATOR_BRIGHTNESS, MENU_INDICATOR_VOLUME };
@@ -61,6 +63,7 @@ enum menu_setting {
   MENU_OVERLAY,
   MENU_COPY_CARTS,
   MENU_SPLORE_ARTWORK,
+  MENU_AUTO_SAVE,
   /* the PICO-8 settings follow, one each, in the order config_options in menu.c lists them */
   MENU_CONFIG_FIRST,
   MENU_SHOW_FPS = MENU_CONFIG_FIRST,
@@ -134,6 +137,9 @@ struct menu_settings {
   const char *shared_copy_carts_dir;
   /* the Splore cover chosen, which the menu gives the Splore carts as it changes */
   const char *splore_artwork_path;
+  /* whether Quit saves the slot the launchers resume, off unless the file says on */
+  const char *auto_save_path;
+  int auto_save;
   /* the roms folders, the tag that marks this pak's, and the pak's two covers */
   const char *roms_dir;
   const char *tag;
@@ -155,9 +161,29 @@ struct menu_settings {
   int overlay;
 };
 
+/* minarch's eight slots, as Save and Load step through them */
+#define MENU_SLOTS 8
+
+/*
+ * The save state slots, which sdl-display.c fills in once menu_open has run,
+ * as nothing here reads a state or decodes a picture.
+ */
+struct menu_states {
+  /* whether states can be saved at all, which Save and Load need */
+  int available;
+  int slot;
+  int exists[MENU_SLOTS];
+  /* a slot still being written in the background, which shows as saving */
+  int saving[MENU_SLOTS];
+  /* each slot's preview, 0xAARRGGBB, or NULL when it has none */
+  const uint32_t *preview[MENU_SLOTS];
+  int preview_w[MENU_SLOTS], preview_h[MENU_SLOTS];
+};
+
 struct menu {
   struct menu_settings *settings;
   const char *title;
+  struct menu_states states;
 
   enum menu_page page;
   int root_row;
@@ -200,6 +226,9 @@ int menu_read_overlay(const char *path, char *const *names, int count);
 
 /* the saved Splore artwork as an index into menu_splore_artworks, standard if unknown */
 int menu_read_splore_artwork(const char *path);
+
+/* whether Quit saves the resume slot, which only "on" in the file turns on */
+int menu_read_auto_save(const char *path);
 
 /* starts on Continue, with the settings launch.sh applies read from disk */
 void menu_open(struct menu *menu, struct menu_settings *settings, const char *title);
@@ -256,5 +285,17 @@ void menu_notification_size(int screen_w, int screen_h, const gfx_font *font, co
                             int *w, int *h);
 void menu_draw_notification(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
                             const gfx_font *font, int x, int y, const char *text);
+
+/*
+ * NextUI's toast, a pill of tiny text such as "Saving" that the game shows in
+ * the bottom right corner while a state is written. Like the notification,
+ * its size depends on the text.
+ */
+void menu_toast_size(int screen_w, int screen_h, const gfx_font *font, const char *text, int *w,
+                     int *h);
+void menu_draw_toast(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
+                     const gfx_font *font, int x, int y, const char *text);
+/* how far in from the bottom right corner the toast sits */
+int menu_toast_margin(int screen_w, int screen_h);
 
 #endif

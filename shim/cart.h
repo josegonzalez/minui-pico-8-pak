@@ -1,12 +1,13 @@
 /*
  * What the display library knows about the cart pico-8 was started with and
- * the roms folders around it: the name the game list shows for it, the preview
- * NextUI's game switcher shows for it, and the covers of the Splore carts.
+ * the roms folders around it: the name the game list shows for it, the files
+ * NextUI's game switcher and MinUI's game list resume it from, where its save
+ * states are kept, and the covers of the Splore carts.
  *
- * launch.sh used to do all of this, before pico-8 started or after it exited,
+ * launch.sh used to do some of this, before pico-8 started or after it exited,
  * where every step added to the wait. Here it is done when it is needed: the
- * title when the menu first opens, the preview once pico-8 has started and
- * again on Quit, and the Splore covers when the menu changes them.
+ * title when the menu first opens, a preview once pico-8 has started and with
+ * each state saved, and the Splore covers when the menu changes them.
  */
 
 #ifndef CART_H
@@ -36,13 +37,34 @@ int cart_artwork(const char *cart_path, char *out, size_t size);
 /*
  * NextUI's game switcher draws a game's preview, and offers to resume it, only
  * when <name>.txt in its folder names a slot and <name>.<slot>.bmp holds the
- * picture. These write slot 0 with the cart's artwork, or with a frame of the
- * game as a BMP a fraction of the screen's size, and return 0 when nothing
- * could be written.
+ * picture. MinUI's game list offers to resume whenever the .txt is there. The
+ * first writes slot 0 with the cart's artwork, and the second a slot with a
+ * frame of the game as a BMP a fraction of the screen's size. Both name the
+ * slot in the .txt, and return 0 when nothing could be written.
  */
 int cart_write_preview_artwork(const char *switcher_dir, const char *cart_path);
 int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
-                             const uint32_t *pixels, int w, int h);
+                             const uint32_t *pixels, int w, int h, int slot);
+
+/* the save state slots, minarch's: 0 to 7 in the menu, 8 its hidden default and 9 for resuming */
+#define CART_SLOTS 10
+#define CART_RESUME_SLOT 9
+
+/* the slot the .txt names, or -1 when there is none, and naming one as a Load does */
+int cart_read_slot(const char *switcher_dir, const char *cart_path);
+int cart_write_slot(const char *switcher_dir, const char *cart_path, int slot);
+
+/*
+ * Where a slot's state is kept, <states_dir>/<name>.st<slot> as minarch names
+ * them, and its preview, <switcher_dir>/<name>.<slot>.bmp. Both return 0 when
+ * there is no folder or no name to make a path from.
+ */
+int cart_state_path(const char *states_dir, const char *cart_path, int slot, char *out, size_t size);
+int cart_preview_path(const char *switcher_dir, const char *cart_path, int slot, char *out,
+                      size_t size);
+
+/* whether any slot holds a state */
+int cart_has_state(const char *states_dir, const char *cart_path);
 
 /* how many of the screen's pixels each of the frame preview's stands for */
 int cart_preview_step(int w, int h);
