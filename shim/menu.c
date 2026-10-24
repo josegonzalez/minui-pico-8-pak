@@ -134,6 +134,7 @@ static const struct group {
     /* its rows depend on the shaders found and in use, so shader_rows lists them */
     {"Shaders", "NextUI's shaders and presets, from /Shaders.", 0, NULL},
     {"Splore", "Copying Splore's carts, its cover and what it shows.", 4, splore_settings},
+    {"Controls", "The buttons for PICO-8's arrows, O, X and pause.", 0, NULL},
     {"Shortcuts", "Buttons for a screenshot, quitting, resetting the game and more.", 0, NULL},
 };
 
@@ -784,10 +785,37 @@ static const char *const shortcut_labels[MENU_SHORTCUT_COUNT] = {
     "Screenshot",    "Save GIF",     "Quit",           "Reset Game", "Cycle Screen Mode",
     "Cycle Overlay", "Cycle Shader", "Toggle CPU Meter"};
 
+/* the buttons PICO-8 reads each control from, as SDL numbers them */
+#define BUTTON_A 0
+#define BUTTON_B 1
+#define BUTTON_START 6
+#define BUTTON_UP 11
+#define BUTTON_DOWN 12
+#define BUTTON_LEFT 13
+#define BUTTON_RIGHT 14
+
+static const int control_buttons[MENU_CONTROL_COUNT] = {BUTTON_UP,   BUTTON_DOWN, BUTTON_LEFT,
+                                                        BUTTON_RIGHT, BUTTON_A,    BUTTON_B,
+                                                        BUTTON_START};
+static const char *const control_keys[MENU_CONTROL_COUNT] = {"up", "down", "left", "right",
+                                                             "o",  "x",    "pause"};
+static const char *const control_labels[MENU_CONTROL_COUNT] = {"Up", "Down", "Left", "Right",
+                                                               "O",  "X",    "Pause"};
+
 int menu_is_bindable(int button)
 {
   return button >= 0 && button < MENU_BINDABLE_BUTTONS && button != MENU_BUTTON &&
          button_keys[button] != NULL;
+}
+
+const char *menu_control_label(int control)
+{
+  return control_labels[control];
+}
+
+int menu_control_button(int control)
+{
+  return control_buttons[control];
 }
 
 const char *menu_shortcut_label(int shortcut)
@@ -846,6 +874,97 @@ void menu_read_shortcuts(const char *path, struct menu_binding *shortcuts)
   fclose(file);
 }
 
+void menu_default_controls(struct menu_binding *controls)
+{
+  int i;
+
+  for (i = 0; i < MENU_CONTROL_COUNT; i++) {
+    controls[i].button = control_buttons[i];
+    controls[i].with_menu = 0;
+  }
+}
+
+/* each line is a control's name and its button, such as "o menu+l1", or none for no button */
+void menu_read_controls(const char *path, struct menu_binding *controls)
+{
+  FILE *file = path != NULL ? fopen(path, "r") : NULL;
+  char line[256], key[64], value[64];
+  int i, button;
+
+  menu_default_controls(controls);
+  if (file == NULL) {
+    return;
+  }
+
+  while (fgets(line, sizeof line, file) != NULL) {
+    const char *name = value;
+    int with_menu = 0;
+
+    if (sscanf(line, "%63s %63s", key, value) != 2) {
+      continue;
+    }
+    if (strncmp(value, "menu+", 5) == 0) {
+      with_menu = 1;
+      name = value + 5;
+    }
+    for (i = 0; i < MENU_CONTROL_COUNT; i++) {
+      if (strcmp(key, control_keys[i]) != 0) {
+        continue;
+      }
+      if (!with_menu && strcmp(name, "none") == 0) {
+        controls[i].button = -1;
+        controls[i].with_menu = 0;
+      }
+      for (button = 0; button < MENU_BINDABLE_BUTTONS; button++) {
+        if (menu_is_bindable(button) && strcmp(name, button_keys[button]) == 0) {
+          controls[i].button = button;
+          controls[i].with_menu = with_menu;
+        }
+      }
+    }
+  }
+
+  fclose(file);
+}
+
+/* every control is written, so one given no button stays without one */
+static void write_controls(const struct menu_settings *settings)
+{
+  FILE *file;
+  int i;
+
+  if (settings->controls_path == NULL || *settings->controls_path == '\0') {
+    return;
+  }
+  file = fopen(settings->controls_path, "w");
+  if (file == NULL) {
+    LOG("cannot save the controls to %s\n", settings->controls_path);
+    return;
+  }
+
+  for (i = 0; i < MENU_CONTROL_COUNT; i++) {
+    const struct menu_binding *binding = &settings->controls[i];
+    if (menu_is_bindable(binding->button)) {
+      fprintf(file, "%s %s%s\n", control_keys[i], binding->with_menu ? "menu+" : "",
+              button_keys[binding->button]);
+    } else {
+      fprintf(file, "%s none\n", control_keys[i]);
+    }
+  }
+  fclose(file);
+}
+
+/* the controls go back to how they start, and so does their file, by going */
+static void restore_controls(struct menu_settings *settings)
+{
+  menu_default_controls(settings->controls);
+  LOG("restored the default controls\n");
+  if (settings->controls_path != NULL && *settings->controls_path != '\0' &&
+      unlink(settings->controls_path) != 0 && access(settings->controls_path, F_OK) == 0) {
+    LOG("cannot remove %s\n", settings->controls_path);
+  }
+}
+
 static void write_shortcuts(const struct menu_settings *settings)
 {
   FILE *file;
@@ -875,6 +994,34 @@ int menu_is_binding(const struct menu *menu)
   return menu->binding >= 0;
 }
 
+/* a control's button is taken from any shortcut, which would otherwise keep it from the game */
+static void bind_control(struct menu *menu, int button, int with_menu)
+{
+  struct menu_settings *settings = menu->settings;
+  struct menu_binding *control = &settings->controls[menu->binding];
+  char name[64];
+  int i, taken = 0;
+
+  for (i = 0; i < MENU_SHORTCUT_COUNT; i++) {
+    if (settings->shortcuts[i].button == button && settings->shortcuts[i].with_menu == with_menu) {
+      settings->shortcuts[i].button = -1;
+      LOG("unbound %s, as a control took its button\n", shortcut_keys[i]);
+      taken = 1;
+    }
+  }
+  control->button = button;
+  control->with_menu = with_menu;
+
+  menu_binding_name(control, name, sizeof name);
+  LOG("bound the %s control to %s\n", control_keys[menu->binding], name);
+  write_controls(settings);
+  if (taken) {
+    write_shortcuts(settings);
+  }
+  menu->binding = -1;
+  menu->dirty = 1;
+}
+
 void menu_bind(struct menu *menu, int button, int with_menu)
 {
   struct menu_binding *shortcuts = menu->settings->shortcuts;
@@ -882,6 +1029,10 @@ void menu_bind(struct menu *menu, int button, int with_menu)
   int i;
 
   if (menu->binding < 0 || !menu_is_bindable(button)) {
+    return;
+  }
+  if (menu->page == MENU_PAGE_CONTROLS) {
+    bind_control(menu, button, with_menu);
     return;
   }
 
@@ -1037,6 +1188,8 @@ static void move_row(struct menu *menu, int step)
     do {
       menu->root_row = (menu->root_row + step + MENU_ROOT_COUNT) % MENU_ROOT_COUNT;
     } while (!root_row_enabled(menu, menu->root_row));
+  } else if (menu->page == MENU_PAGE_CONTROLS) {
+    menu->control_row = (menu->control_row + step + MENU_CONTROL_ROWS) % MENU_CONTROL_ROWS;
   } else if (menu->page == MENU_PAGE_SHORTCUTS) {
     menu->shortcut_row = (menu->shortcut_row + step + MENU_SHORTCUT_COUNT) % MENU_SHORTCUT_COUNT;
   } else if (menu->page == MENU_PAGE_GROUP) {
@@ -1134,6 +1287,29 @@ enum menu_result menu_update(struct menu *menu, unsigned pressed, unsigned held,
     }
   }
 
+  if (menu->page == MENU_PAGE_CONTROLS) {
+    struct menu_binding *controls = menu->settings->controls;
+
+    if (pressed & MENU_B) {
+      menu->page = MENU_PAGE_OPTIONS;
+      menu->dirty = 1;
+    } else if ((pressed & MENU_A) && menu->control_row == MENU_CONTROL_RESTORE) {
+      restore_controls(menu->settings);
+      menu->dirty = 1;
+    } else if (pressed & MENU_A) {
+      menu->binding = menu->control_row;
+      menu->dirty = 1;
+    } else if ((pressed & MENU_X) && menu->control_row < MENU_CONTROL_COUNT &&
+               menu_is_bindable(controls[menu->control_row].button)) {
+      controls[menu->control_row].button = -1;
+      controls[menu->control_row].with_menu = 0;
+      LOG("unbound the %s control\n", control_keys[menu->control_row]);
+      write_controls(menu->settings);
+      menu->dirty = 1;
+    }
+    return MENU_STAY;
+  }
+
   if (menu->page == MENU_PAGE_SHORTCUTS) {
     if (pressed & MENU_B) {
       menu->page = MENU_PAGE_OPTIONS;
@@ -1192,9 +1368,13 @@ enum menu_result menu_update(struct menu *menu, unsigned pressed, unsigned held,
     return MENU_STAY;
   }
 
-  /* B on a group's page comes back to it here, as it does from Shortcuts */
+  /* B on a group's page comes back to it here, as it does from Controls and Shortcuts */
   if (pressed & (MENU_RIGHT | MENU_A)) {
-    if (menu->option_row == MENU_GROUP_SHORTCUTS) {
+    if (menu->option_row == MENU_GROUP_CONTROLS) {
+      menu->page = MENU_PAGE_CONTROLS;
+      menu->control_row = 0;
+      menu->control_top = 0;
+    } else if (menu->option_row == MENU_GROUP_SHORTCUTS) {
       menu->page = MENU_PAGE_SHORTCUTS;
       menu->shortcut_row = 0;
       menu->shortcut_top = 0;
@@ -1621,6 +1801,23 @@ static void param_value(const struct menu *menu, int row, char *out, size_t size
            shader_param_value(&menu->settings->shaders, &menu->settings->shader_params[row]));
 }
 
+static const char *controls_label(const struct menu *menu, int row)
+{
+  (void)menu;
+  return row == MENU_CONTROL_RESTORE ? "Restore Defaults" : control_labels[row];
+}
+
+static void controls_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  if (row == MENU_CONTROL_RESTORE) {
+    snprintf(out, size, "%s", "");
+  } else if (menu->binding == row) {
+    snprintf(out, size, "Press a button");
+  } else {
+    menu_binding_name(&menu->settings->controls[row], out, size);
+  }
+}
+
 static const char *shortcuts_label(const struct menu *menu, int row)
 {
   (void)menu;
@@ -1841,6 +2038,41 @@ static void draw_shortcuts(struct menu *menu, gfx_canvas *canvas, const gfx_metr
   draw_list(menu, canvas, m, font, theme, battery, &page);
 }
 
+static void draw_controls(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                          const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
+{
+  int small = gfx_u(m, GFX_FONT_SMALL), tiny = gfx_u(m, GFX_FONT_TINY);
+  int op = gfx_u(m, GFX_OPTION_PADDING);
+  /* the longest any value can be, whatever is bound */
+  int value_w = gfx_text_width(font, tiny, "MENU+SELECT");
+  struct list_page page = {"Controls", MENU_CONTROL_ROWS, menu->control_row,
+                           &menu->control_top, 0, NULL, controls_label, controls_value};
+  char description[256];
+  int row;
+
+  if (gfx_text_width(font, tiny, "Press a button") > value_w) {
+    value_w = gfx_text_width(font, tiny, "Press a button");
+  }
+  for (row = 0; row < MENU_CONTROL_ROWS; row++) {
+    int w = gfx_text_width(font, small, controls_label(menu, row)) + value_w + 4 * op;
+    page.widest = w > page.widest ? w : page.widest;
+  }
+
+  if (menu->binding >= 0) {
+    snprintf(description, sizeof description,
+             "Press a button for %s, holding MENU for MENU+button.\nTap MENU to cancel.",
+             control_labels[menu->binding]);
+  } else if (menu->control_row == MENU_CONTROL_RESTORE) {
+    snprintf(description, sizeof description, "A to give every control its button again.");
+  } else {
+    snprintf(description, sizeof description,
+             "A to set a button, holding MENU for MENU+button.\nX to clear it.");
+  }
+  page.description = description;
+
+  draw_list(menu, canvas, m, font, theme, battery, &page);
+}
+
 void menu_notification_size(int screen_w, int screen_h, const gfx_font *font, const char *text,
                             int *w, int *h)
 {
@@ -1903,6 +2135,8 @@ void menu_draw(struct menu *menu, gfx_canvas *canvas, const uint32_t *frame, con
 
   if (menu->page == MENU_PAGE_ROOT) {
     draw_root(menu, canvas, &metrics, frame, font, theme, battery);
+  } else if (menu->page == MENU_PAGE_CONTROLS) {
+    draw_controls(menu, canvas, &metrics, font, theme, battery);
   } else if (menu->page == MENU_PAGE_SHORTCUTS) {
     draw_shortcuts(menu, canvas, &metrics, font, theme, battery);
   } else if (menu->page == MENU_PAGE_GROUP) {

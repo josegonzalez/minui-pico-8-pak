@@ -2,8 +2,8 @@
  * The in-game menu, laid out as minarch's: Continue, Save, Load, Options and
  * Quit over the dimmed game, with a slot for Save and Load chosen with Left
  * and Right and a preview of what it holds, and an Options page of groups,
- * Frontend, Emulator, Shaders, Splore and Shortcuts, for the pak's settings
- * and the PICO-8 settings it writes into config.txt. Save and Load are shown but
+ * Frontend, Emulator, Shaders, Splore, Controls and Shortcuts, for the pak's
+ * settings and the PICO-8 settings it writes into config.txt. Save and Load are shown but
  * unavailable where there are no save states, as in Splore.
  *
  * Every setting is saved the moment it changes, to the same files launch.sh
@@ -43,14 +43,16 @@ enum menu_indicator { MENU_INDICATOR_NONE, MENU_INDICATOR_BRIGHTNESS, MENU_INDIC
 #define MENU_VOLUME_MAX 20
 
 /*
- * Options lists the groups, as minarch's does, and each group but Shortcuts
- * opens a page of its settings. Shaders' Parameters row opens a page of the
- * parameters the shaders in use declare.
+ * Options lists the groups, as minarch's does, and each group but Controls
+ * and Shortcuts opens a page of its settings. Those two open a page of
+ * buttons. Shaders' Parameters row opens a page of the parameters the shaders
+ * in use declare.
  */
 enum menu_page {
   MENU_PAGE_ROOT,
   MENU_PAGE_OPTIONS,
   MENU_PAGE_GROUP,
+  MENU_PAGE_CONTROLS,
   MENU_PAGE_SHORTCUTS,
   MENU_PAGE_SHADER_PARAMS,
 };
@@ -62,6 +64,7 @@ enum menu_group {
   MENU_GROUP_EMULATOR,
   MENU_GROUP_SHADERS,
   MENU_GROUP_SPLORE,
+  MENU_GROUP_CONTROLS,
   MENU_GROUP_SHORTCUTS,
   MENU_GROUP_COUNT,
 };
@@ -100,7 +103,7 @@ enum menu_setting {
 struct menu;
 
 /*
- * How many settings a group shows, none for Shortcuts, and which is at a row.
+ * How many settings a group shows, none for Controls and Shortcuts, and which is at a row.
  * Shaders shows only its preset, as None, until there are shaders it can
  * draw, and then a pass's rows for each pass in use.
  */
@@ -141,6 +144,23 @@ struct menu_binding {
 #define MENU_BINDABLE_BUTTONS 23
 int menu_is_bindable(int button);
 
+/*
+ * PICO-8's own buttons, one row each of the Controls page, as minarch lists
+ * a core's. The page ends with a row that puts them all back.
+ */
+enum menu_control {
+  MENU_CONTROL_UP,
+  MENU_CONTROL_DOWN,
+  MENU_CONTROL_LEFT,
+  MENU_CONTROL_RIGHT,
+  MENU_CONTROL_O,
+  MENU_CONTROL_X,
+  MENU_CONTROL_PAUSE,
+  MENU_CONTROL_COUNT,
+};
+#define MENU_CONTROL_RESTORE MENU_CONTROL_COUNT
+#define MENU_CONTROL_ROWS (MENU_CONTROL_COUNT + 1)
+
 /* the values the screen-mode file holds, in the order the menu steps through */
 extern const char *const menu_screen_modes[];
 #define MENU_SCREEN_MODE_COUNT 2
@@ -180,6 +200,10 @@ struct menu_settings {
   /* the shortcuts' buttons, saved here as they change */
   const char *shortcuts_path;
   struct menu_binding shortcuts[MENU_SHORTCUT_COUNT];
+
+  /* the physical button for each of PICO-8's, saved here as they change */
+  const char *controls_path;
+  struct menu_binding controls[MENU_CONTROL_COUNT];
 
   char *const *overlay_names;
   int overlay_count;
@@ -241,11 +265,13 @@ struct menu {
   /* the row selected on the open group's page, an index into the group */
   int setting_row;
   int setting_top;
+  int control_row;
+  int control_top;
   int shortcut_row;
   int shortcut_top;
   int param_row;
   int param_top;
-  /* the shortcut waiting for a button to be pressed for it, or -1 */
+  /* the row of the Controls or Shortcuts page waiting for a button, or -1 */
   int binding;
 
   int copy_carts;
@@ -314,10 +340,23 @@ void menu_binding_name(const struct menu_binding *binding, char *out, size_t siz
 /* the name a shortcut shows, such as Screenshot */
 const char *menu_shortcut_label(int shortcut);
 
+/* the buttons PICO-8 is given to begin with: the d-pad, A for O, B for X and Start */
+void menu_default_controls(struct menu_binding *controls);
+/* reads the controls saved at path, leaving any it does not name as they start */
+void menu_read_controls(const char *path, struct menu_binding *controls);
+/* the name a control shows, such as Up or O */
+const char *menu_control_label(int control);
 /*
- * While a shortcut waits for its button, every button pressed is given here
- * rather than to menu_update, which binds it, unbinding any other shortcut
- * that used the same one, and saves them all.
+ * The button, as SDL numbers them, that PICO-8 reads a control from. PICO-8
+ * also reads Y as O and X as X, which only the controls give it now.
+ */
+int menu_control_button(int control);
+
+/*
+ * While a control or a shortcut waits for its button, every button pressed
+ * is given here rather than to menu_update, which binds it and saves them
+ * all. A shortcut takes the button from any other shortcut, and a control
+ * takes it from any shortcut, so the control just bound reaches the game.
  */
 int menu_is_binding(const struct menu *menu);
 void menu_bind(struct menu *menu, int button, int with_menu);
