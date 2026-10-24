@@ -218,7 +218,7 @@ static size_t menu_buffer_size;
 /* the biggest rect pico-8 has drawn to, which is its own standard screen */
 static SDL_Rect game_rect;
 
-#define LOG(...) fprintf(stderr, "sdl-display: " __VA_ARGS__)
+#define LOG(...) gfx_log(__VA_ARGS__)
 
 /*
  * The shim is built with hidden visibility, so menu.c and gfx.c can never bind
@@ -1119,6 +1119,7 @@ static void run_menu(void *renderer)
     /* the cart's sound stays paused, and every frame left is black */
     fade_out(renderer, texture, &canvas, drawn);
     quitting = 1;
+    LOG("faded out, every frame is black until pico-8 exits\n");
   } else {
     show_pixels(renderer, texture, menu_frame, width);
     if (paused) {
@@ -1146,12 +1147,18 @@ static void run_menu(void *renderer)
 
 EXPORT void SDL_RenderPresent(void *renderer)
 {
+  static int presented;
+
   resolve_sdl();
   if (sdl.RenderPresent == NULL) {
     return;
   }
 
   init_display();
+  if (!presented) {
+    presented = 1;
+    LOG("pico-8 presented its first frame\n");
+  }
   if (quitting) {
     clear_to_black(renderer);
     sdl.RenderPresent(renderer);

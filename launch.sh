@@ -1083,6 +1083,7 @@ launch_cart() {
   ROM_FOLDER="$(dirname "$ROM_PATH")"
   ROM_NAME="$(basename "$ROM_PATH")"
 
+  log_step "setting up pico-8"
   cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
   install_config "$ROM_FOLDER"
   set_cpu_speed
@@ -1129,6 +1130,7 @@ launch_cart() {
     fi
   fi
 
+  log_step "starting pico-8"
   if is_splore_cart "$ROM_NAME"; then
     # draw_rect is left unquoted so it splits into separate arguments
     # shellcheck disable=SC2086
@@ -1149,6 +1151,7 @@ launch_cart() {
       -run "$ROM_PATH" $draw_rect
   fi
   pico_status=$?
+  log_step "pico-8 exited with status $pico_status"
 
   # the library path and preloads are for pico-8 alone: minui-presenter is SDL
   # too and shows its messages after this, so it needs the device's SDL2 back
@@ -1164,13 +1167,17 @@ launch_cart() {
   fi
 
   # before the switcher preview, which copies the Splore cart's cover
+  log_step "applying the Splore artwork"
   apply_splore_artwork
 
   # NextUI added the cart to its recents before starting the pak, whether or
   # not pico-8 went on to run it
+  log_step "writing the game switcher preview"
   write_switcher_preview "$ROM_PATH"
 
+  log_step "syncing the SD card"
   sync
+  log_step "copying Splore carts"
   # each traced command is its own write to the SD card, seconds over a cart scan
   case $- in *x*) copy_traced=true ;; *) copy_traced=false ;; esac
   set +x
@@ -1178,6 +1185,7 @@ launch_cart() {
   if [ "$copy_traced" = "true" ]; then
     set -x
   fi
+  log_step "copied Splore carts"
 
   # minui-power-control ends a session by signalling pico-8, and a status above
   # 128 is a signal, so it is not a failure worth putting on screen
@@ -1346,11 +1354,22 @@ start_power_control() {
   minui-power-control "$(get_pico_bin)" "$1" &
 }
 
+# Marks a step of starting or tearing down in the log with the seconds since
+# boot, the clock the display shim stamps its own lines with. /proc/uptime has
+# it to the hundredth on every device, where busybox date has no sub-second
+# format. The file is overridable so the test suite can fix the time.
+log_step() {
+  step_time="$(cut -d' ' -f1 "${PICO_PAK_UPTIME_FILE:-/proc/uptime}" 2>/dev/null)"
+  echo "[${step_time:-?}] $*" 1>&2
+}
+
 cleanup() {
+  log_step "cleaning up"
   rm -f /tmp/stay_awake
   rm -f "$(get_network_probe_file)"
   rm -rf "$(get_copy_carts_tmp_dir)"
   killall minui-presenter >/dev/null 2>&1 || true
+  log_step "done, returning to the launcher"
 }
 
 main() {
@@ -1361,6 +1380,7 @@ main() {
   exec 2>&1
 
   echo "$0" "$*"
+  log_step "starting"
   cd "$PAK_DIR" || exit 1
   mkdir -p "$USERDATA_PATH/Pico-8-native"
   mkdir -p "$SHARED_USERDATA_PATH/Pico-8-native"
@@ -1381,25 +1401,31 @@ main() {
 
   # saves move to the folder MinUI and NextUI use before anything writes to
   # either one
+  log_step "migrating saves"
   migrate_saves
 
   # seeding is best-effort and must never block a launch
+  log_step "seeding the Splore cart"
   install_splore_cart
 
+  log_step "checking the cart"
   if ! verify_cart "$ROM_PATH"; then
     return 1
   fi
 
+  log_step "installing the PICO-8 files"
   if ! install_pico_files; then
     return 1
   fi
 
+  log_step "checking the Splore connection"
   if ! verify_splore_connection "$ROM_PATH"; then
     return 1
   fi
 
   # minui-power-control also powers the device off on a long press, so there is
   # no shutdown left for the pak to handle once pico-8 exits
+  log_step "starting power control"
   start_power_control "$ROM_PATH"
 
   launch_cart "$ROM_PATH"

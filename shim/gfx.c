@@ -4,6 +4,7 @@
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,6 +81,28 @@ static double gfx_fmod(double x, double y)
 #pragma GCC diagnostic ignored "-Wsign-compare"
 #include "stb_truetype.h"
 #pragma GCC diagnostic pop
+
+/* the file is overridable so the tests can fix the time, as launch.sh's is */
+void gfx_log(const char *format, ...)
+{
+  const char *path = getenv("PICO_PAK_UPTIME_FILE");
+  char uptime[32] = "";
+  va_list args;
+  FILE *file;
+
+  file = fopen(path != NULL && *path != '\0' ? path : "/proc/uptime", "r");
+  if (file != NULL) {
+    if (fscanf(file, "%31s", uptime) != 1) {
+      uptime[0] = '\0';
+    }
+    fclose(file);
+  }
+
+  fprintf(stderr, "[%s] sdl-display: ", uptime[0] != '\0' ? uptime : "?");
+  va_start(args, format);
+  vfprintf(stderr, format, args);
+  va_end(args);
+}
 
 uint32_t gfx_blend(uint32_t dst, uint32_t src)
 {
@@ -333,7 +356,7 @@ gfx_font *gfx_font_open(const char *path)
 
   file = fopen(path, "rb");
   if (file == NULL) {
-    fprintf(stderr, "sdl-display: cannot open the font %s, using the built-in one\n", path);
+    gfx_log("cannot open the font %s, using the built-in one\n", path);
     return font;
   }
 
@@ -348,7 +371,7 @@ gfx_font *gfx_font_open(const char *path)
 
   offset = font->data != NULL ? stbtt_GetFontOffsetForIndex(font->data, 0) : -1;
   if (offset < 0 || !stbtt_InitFont(&font->info, font->data, offset)) {
-    fprintf(stderr, "sdl-display: cannot read the font %s, using the built-in one\n", path);
+    gfx_log("cannot read the font %s, using the built-in one\n", path);
     free(font->data);
     font->data = NULL;
     return font;

@@ -676,6 +676,53 @@ static void test_battery(void)
         "the battery's capacity is read, kept to 100, with its charging state");
 }
 
+/* logs one line with stderr sent to a file, and reads it back */
+static void capture_log(const char *message, char *line, size_t size)
+{
+  char path[8192];
+  int saved = dup(fileno(stderr));
+  FILE *file;
+
+  snprintf(path, sizeof path, "%s/log", dir);
+  fflush(stderr);
+  if (saved < 0 || freopen(path, "w", stderr) == NULL) {
+    perror(path);
+    exit(2);
+  }
+  gfx_log("%s\n", message);
+  fflush(stderr);
+  dup2(saved, fileno(stderr));
+  close(saved);
+
+  line[0] = '\0';
+  file = fopen(path, "r");
+  if (file != NULL) {
+    if (fgets(line, (int)size, file) == NULL) {
+      line[0] = '\0';
+    }
+    fclose(file);
+  }
+}
+
+static void test_log(void)
+{
+  char path[8192], line[256];
+
+  snprintf(path, sizeof path, "%s/uptime", dir);
+  write_file(path, "1234.56 7890.12\n");
+  setenv("PICO_PAK_UPTIME_FILE", path, 1);
+  capture_log("opening the menu", line, sizeof line);
+  check(strcmp(line, "[1234.56] sdl-display: opening the menu\n") == 0,
+        "the shim stamps its log with the seconds since boot, as launch.sh does");
+
+  snprintf(path, sizeof path, "%s/no-uptime", dir);
+  setenv("PICO_PAK_UPTIME_FILE", path, 1);
+  capture_log("closing the menu", line, sizeof line);
+  check(strcmp(line, "[?] sdl-display: closing the menu\n") == 0,
+        "a line still logs when the time cannot be read");
+  unsetenv("PICO_PAK_UPTIME_FILE");
+}
+
 static void test_gfx(void)
 {
   gfx_metrics brick = gfx_metrics_for(1024, 768), smart_pro = gfx_metrics_for(1280, 720);
@@ -711,6 +758,7 @@ int main(int argc, char **argv)
   test_theme();
   test_battery();
   test_gfx();
+  test_log();
 
   printf("1..%d\n", tests);
   return failures == 0 ? 0 : 1;

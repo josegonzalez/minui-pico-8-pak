@@ -10,7 +10,7 @@
 
 #include "menu.h"
 
-#define LOG(...) fprintf(stderr, "sdl-display: " __VA_ARGS__)
+#define LOG(...) gfx_log(__VA_ARGS__)
 
 /* how long a held direction waits before repeating, and then between repeats */
 #define REPEAT_DELAY 400

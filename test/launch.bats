@@ -2590,6 +2590,51 @@ STUB
   grep -qx "sync LD_LIBRARY_PATH=/inherited" "$LOGS_PATH/PICO.txt"
 }
 
+@test "log_step stamps a line with the seconds since boot" {
+  printf '1234.56 7890.12\n' >"$BATS_TEST_TMPDIR/uptime"
+
+  PICO_PAK_UPTIME_FILE="$BATS_TEST_TMPDIR/uptime" run log_step "syncing the SD card"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[1234.56] syncing the SD card" ]
+}
+
+@test "log_step still logs when the time cannot be read" {
+  PICO_PAK_UPTIME_FILE="$BATS_TEST_TMPDIR/absent" run log_step "starting"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[?] starting" ]
+}
+
+# the stamps are what show where the seconds go between pressing Quit and the
+# launcher coming back, so every step of the way has one, in order
+@test "launch.sh stamps every step of starting and tearing down" {
+  pak_dir="$(make_pak)"
+  printf '1234.56 7890.12\n' >"$BATS_TEST_TMPDIR/uptime"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    PICO_PAK_UPTIME_FILE="$BATS_TEST_TMPDIR/uptime" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep '^\[1234\.56\] ' "$LOGS_PATH/PICO.txt" | sed 's/^\[1234\.56\] //' >"$BATS_TEST_TMPDIR/steps"
+  printf '%s\n' "starting" "migrating saves" "seeding the Splore cart" "checking the cart" \
+    "installing the PICO-8 files" "checking the Splore connection" "starting power control" \
+    "setting up pico-8" "starting pico-8" "pico-8 exited with status 0" \
+    "applying the Splore artwork" "writing the game switcher preview" "syncing the SD card" \
+    "copying Splore carts" "copied Splore carts" "cleaning up" \
+    "done, returning to the launcher" >"$BATS_TEST_TMPDIR/expected"
+  diff "$BATS_TEST_TMPDIR/expected" "$BATS_TEST_TMPDIR/steps"
+}
+
 @test "launch.sh stretches pico-8 itself without the display shim" {
   pak_dir="$(make_pak)"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"

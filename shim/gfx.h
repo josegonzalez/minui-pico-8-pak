@@ -43,6 +43,12 @@ typedef struct {
   int w, h;
 } gfx_canvas;
 
+/*
+ * Logs a line from the shim, stamped with the seconds since boot as
+ * launch.sh's log_step stamps its own, so the two line up in the pak's log.
+ */
+void gfx_log(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
 /* straight alpha source-over */
 uint32_t gfx_blend(uint32_t dst, uint32_t src);
 /* blends colour at one pixel, its alpha scaled by cover (0-255) */
