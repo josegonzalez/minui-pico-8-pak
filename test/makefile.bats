@@ -149,16 +149,16 @@ pak_platforms() {
   [ "$status" -eq 0 ]
 }
 
-# a user with an LD_PRELOAD object on their SD card should be able to read what
-# it does, while its build recipe is machinery they never run
-@test "the sdl shim source ships with the pak but its build recipe does not" {
-  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/sdl-nosensor.c"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"export-ignore: unspecified"* ]]
+# the device only loads the libraries built from shim/, and the source cannot
+# be built from the pak anyway, so it stays in the repository
+@test "nothing from the shim folder ships with the pak" {
+  run sh -c "cd '$REPO_ROOT' && git archive HEAD | tar -t | grep '^shim/.'"
+  [ -z "$output" ]
 
-  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/Dockerfile"
+  run sh -c "cd '$REPO_ROOT' && git ls-files shim | xargs git check-attr export-ignore"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"export-ignore: set"* ]]
+  [ -n "$output" ]
+  ! printf '%s\n' "$output" | grep -qv 'export-ignore: set$'
 }
 
 # launch.sh preloads lib/$architecture/sdl-display.so on every platform, so
@@ -253,14 +253,6 @@ pak_platforms() {
   for header in stb_image.h stb_truetype.h stb_image_write.h; do
     grep -B1 "nothings/stb/[0-9a-f]\{40\}/$header" "$REPO_ROOT/shim/Dockerfile" |
       grep -Eq '^ADD --checksum=sha256:[0-9a-f]{64} '
-  done
-}
-
-@test "the display shim source ships with the pak" {
-  for source in sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h; do
-    run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/$source"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"export-ignore: unspecified"* ]]
   done
 }
 

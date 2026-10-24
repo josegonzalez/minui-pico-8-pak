@@ -195,11 +195,11 @@ SDL Error: SDL not built with sensor support
 ** FATAL ERROR: Unable to initialize SDL
 ```
 
-The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead of SDL2. It drops that one request on its way past and hands everything else to the device's own SDL2 unchanged, which matters because NextUI's SDL2 is the build that sees the built-in controller and no replacement would. PICO-8 never reads a sensor, so nothing is lost. The source is in `shim/sdl-nosensor.c` in this pak.
+The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead of SDL2. It drops that one request on its way past and hands everything else to the device's own SDL2 unchanged, which matters because NextUI's SDL2 is the build that sees the built-in controller and no replacement would. PICO-8 never reads a sensor, so nothing is lost. The source is in `shim/sdl-nosensor.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
 
 The library is only loaded on `h700`, and only when it is present. A copy the device cannot load is skipped with a line in the log rather than stopping the launch.
 
-Overlays, switching the screen mode in game, the in-game menu and NextUI's game switcher preview come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c` and `shim/cart.c` in this pak.
+Overlays, switching the screen mode in game, the in-game menu and NextUI's game switcher preview come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c`, `shim/cart.c` and `shim/crash.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
 
 ### In-Game saves
 
