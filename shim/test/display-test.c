@@ -103,6 +103,9 @@ int num_threads;
 /* what the save state runs change between a save and a load, in pico-8's memory and its arena */
 static int marker;
 static char *heap;
+/* a block as big as the data pico-8 loads from pico8.dat, allocated before the cart starts */
+#define BIG_SIZE (2u << 20)
+static unsigned char *big;
 static char choice_path[4096];
 static char screen_mode_path[4096];
 static char copy_carts_dir[4096];
@@ -1274,6 +1277,37 @@ static int slot_named(const char *slot)
   return file_is(path, slot);
 }
 
+/* a save is written in the background, and names its slot last of all */
+static int written(const char *slot)
+{
+  int tries;
+
+  for (tries = 0; tries < 500 && !slot_named(slot); tries++) {
+    usleep(10000);
+  }
+  return slot_named(slot);
+}
+
+static long state_size(int slot)
+{
+  char path[8192];
+  struct stat info;
+
+  snprintf(path, sizeof path, "%s/states/Celeste.p8.st%d", dir, slot);
+  return stat(path, &info) == 0 ? (long)info.st_size : -1;
+}
+
+/* the same in every run, as what pico-8 loads from pico8.dat is */
+static void make_big(void)
+{
+  size_t i;
+
+  big = malloc(BIG_SIZE);
+  for (i = 0; big != NULL && i < BIG_SIZE; i++) {
+    big[i] = (unsigned char)(i * 31 + 7);
+  }
+}
+
 /* opens the menu, runs the script and lets every button go after */
 static void run_script(void *pad, const uint32_t *states, int count)
 {
@@ -1302,9 +1336,14 @@ static void test_states(void *pad)
                                         BIT(BUTTON_B)};
   static const uint32_t save_four[] = {BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_RIGHT), 0,
                                        BIT(BUTTON_DPAD_RIGHT), 0, BIT(BUTTON_A)};
+  static const uint32_t save_five[] = {BIT(BUTTON_DPAD_DOWN),  0, BIT(BUTTON_DPAD_RIGHT), 0,
+                                       BIT(BUTTON_DPAD_RIGHT), 0, BIT(BUTTON_DPAD_RIGHT), 0,
+                                       BIT(BUTTON_A)};
   static const uint32_t quit[] = {BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_A)};
   int pushed;
 
+  make_big();
+  L0_cart = &marker;
   fake.frame_colour = 0x00205080;
   SDL_RenderPresent(&renderer_a);
   check(slot_named("0"), "with no state yet the switcher gets the artwork as slot 0");
@@ -1314,7 +1353,9 @@ static void test_states(void *pad)
   snprintf(heap, 32, "saved");
   fake.audio_locks = fake.audio_unlocks = 0;
   run_script(pad, save_two, 7);
-  check(state_exists(2), "Save on the slot two to the right saves slot 2");
+  check(written("2") && state_exists(2), "Save on the slot two to the right saves slot 2");
+  check(state_size(2) > 0 && state_size(2) < (long)BIG_SIZE,
+        "leaving out what pico-8 loaded before its cart, which is as it was");
   check(preview_is_frame(2, 341, 256, 0x00205080) && slot_named("2"),
         "with the game as its preview, named as the slot to resume");
   check(fake.audio_locks == 1 && fake.audio_unlocks == 1, "pico-8's audio is held while it saves");
@@ -1335,6 +1376,12 @@ static void test_states(void *pad)
   check(!state_exists(4) && slot_named("2"), "nothing is saved while pico-8 is downloading");
   num_threads = 0;
 
+  big[0] ^= 0xff;
+  run_script(pad, save_five, 9);
+  check(written("5") && state_size(5) > (long)BIG_SIZE,
+        "once that has changed, a state holds it too");
+  big[0] ^= 0xff;
+
   marker = 7;
   pushed = fake.pushed;
   run_script(pad, quit, 3);
@@ -1350,6 +1397,9 @@ static void test_resume(void *pad)
   int black_clears = fake.black_clears;
 
   setenv("PICO_PAK_RESUME_SLOT", "9", 1);
+  /* a different config moves what pico-8 loads from pico8.dat, as this moves the block */
+  check(malloc(4096) != NULL, "this run allocates before the block the last run left out");
+  make_big();
   marker = 100;
   SDL_RenderPresent(&renderer_a);
   check(marker == 100 && fake.black_clears == black_clears + 1,
@@ -1360,6 +1410,8 @@ static void test_resume(void *pad)
   SDL_RenderPresent(&renderer_a);
   check(marker == 7 && heap != NULL && strcmp(heap, "saved") == 0,
         "then the slot is put back, as it was when the last run quit");
+  check(big != NULL && big[0] == 7 && big[BIG_SIZE - 1] == (unsigned char)((BIG_SIZE - 1) * 31 + 7),
+        "with what it left out as this run loaded it, wherever this run put it");
   (void)pad;
 }
 

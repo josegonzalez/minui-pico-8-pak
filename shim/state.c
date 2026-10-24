@@ -87,8 +87,29 @@ struct range {
   uint64_t lo, hi;
 };
 
+/*
+ * The big blocks pico-8 allocates before its cart starts, such as the 8.6MB it
+ * reads from pico8.dat. Each is hashed once the cart is running, and one that
+ * still matches when a state is saved is left out of it: every run of the same
+ * pico-8 loads it the same, so the run a state is loaded into holds it too.
+ */
+#define BIG_BLOCK (1u << 20)
+#define BIG_BLOCKS 16
+
+static struct big_block {
+  uintptr_t at;
+  size_t size;
+  uint64_t hash;
+} big_blocks[BIG_BLOCKS];
+static int big_blocks_hashed;
+
+/* a block a state leaves out, by where it is in the arena and what it hashes to */
+struct state_kept {
+  uint64_t offset, size, hash;
+};
+
 /* written ahead of the memory, every field checked before any of it is put back */
-#define STATE_MAGIC "P8STATE1"
+#define STATE_MAGIC "P8STATE2"
 #define STATE_CART_SIZE 1024
 
 struct state_header {
@@ -98,10 +119,26 @@ struct state_header {
   uint64_t data_lo, data_hi;
   uint64_t arena, arena_end;
   uint64_t range_count;
+  uint64_t kept_count;
   uint32_t ticks;
   uint32_t page_size;
   char cart[STATE_CART_SIZE];
 };
+
+/* a state as taken, in memory, until it is written */
+struct state_snapshot {
+  struct state_header header;
+  struct range *ranges;
+  struct state_kept kept[BIG_BLOCKS];
+  /* a byte for each page, and the pages that hold anything, one after another */
+  unsigned char *flags;
+  size_t page_total;
+  unsigned char *pages;
+  size_t pages_size;
+};
+
+/* what a page of a state is: all zero, in the file, or kept from the run it is loaded into */
+enum { PAGE_ZERO, PAGE_STORED, PAGE_KEPT };
 
 /* ---- finding pico-8 ---- */
 
@@ -387,6 +424,33 @@ static void arena_ran_out(size_t size)
   arena_full = 1;
 }
 
+static void note_big_block(void *at, size_t size)
+{
+  int i;
+
+  if (at == NULL || size < BIG_BLOCK || big_blocks_hashed) {
+    return;
+  }
+  for (i = 0; i < BIG_BLOCKS; i++) {
+    if (big_blocks[i].at == 0) {
+      big_blocks[i].at = (uintptr_t)at;
+      big_blocks[i].size = size;
+      return;
+    }
+  }
+}
+
+static void forget_big_block(const void *at)
+{
+  int i;
+
+  for (i = 0; i < BIG_BLOCKS; i++) {
+    if (big_blocks[i].at == (uintptr_t)at) {
+      big_blocks[i].at = 0;
+    }
+  }
+}
+
 static void *allocate(const void *caller, size_t count, size_t size, int clear)
 {
   void *got;
@@ -394,6 +458,7 @@ static void *allocate(const void *caller, size_t count, size_t size, int clear)
   if (for_arena(caller)) {
     got = clear ? mspace_calloc(space, count, size) : mspace_malloc(space, size);
     if (got != NULL || (clear ? count * size : size) == 0) {
+      note_big_block(got, clear ? count * size : size);
       return got;
     }
     arena_ran_out(clear ? count * size : size);
@@ -422,6 +487,7 @@ EXPORT void *realloc(void *pointer, size_t size)
     return __libc_realloc(pointer, size);
   }
 
+  forget_big_block(pointer);
   got = mspace_realloc(space, pointer, size);
   if (got != NULL || size == 0) {
     return got;
@@ -439,6 +505,7 @@ EXPORT void *realloc(void *pointer, size_t size)
 EXPORT void free(void *pointer)
 {
   if (in_arena(pointer)) {
+    forget_big_block(pointer);
     mspace_free(space, pointer);
     return;
   }
@@ -460,6 +527,40 @@ int state_cart_started(void)
 int state_busy(void)
 {
   return download_threads != 0 && *(const int *)download_threads > 0;
+}
+
+/* FNV-1a over whole words, which on these cores hashes 8.6MB in a few milliseconds */
+static uint64_t hash_bytes(const unsigned char *at, size_t size)
+{
+  uint64_t hash = 0xcbf29ce484222325ull, word;
+  size_t i;
+
+  for (i = 0; i + sizeof word <= size; i += sizeof word) {
+    memcpy(&word, at + i, sizeof word);
+    hash = (hash ^ word) * 0x100000001b3ull;
+  }
+  for (; i < size; i++) {
+    hash = (hash ^ at[i]) * 0x100000001b3ull;
+  }
+  return hash;
+}
+
+void state_frame(void)
+{
+  size_t total = 0;
+  int i;
+
+  if (big_blocks_hashed || !state_cart_started()) {
+    return;
+  }
+  for (i = 0; i < BIG_BLOCKS; i++) {
+    if (big_blocks[i].at != 0) {
+      big_blocks[i].hash = hash_bytes((const unsigned char *)big_blocks[i].at, big_blocks[i].size);
+      total += big_blocks[i].size;
+    }
+  }
+  big_blocks_hashed = 1;
+  LOG("%zu KB of pico-8's own data can be left out of its states\n", total >> 10);
 }
 
 /* everything mapped that is neither pico-8's image nor the arena, from /proc/self/maps */
@@ -533,62 +634,273 @@ static int is_zero_page(const unsigned char *page, size_t size)
 
 /*
  * The writable segment and then the arena, in pages: a byte for each saying
- * whether it holds anything, and then only the pages that do, as a third of
- * a state is zero.
+ * whether it is zero, in the file, or kept from the run it is loaded into,
+ * and then only the pages in the file, as a third of a state is zero and
+ * another third is pico8.dat.
  */
 struct region {
-  const unsigned char *at;
+  unsigned char *at;
   size_t size;
 };
 
-static size_t page_count(const struct region *regions, int count)
+static size_t page_size_at(size_t region_size, size_t page)
 {
-  size_t pages = 0;
-  int r;
-
-  for (r = 0; r < count; r++) {
-    pages += (regions[r].size + PAGE - 1) / PAGE;
-  }
-  return pages;
-}
-
-static size_t page_size_at(const struct region *region, size_t page)
-{
-  size_t left = region->size - page * PAGE;
+  size_t left = region_size - page * PAGE;
 
   return left < PAGE ? left : PAGE;
 }
 
-static int write_pages(FILE *file, const struct region *regions, int count)
+static int page_is_kept(const struct state_snapshot *snapshot, uintptr_t page)
 {
-  unsigned char *flags = __libc_malloc(page_count(regions, count));
-  size_t page, at = 0;
-  int r, ok;
+  uint64_t i;
 
-  if (flags == NULL) {
-    return 0;
-  }
-  for (r = 0; r < count; r++) {
-    for (page = 0; page * PAGE < regions[r].size; page++) {
-      flags[at++] = !is_zero_page(regions[r].at + page * PAGE, page_size_at(&regions[r], page));
+  for (i = 0; i < snapshot->header.kept_count; i++) {
+    uintptr_t lo = (uintptr_t)arena + snapshot->kept[i].offset, hi = lo + snapshot->kept[i].size;
+    if (page >= lo && page + PAGE <= hi) {
+      return 1;
     }
   }
-  ok = fwrite(flags, 1, at, file) == at;
+  return 0;
+}
 
-  at = 0;
-  for (r = 0; ok && r < count; r++) {
-    for (page = 0; ok && page * PAGE < regions[r].size; page++) {
-      size_t size = page_size_at(&regions[r], page);
-      if (flags[at++]) {
-        ok = fwrite(regions[r].at + page * PAGE, 1, size, file) == size;
+/* the big blocks still as they were when the cart started */
+static void find_kept(struct state_snapshot *snapshot)
+{
+  int i;
+
+  if (!big_blocks_hashed) {
+    return;
+  }
+  for (i = 0; i < BIG_BLOCKS; i++) {
+    const struct big_block *block = &big_blocks[i];
+    struct state_kept *kept = &snapshot->kept[snapshot->header.kept_count];
+
+    if (block->at == 0 ||
+        hash_bytes((const unsigned char *)block->at, block->size) != block->hash) {
+      continue;
+    }
+    kept->offset = block->at - (uintptr_t)arena;
+    kept->size = block->size;
+    kept->hash = block->hash;
+    snapshot->header.kept_count++;
+  }
+}
+
+void state_free(struct state_snapshot *snapshot)
+{
+  if (snapshot == NULL) {
+    return;
+  }
+  __libc_free(snapshot->ranges);
+  __libc_free(snapshot->flags);
+  __libc_free(snapshot->pages);
+  __libc_free(snapshot);
+}
+
+struct state_snapshot *state_capture(const char *cart, uint32_t ticks)
+{
+  struct state_snapshot *snapshot;
+  struct region regions[2];
+  size_t page, at = 0, stored = 0;
+  int r;
+
+  if (!state_available() || state_busy() || cart == NULL || strlen(cart) >= STATE_CART_SIZE) {
+    return NULL;
+  }
+  snapshot = __libc_calloc(1, sizeof *snapshot);
+  if (snapshot == NULL) {
+    return NULL;
+  }
+
+  memcpy(snapshot->header.magic, STATE_MAGIC, sizeof snapshot->header.magic);
+  snapshot->header.build_id_size = (uint32_t)build_id_size;
+  memcpy(snapshot->header.build_id, build_id, build_id_size);
+  snapshot->header.data_lo = data_lo;
+  snapshot->header.data_hi = data_hi;
+  snapshot->header.arena = (uintptr_t)arena;
+  snapshot->header.arena_end = arena_end();
+  snapshot->header.ticks = ticks;
+  snapshot->header.page_size = PAGE;
+  snprintf(snapshot->header.cart, sizeof snapshot->header.cart, "%s", cart);
+  snapshot->ranges = read_foreign(&snapshot->header.range_count);
+  find_kept(snapshot);
+
+  regions[0].at = (unsigned char *)data_lo;
+  regions[0].size = data_hi - data_lo;
+  regions[1].at = (unsigned char *)arena;
+  regions[1].size = snapshot->header.arena_end - (uintptr_t)arena;
+  for (r = 0; r < 2; r++) {
+    snapshot->page_total += (regions[r].size + PAGE - 1) / PAGE;
+  }
+  snapshot->flags = __libc_malloc(snapshot->page_total);
+  if (snapshot->ranges == NULL || snapshot->flags == NULL) {
+    state_free(snapshot);
+    return NULL;
+  }
+
+  for (r = 0; r < 2; r++) {
+    for (page = 0; page * PAGE < regions[r].size; page++) {
+      unsigned char *from = regions[r].at + page * PAGE;
+      size_t size = page_size_at(regions[r].size, page);
+
+      if (r == 1 && size == PAGE && page_is_kept(snapshot, (uintptr_t)from)) {
+        snapshot->flags[at++] = PAGE_KEPT;
+      } else if (is_zero_page(from, size)) {
+        snapshot->flags[at++] = PAGE_ZERO;
+      } else {
+        snapshot->flags[at++] = PAGE_STORED;
+        stored++;
       }
     }
   }
-  __libc_free(flags);
+
+  /* only the pages that go in the file are copied, so pico-8 is held for as short a time as can be */
+  snapshot->pages = __libc_malloc(stored * PAGE);
+  if (stored > 0 && snapshot->pages == NULL) {
+    state_free(snapshot);
+    return NULL;
+  }
+  at = 0;
+  for (r = 0; r < 2; r++) {
+    for (page = 0; page * PAGE < regions[r].size; page++) {
+      size_t size = page_size_at(regions[r].size, page);
+
+      if (snapshot->flags[at++] == PAGE_STORED) {
+        memcpy(snapshot->pages + snapshot->pages_size, regions[r].at + page * PAGE, size);
+        snapshot->pages_size += size;
+      }
+    }
+  }
+  return snapshot;
+}
+
+/*
+ * Writes under a temporary name and puts it in place, so a write cut short
+ * never replaces the state already there. It reads nothing of pico-8's, so it
+ * can run while pico-8 carries on.
+ */
+int state_write(const struct state_snapshot *snapshot, const char *path)
+{
+  char temporary[4096];
+  uint64_t kept = 0, i;
+  FILE *file;
+  int ok;
+
+  if (snapshot == NULL || path == NULL ||
+      snprintf(temporary, sizeof temporary, "%s.part", path) >= (int)sizeof temporary) {
+    return 0;
+  }
+  file = fopen(temporary, "wb");
+  ok = file != NULL && fwrite(&snapshot->header, sizeof snapshot->header, 1, file) == 1 &&
+       fwrite(snapshot->ranges, sizeof *snapshot->ranges, snapshot->header.range_count, file) ==
+           snapshot->header.range_count &&
+       fwrite(snapshot->kept, sizeof *snapshot->kept, snapshot->header.kept_count, file) ==
+           snapshot->header.kept_count &&
+       fwrite(snapshot->flags, 1, snapshot->page_total, file) == snapshot->page_total &&
+       fwrite(snapshot->pages, 1, snapshot->pages_size, file) == snapshot->pages_size;
+  if (file != NULL) {
+    ok = fclose(file) == 0 && ok;
+  }
+  if (!ok || rename(temporary, path) != 0) {
+    LOG("cannot write the state %s\n", path);
+    unlink(temporary);
+    return 0;
+  }
+  for (i = 0; i < snapshot->header.kept_count; i++) {
+    kept += snapshot->kept[i].size;
+  }
+  LOG("saved the state %s, %zu KB, leaving out %lu KB of pico-8's own data\n", path,
+      snapshot->pages_size >> 10, (unsigned long)(kept >> 10));
+  return 1;
+}
+
+int state_save(const char *path, const char *cart, uint32_t ticks)
+{
+  struct state_snapshot *snapshot = state_capture(cart, ticks);
+  int ok = state_write(snapshot, path);
+
+  state_free(snapshot);
   return ok;
 }
 
-static int read_pages(FILE *file, unsigned char **into, const size_t *sizes, int count)
+/* everything in the header has to match this run of pico-8 before anything is put back */
+static int header_matches(const struct state_header *header, const char *path, const char *cart)
+{
+  const char *why = NULL;
+
+  if (memcmp(header->magic, STATE_MAGIC, sizeof header->magic) != 0 || header->page_size != PAGE) {
+    why = "is not a state this pak can load";
+  } else if (header->build_id_size != build_id_size ||
+             memcmp(header->build_id, build_id, build_id_size) != 0) {
+    why = "was saved by another build of pico-8";
+  } else if (header->data_lo != data_lo || header->data_hi != data_hi ||
+             header->arena != (uintptr_t)arena) {
+    why = "was saved with pico-8 at another address";
+  } else if (header->arena_end <= header->arena || header->arena_end > header->arena + ARENA_SIZE ||
+             header->range_count > 1u << 20 || header->kept_count > BIG_BLOCKS) {
+    why = "is damaged";
+  } else if (memchr(header->cart, '\0', sizeof header->cart) == NULL ||
+             strcmp(header->cart, cart) != 0) {
+    why = "is for another cart";
+  }
+
+  if (why != NULL) {
+    LOG("the state %s %s, not loading it\n", path, why);
+    return 0;
+  }
+  return 1;
+}
+
+/*
+ * What a state left out has to be in this run of pico-8 as it was in the one
+ * that saved it, though maybe somewhere else in the arena, as pico-8 reads its
+ * config before pico8.dat and a different config moves everything after it.
+ * Finds where each block is now.
+ */
+static int find_kept_sources(const struct state_kept *kept, uint64_t count, const char *path,
+                             const unsigned char **sources)
+{
+  uint64_t i;
+  int b;
+
+  for (i = 0; i < count; i++) {
+    sources[i] = NULL;
+    if (kept[i].size > ARENA_SIZE || kept[i].offset > ARENA_SIZE - kept[i].size) {
+      LOG("the state %s is damaged, not loading it\n", path);
+      return 0;
+    }
+    for (b = 0; b < BIG_BLOCKS && sources[i] == NULL && big_blocks_hashed; b++) {
+      if (big_blocks[b].at != 0 && big_blocks[b].size == kept[i].size &&
+          big_blocks[b].hash == kept[i].hash &&
+          hash_bytes((const unsigned char *)big_blocks[b].at, big_blocks[b].size) == kept[i].hash) {
+        sources[i] = (const unsigned char *)big_blocks[b].at;
+      }
+    }
+    if (sources[i] == NULL) {
+      LOG("the state %s left out pico-8's data this run does not hold, not loading it\n", path);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* where the page at offset of the arena comes from in this run, for a page a state left out */
+static const unsigned char *kept_source(const struct state_kept *kept, const unsigned char *const *sources,
+                                        uint64_t count, size_t offset)
+{
+  uint64_t i;
+
+  for (i = 0; i < count; i++) {
+    if (offset >= kept[i].offset && offset + PAGE <= kept[i].offset + kept[i].size) {
+      return sources[i] + (offset - kept[i].offset);
+    }
+  }
+  return NULL;
+}
+
+static int read_pages(FILE *file, unsigned char **into, const size_t *sizes, int count,
+                      const struct state_kept *kept, const unsigned char *const *sources,
+                      uint64_t kept_count)
 {
   size_t total = 0, page, at = 0;
   unsigned char *flags;
@@ -604,95 +916,31 @@ static int read_pages(FILE *file, unsigned char **into, const size_t *sizes, int
   ok = fread(flags, 1, total, file) == total;
   for (r = 0; ok && r < count; r++) {
     for (page = 0; ok && page * PAGE < sizes[r]; page++) {
-      size_t left = sizes[r] - page * PAGE, size = left < PAGE ? left : PAGE;
-      if (flags[at++]) {
-        ok = fread(into[r] + page * PAGE, 1, size, file) == size;
-      } else {
-        memset(into[r] + page * PAGE, 0, size);
+      size_t size = page_size_at(sizes[r], page);
+      unsigned char *to = into[r] + page * PAGE;
+
+      switch (flags[at++]) {
+      case PAGE_STORED:
+        ok = fread(to, 1, size, file) == size;
+        break;
+      case PAGE_KEPT: {
+        const unsigned char *from =
+            r == 1 ? kept_source(kept, sources, kept_count, page * PAGE) : NULL;
+        if (from == NULL) {
+          ok = 0;
+        } else {
+          memcpy(to, from, size);
+        }
+        break;
+      }
+      default:
+        memset(to, 0, size);
+        break;
       }
     }
   }
   __libc_free(flags);
   return ok;
-}
-
-int state_save(const char *path, const char *cart, uint32_t ticks)
-{
-  struct state_header header;
-  struct region regions[2];
-  struct range *ranges;
-  char temporary[4096];
-  FILE *file;
-  int ok;
-
-  if (!state_available() || state_busy() || path == NULL || cart == NULL ||
-      strlen(cart) >= STATE_CART_SIZE ||
-      snprintf(temporary, sizeof temporary, "%s.part", path) >= (int)sizeof temporary) {
-    return 0;
-  }
-
-  memset(&header, 0, sizeof header);
-  memcpy(header.magic, STATE_MAGIC, sizeof header.magic);
-  header.build_id_size = (uint32_t)build_id_size;
-  memcpy(header.build_id, build_id, build_id_size);
-  header.data_lo = data_lo;
-  header.data_hi = data_hi;
-  header.arena = (uintptr_t)arena;
-  header.arena_end = arena_end();
-  header.ticks = ticks;
-  header.page_size = PAGE;
-  snprintf(header.cart, sizeof header.cart, "%s", cart);
-  ranges = read_foreign(&header.range_count);
-
-  regions[0].at = (const unsigned char *)data_lo;
-  regions[0].size = data_hi - data_lo;
-  regions[1].at = (const unsigned char *)arena;
-  regions[1].size = header.arena_end - (uintptr_t)arena;
-
-  file = fopen(temporary, "wb");
-  ok = file != NULL && ranges != NULL && fwrite(&header, sizeof header, 1, file) == 1 &&
-       fwrite(ranges, sizeof *ranges, header.range_count, file) == header.range_count &&
-       write_pages(file, regions, 2);
-  if (file != NULL) {
-    ok = fclose(file) == 0 && ok;
-  }
-  __libc_free(ranges);
-  if (!ok || rename(temporary, path) != 0) {
-    LOG("cannot write the state %s\n", path);
-    unlink(temporary);
-    return 0;
-  }
-  LOG("saved the state %s, %zu KB of pico-8's memory and %zu KB of its arena\n", path,
-      regions[0].size >> 10, regions[1].size >> 10);
-  return 1;
-}
-
-/* everything in the header has to match this run of pico-8 before anything is put back */
-static int header_matches(const struct state_header *header, const char *path, const char *cart)
-{
-  const char *why = NULL;
-
-  if (memcmp(header->magic, STATE_MAGIC, sizeof header->magic) != 0 || header->page_size != PAGE) {
-    why = "is not a state";
-  } else if (header->build_id_size != build_id_size ||
-             memcmp(header->build_id, build_id, build_id_size) != 0) {
-    why = "was saved by another build of pico-8";
-  } else if (header->data_lo != data_lo || header->data_hi != data_hi ||
-             header->arena != (uintptr_t)arena) {
-    why = "was saved with pico-8 at another address";
-  } else if (header->arena_end <= header->arena || header->arena_end > header->arena + ARENA_SIZE ||
-             header->range_count > 1u << 20) {
-    why = "is damaged";
-  } else if (memchr(header->cart, '\0', sizeof header->cart) == NULL ||
-             strcmp(header->cart, cart) != 0) {
-    why = "is for another cart";
-  }
-
-  if (why != NULL) {
-    LOG("the state %s %s, not loading it\n", path, why);
-    return 0;
-  }
-  return 1;
 }
 
 /*
@@ -728,10 +976,12 @@ static void put_back_data(const unsigned char *saved, const struct range *old_ra
 int state_load(const char *path, const char *cart, uint32_t *ticks)
 {
   struct state_header header;
+  struct state_kept kept[BIG_BLOCKS];
+  const unsigned char *sources[BIG_BLOCKS];
   struct range *old_ranges = NULL, *ranges = NULL;
   unsigned char *staged[2] = {NULL, NULL};
   size_t sizes[2];
-  uint64_t count = 0;
+  uint64_t count = 0, i;
   uintptr_t end_now;
   FILE *file;
   int ok;
@@ -754,8 +1004,14 @@ int state_load(const char *path, const char *cart, uint32_t *ticks)
     staged[1] = __libc_malloc(sizes[1]);
     ok = old_ranges != NULL && staged[0] != NULL && staged[1] != NULL &&
          fread(old_ranges, sizeof *old_ranges, header.range_count, file) == header.range_count &&
-         read_pages(file, staged, sizes, 2);
-    if (!ok) {
+         fread(kept, sizeof *kept, header.kept_count, file) == header.kept_count;
+    if (ok) {
+      ok = find_kept_sources(kept, header.kept_count, path, sources);
+      if (ok && !read_pages(file, staged, sizes, 2, kept, sources, header.kept_count)) {
+        LOG("cannot read the state %s, it is cut short\n", path);
+        ok = 0;
+      }
+    } else {
       LOG("cannot read the state %s, it is cut short\n", path);
     }
   }
@@ -772,6 +1028,13 @@ int state_load(const char *path, const char *cart, uint32_t *ticks)
     /* what pico-8 had used past the state's end is free now, and zero as it was then */
     if (end_now > header.arena_end) {
       memset((void *)(uintptr_t)header.arena_end, 0, end_now - header.arena_end);
+    }
+    /* the big blocks are now where the state had them */
+    memset(big_blocks, 0, sizeof big_blocks);
+    for (i = 0; i < header.kept_count; i++) {
+      big_blocks[i].at = (uintptr_t)arena + kept[i].offset;
+      big_blocks[i].size = kept[i].size;
+      big_blocks[i].hash = kept[i].hash;
     }
     *ticks = header.ticks;
     LOG("loaded the state %s\n", path);

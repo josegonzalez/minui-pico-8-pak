@@ -167,7 +167,7 @@ You can also exit from PICO-8's own pause menu:
 
 `Save` and `Load` in the [in-game menu](#in-game-menu) work as they do in MinUI and NextUI's own emulators. With either selected, `Left` and `Right` choose one of eight slots, and the right of the screen shows the game as it was in that slot, or `Empty Slot`. `Save` saves the game to the slot and closes the menu. `Load` puts the slot back and closes the menu, and is greyed out for an empty slot.
 
-A state holds the whole of PICO-8's memory, so the game carries on exactly where it was, in the middle of a level or a song. Each one takes about 18 MB. States are saved to `/.userdata/$PLATFORM/Pico-8-native/states` on your SD card, named for the cart and the slot, such as `Celeste.p8.st2`. Their pictures go to `/.userdata/shared/.minui/PICO`, where the launchers look for them.
+A state holds the whole of PICO-8's memory, so the game carries on exactly where it was, in the middle of a level or a song. Each one takes about 10 MB, as the data PICO-8 loads from `pico8.dat` is left out while it is unchanged. The game carries on as soon as you choose `Save`, while the state is written to the SD card in the background. States are saved to `/.userdata/$PLATFORM/Pico-8-native/states` on your SD card, named for the cart and the slot, such as `Celeste.p8.st2`. Their pictures go to `/.userdata/shared/.minui/PICO`, where the launchers look for them.
 
 `Quit` saves the game to a ninth slot before closing PICO-8, as does [shutting down](#deep-sleep--shutdown). Resuming a cart from the game switcher or the game list puts back the slot you last saved, loaded or quit with. See [Game switcher](#game-switcher).
 

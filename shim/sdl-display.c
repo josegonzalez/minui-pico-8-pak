@@ -300,8 +300,15 @@ static volatile sig_atomic_t terminating;
 /* NextUI's and MinUI's file naming the game to start at boot, and this cart's name in it */
 static const char *auto_resume_path;
 static const char *auto_resume_rom;
-/* each slot's preview while the menu is open */
+/* each slot's preview while the menu is open, read the first time the slot is shown */
 static uint32_t *slot_previews[MENU_SLOTS];
+static int slot_previews_read[MENU_SLOTS];
+/* the state being written in the background, and whether writing it failed */
+static pthread_t state_thread;
+static int state_running;
+static int writing_slot = -1;
+static volatile sig_atomic_t state_written;
+static volatile sig_atomic_t state_write_failed;
 static const char *power_supply_dir;
 static gfx_font *menu_font;
 static gfx_theme menu_theme;
@@ -1271,12 +1278,58 @@ static void notify(const char *text)
   }
 }
 
-/* saves a slot, with frame, the game as the menu found it, as its preview */
-static int save_slot(int slot, const uint32_t *frame, int width, int height)
-{
+/* a state being written in the background, and its preview */
+struct state_job {
+  struct state_snapshot *snapshot;
   char path[8192];
+  int slot;
+  uint32_t *frame;
+  int width, height;
+};
+
+static void *write_state(void *data)
+{
+  struct state_job *job = data;
+  uint32_t started = sdl.GetTicks();
+
+  if (state_write(job->snapshot, job->path)) {
+    cart_write_preview_frame(switcher_dir, cart_path, job->frame, job->width, job->height, job->slot);
+    LOG("wrote slot %d and its preview in %u ms\n", job->slot, (unsigned)(sdl.GetTicks() - started));
+  } else {
+    state_write_failed = 1;
+  }
+  state_free(job->snapshot);
+  free(job->frame);
+  free(job);
+  state_written = 1;
+  return NULL;
+}
+
+/* a state still being written is finished before another is saved or loaded, or pico-8 exits */
+static void wait_for_state(void)
+{
+  if (state_running) {
+    pthread_join(state_thread, NULL);
+    state_running = 0;
+  }
+  writing_slot = -1;
+}
+
+/*
+ * Saves a slot, with frame, the game as the menu found it, as its preview.
+ * pico-8 only waits for its memory to be copied, and the card is written on a
+ * thread of its own, unless pico-8 is about to exit.
+ */
+static int save_slot(int slot, const uint32_t *frame, int width, int height, int background)
+{
+  static int waits_at_exit;
+  struct state_snapshot *snapshot;
+  struct state_job *job;
+  char path[8192];
+  uint32_t started;
   int saved;
 
+  wait_for_state();
   if (state_busy()) {
     LOG("pico-8 is downloading, not saving slot %d\n", slot);
     notify("Cannot save while downloading");
@@ -1289,9 +1342,47 @@ static int save_slot(int slot, const uint32_t *frame, int width, int height)
     return 0;
   }
 
+  started = sdl.GetTicks();
   hold_audio(1);
-  saved = state_save(path, cart_path, sdl.GetTicks() + tick_offset);
+  snapshot = state_capture(cart_path, started + tick_offset);
   hold_audio(0);
+  if (snapshot == NULL) {
+    LOG("cannot copy pico-8's memory, not saving slot %d\n", slot);
+    notify("Save failed");
+    return 0;
+  }
+  LOG("copied pico-8's memory for slot %d in %u ms\n", slot, (unsigned)(sdl.GetTicks() - started));
+
+  job = background ? calloc(1, sizeof *job) : NULL;
+  if (job != NULL) {
+    job->frame = malloc((size_t)width * height * sizeof *job->frame);
+  }
+  if (job != NULL && job->frame != NULL) {
+    job->snapshot = snapshot;
+    snprintf(job->path, sizeof job->path, "%s", path);
+    job->slot = slot;
+    memcpy(job->frame, frame, (size_t)width * height * sizeof *job->frame);
+    job->width = width;
+    job->height = height;
+    if (!waits_at_exit) {
+      atexit(wait_for_state);
+      waits_at_exit = 1;
+    }
+    state_written = 0;
+    if (pthread_create(&state_thread, NULL, write_state, job) == 0) {
+      state_running = 1;
+      writing_slot = slot;
+    } else {
+      write_state(job);
+    }
+    return 1;
+  }
+  if (job != NULL) {
+    free(job);
+  }
+
+  saved = state_write(snapshot, path);
+  state_free(snapshot);
   if (!saved) {
     notify("Save failed");
     return 0;
@@ -1307,6 +1398,7 @@ static int load_slot(int slot)
   uint32_t ticks;
   int loaded;
 
+  wait_for_state();
   if (!cart_state_path(states_dir, cart_path, slot, path, sizeof path)) {
     return 0;
   }
@@ -1371,16 +1463,43 @@ static void open_slots(struct menu *menu)
   if (!states->available) {
     return;
   }
-  slot = cart_read_slot(switcher_dir, cart_path);
+  /* the slot a save is still writing counts as saved, and names itself once it is written */
+  slot = writing_slot >= 0 ? writing_slot : cart_read_slot(switcher_dir, cart_path);
   states->slot = slot >= 0 && slot < MENU_SLOTS ? slot : 0;
   for (slot = 0; slot < MENU_SLOTS; slot++) {
-    states->exists[slot] = cart_state_path(states_dir, cart_path, slot, path, sizeof path) &&
-                           access(path, F_OK) == 0;
-    if (states->exists[slot] && cart_preview_path(switcher_dir, cart_path, slot, path, sizeof path)) {
-      slot_previews[slot] =
-          read_preview(path, &states->preview_w[slot], &states->preview_h[slot]);
-      states->preview[slot] = slot_previews[slot];
+    states->exists[slot] = slot == writing_slot ||
+                           (cart_state_path(states_dir, cart_path, slot, path, sizeof path) &&
+                            access(path, F_OK) == 0);
+    slot_previews_read[slot] = 0;
+  }
+}
+
+/*
+ * A slot's preview is read the first time Save or Load shows the slot, so the
+ * menu opens without reading every one. A slot still being written shows its
+ * preview once it is there.
+ */
+static void show_slot_preview(struct menu *menu)
+{
+  struct menu_states *states = &menu->states;
+  int slot = states->slot;
+  char path[8192];
+
+  if (!states->available || (menu->root_row != MENU_SAVE && menu->root_row != MENU_LOAD) ||
+      menu->page != MENU_PAGE_ROOT || !states->exists[slot] || slot_previews_read[slot]) {
+    return;
+  }
+  if (slot == writing_slot) {
+    if (!state_written) {
+      return;
     }
+    wait_for_state();
+  }
+  slot_previews_read[slot] = 1;
+  if (cart_preview_path(switcher_dir, cart_path, slot, path, sizeof path)) {
+    slot_previews[slot] = read_preview(path, &states->preview_w[slot], &states->preview_h[slot]);
+    states->preview[slot] = slot_previews[slot];
+    menu->dirty = 1;
   }
 }
 
@@ -1523,6 +1642,7 @@ static void run_menu(void *renderer, int quit_now)
     }
 
     result = menu_update(&menu, pressed, held, sdl.GetTicks());
+    show_slot_preview(&menu);
     was_held = held;
 
     if (menu_font != NULL && menu.dirty && result != MENU_QUIT) {
@@ -1539,7 +1659,7 @@ static void run_menu(void *renderer, int quit_now)
   close_slots();
   /* the slot saved or loaded is the one the launchers resume, as in minarch */
   if (result == MENU_SAVE_STATE) {
-    if (save_slot(menu.states.slot, menu_frame, width, height)) {
+    if (save_slot(menu.states.slot, menu_frame, width, height, 1)) {
       LOG("saved slot %d\n", menu.states.slot);
     }
     result = MENU_CLOSE;
@@ -1565,7 +1685,7 @@ static void run_menu(void *renderer, int quit_now)
     if (terminating) {
       alarm(0);
     }
-    saved = states_ready() && save_slot(CART_RESUME_SLOT, menu_frame, width, height);
+    saved = states_ready() && save_slot(CART_RESUME_SLOT, menu_frame, width, height, 0);
     last_frame = !saved && stateless_previews && switcher_dir != NULL && *switcher_dir != '\0'
                      ? malloc((size_t)width * height * sizeof *last_frame)
                      : NULL;
@@ -1902,6 +2022,11 @@ EXPORT void SDL_RenderPresent(void *renderer)
     return;
   }
 
+  state_frame();
+  if (state_write_failed) {
+    state_write_failed = 0;
+    notify("Save failed");
+  }
   if (resume()) {
     clear_to_black(renderer);
     sdl.RenderPresent(renderer);

@@ -40,9 +40,26 @@ int state_cart_started(void);
 int state_busy(void);
 
 /*
- * Saves pico-8 to path, for cart, with ticks the clock pico-8 reads. Returns 0
- * when it could not, leaving any state already at path as it was.
+ * Called on every frame pico-8 presents. The first once the cart has started
+ * notes the big blocks pico-8 loaded before it, which a state leaves out for
+ * as long as they stay as they were.
  */
+void state_frame(void);
+
+/*
+ * A state is taken in two steps, so pico-8 only waits for the first: a copy
+ * of its memory, for cart, with ticks the clock pico-8 reads, and then
+ * writing that copy to path, which touches nothing of pico-8's and can run
+ * on a thread of its own. state_capture returns NULL when no state can be
+ * taken, and state_write 0 when it could not write, leaving any state
+ * already at path as it was.
+ */
+struct state_snapshot;
+struct state_snapshot *state_capture(const char *cart, uint32_t ticks);
+int state_write(const struct state_snapshot *snapshot, const char *path);
+void state_free(struct state_snapshot *snapshot);
+
+/* both steps at once, for when pico-8 is about to exit */
 int state_save(const char *path, const char *cart, uint32_t ticks);
 
 /*
