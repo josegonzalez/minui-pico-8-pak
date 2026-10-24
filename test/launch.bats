@@ -2466,6 +2466,30 @@ teardown() {
   grep -q "^+ .*pico8_64 .*-run" "$LOGS_PATH/PICO.txt"
 }
 
+# the log is written to /tmp, as each write to the SD card is synchronous, and
+# copied there before pico-8 starts and once everything is done
+@test "launch.sh copies its log to the SD card before pico-8 starts and at the end" {
+  pak_dir="$(make_pak 'grep -q "starting pico-8" "$LOGS_PATH/PICO.txt" && echo "the start was on the card"')"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "the start was on the card" "$LOGS_PATH/PICO.txt"
+  grep -q "\] done, returning to the launcher$" "$LOGS_PATH/PICO.txt"
+  cmp -s "/tmp/PICO-log.txt" "$LOGS_PATH/PICO.txt"
+}
+
 @test "log_step stamps a line with the seconds since boot" {
   printf '1234.56 7890.12\n' >"$BATS_TEST_TMPDIR/uptime"
 

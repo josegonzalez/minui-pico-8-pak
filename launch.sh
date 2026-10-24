@@ -1025,6 +1025,7 @@ launch_cart() {
   fi
 
   log_step "starting pico-8"
+  save_log
   if is_splore_cart "$ROM_NAME"; then
     # draw_rect is left unquoted so it splits into separate arguments
     # shellcheck disable=SC2086
@@ -1293,6 +1294,24 @@ wait_for_background() {
   fi
 }
 
+# The log is written to /tmp while the pak runs and copied to the SD card, as
+# each write to the card is synchronous on these devices: every logged line
+# cost tens of milliseconds, which added seconds to starting and exiting a game.
+get_working_log() {
+  echo "/tmp/$PAK_NAME-log.txt"
+}
+
+get_log() {
+  echo "$LOGS_PATH/$PAK_NAME.txt"
+}
+
+# Copies the log so far to the SD card in one write. It runs before pico-8
+# starts, so a device that loses power mid-game keeps how the game started,
+# and once more at the very end.
+save_log() {
+  cp -f "$(get_working_log)" "$(get_log)" 2>/dev/null || true
+}
+
 cleanup() {
   log_step "cleaning up"
   wait_for_background
@@ -1301,13 +1320,14 @@ cleanup() {
   rm -rf "$(get_copy_carts_tmp_dir)"
   killall minui-presenter >/dev/null 2>&1 || true
   log_step "done, returning to the launcher"
+  save_log
 }
 
 main() {
   set -x
 
-  rm -f "$LOGS_PATH/$PAK_NAME.txt"
-  exec >>"$LOGS_PATH/$PAK_NAME.txt"
+  rm -f "$(get_working_log)" "$(get_log)"
+  exec >>"$(get_working_log)"
   exec 2>&1
 
   echo "$0" "$*"

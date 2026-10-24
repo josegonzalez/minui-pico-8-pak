@@ -341,6 +341,8 @@ The PNG is decoded by the pak itself, so overlays work the same on every platfor
 
 Logs will be written to the`/.userdata/$PLATFORM/logs/` folder on your SD card.
 
+While a game runs, the log is kept in `/tmp/PICO-log.txt` in the device's memory, as writing to the SD card line by line added seconds to starting and exiting a game. It is copied to the SD card just before PICO-8 starts and again once the pak has finished. If the device loses power during a game, the log on the SD card ends where PICO-8 started.
+
 The log records the library search path PICO-8 is started with and the `ldd` output for your PICO-8 binary, so a library it cannot find or resolves to the wrong copy is visible. A PICO-8 that fails to start also says so on screen rather than only in the log.
 
 Each step of starting and exiting a game is marked in the log with the number of seconds since the device was turned on, such as `[1234.56] syncing the SD card`. The lines from the in-game menu and the rest of the display library, such as `[1240.03] sdl-display: Quit chosen in the menu, quitting pico-8`, are marked the same way. Comparing the marks shows how long each step took, from PICO-8 starting until it drew its first frame, to the time between choosing `Quit` and returning to the launcher.
