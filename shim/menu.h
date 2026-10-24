@@ -2,8 +2,8 @@
  * The in-game menu, laid out as minarch's: Continue, Save, Load, Options and
  * Quit over the dimmed game, with a slot for Save and Load chosen with Left
  * and Right and a preview of what it holds, and an Options page of groups,
- * Frontend, Emulator, Splore and Shortcuts, for the pak's settings and the
- * PICO-8 settings it writes into config.txt. Save and Load are shown but
+ * Frontend, Emulator, Shaders, Splore and Shortcuts, for the pak's settings
+ * and the PICO-8 settings it writes into config.txt. Save and Load are shown but
  * unavailable where there are no save states, as in Splore.
  *
  * Every setting is saved the moment it changes, to the same files launch.sh
@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "gfx.h"
+#include "shader.h"
 
 /* the buttons the menu reads, as bits of the masks menu_update takes */
 enum {
@@ -43,15 +44,23 @@ enum menu_indicator { MENU_INDICATOR_NONE, MENU_INDICATOR_BRIGHTNESS, MENU_INDIC
 
 /*
  * Options lists the groups, as minarch's does, and each group but Shortcuts
- * opens a page of its settings
+ * opens a page of its settings. Shaders' Parameters row opens a page of the
+ * parameters the shaders in use declare.
  */
-enum menu_page { MENU_PAGE_ROOT, MENU_PAGE_OPTIONS, MENU_PAGE_GROUP, MENU_PAGE_SHORTCUTS };
+enum menu_page {
+  MENU_PAGE_ROOT,
+  MENU_PAGE_OPTIONS,
+  MENU_PAGE_GROUP,
+  MENU_PAGE_SHORTCUTS,
+  MENU_PAGE_SHADER_PARAMS,
+};
 
 enum menu_root_row { MENU_CONTINUE, MENU_SAVE, MENU_LOAD, MENU_OPTIONS, MENU_EXIT, MENU_ROOT_COUNT };
 
 enum menu_group {
   MENU_GROUP_FRONTEND,
   MENU_GROUP_EMULATOR,
+  MENU_GROUP_SHADERS,
   MENU_GROUP_SPLORE,
   MENU_GROUP_SHORTCUTS,
   MENU_GROUP_COUNT,
@@ -64,6 +73,17 @@ enum menu_setting {
   MENU_COPY_CARTS,
   MENU_SPLORE_ARTWORK,
   MENU_AUTO_SAVE,
+  /* minarch's Shaders page: the preset, how many passes and how the last is scaled */
+  MENU_SHADER_PRESET,
+  MENU_SHADER_PASSES,
+  MENU_SHADER_SHARPNESS,
+  /* five rows for each pass, in this order, the second pass's following the first's */
+  MENU_SHADER1_PROGRAM,
+  MENU_SHADER1_FILTER,
+  MENU_SHADER1_SRCTYPE,
+  MENU_SHADER1_SCALETYPE,
+  MENU_SHADER1_UPSCALE,
+  MENU_SHADER_PARAMETERS = MENU_SHADER1_PROGRAM + 5 * SHADER_PASSES,
   /* the PICO-8 settings follow, one each, in the order config_options in menu.c lists them */
   MENU_CONFIG_FIRST,
   MENU_SHOW_FPS = MENU_CONFIG_FIRST,
@@ -75,10 +95,17 @@ enum menu_setting {
 };
 
 #define MENU_CONFIG_COUNT (MENU_SETTING_COUNT - MENU_CONFIG_FIRST)
+#define MENU_SHADER_PASS_ROWS (MENU_SHADER1_UPSCALE - MENU_SHADER1_PROGRAM + 1)
 
-/* how many settings a group shows, none for Shortcuts, and which is at a row */
-int menu_group_size(int group);
-int menu_group_setting(int group, int row);
+struct menu;
+
+/*
+ * How many settings a group shows, none for Shortcuts, and which is at a row.
+ * Shaders shows only its preset, as None, until there are shaders it can
+ * draw, and then a pass's rows for each pass in use.
+ */
+int menu_group_size(const struct menu *menu, int group);
+int menu_group_setting(const struct menu *menu, int group, int row);
 
 /* what a shortcut does, one row each of the Shortcuts page */
 enum menu_shortcut {
@@ -88,6 +115,7 @@ enum menu_shortcut {
   MENU_SHORTCUT_RESET,
   MENU_SHORTCUT_SCREEN_MODE,
   MENU_SHORTCUT_OVERLAY,
+  MENU_SHORTCUT_SHADER,
   MENU_SHORTCUT_CPU_METER,
   MENU_SHORTCUT_COUNT,
 };
@@ -159,6 +187,25 @@ struct menu_settings {
   int screen_mode;
   /* an index into overlay_names, or -1 for none */
   int overlay;
+
+  /*
+   * The shaders, saved to shaders_path as they change and drawn with from
+   * the next frame. The presets are the .cfg files in shader_presets_dir and
+   * the programs the .glsl files in shader_programs_dir, both sdl-display.c's.
+   */
+  const char *shaders_path;
+  const char *shader_presets_dir;
+  const char *shader_programs_dir;
+  char *const *shader_presets;
+  int shader_preset_count;
+  char *const *shader_programs;
+  int shader_program_count;
+  /* set when pico-8's renderer has no GL ES context to draw shaders with */
+  int shaders_unavailable;
+  struct shader_settings shaders;
+  /* the parameters of the shaders in use, read again whenever those change */
+  struct shader_param shader_params[SHADER_MAX_PARAMS];
+  int shader_param_count;
 };
 
 /* minarch's eight slots, as Save and Load step through them */
@@ -196,6 +243,8 @@ struct menu {
   int setting_top;
   int shortcut_row;
   int shortcut_top;
+  int param_row;
+  int param_top;
   /* the shortcut waiting for a button to be pressed for it, or -1 */
   int binding;
 
@@ -276,6 +325,19 @@ void menu_bind(struct menu *menu, int button, int with_menu);
 /* what the screen mode and overlay shortcuts do, saved as the menu saves them */
 void menu_cycle_screen_mode(struct menu_settings *settings);
 void menu_cycle_overlay(struct menu_settings *settings);
+
+/*
+ * What the shader shortcut does: the next preset, then None, then the first
+ * again, saved as the menu saves it. shown is the notice to give, which says
+ * why nothing changed when there is nothing to cycle through.
+ */
+void menu_cycle_shader(struct menu_settings *settings, char *shown, size_t size);
+
+/* whether the shaders can be drawn and some are chosen */
+int menu_shaders_on(const struct menu_settings *settings);
+
+/* reads the parameters of the shaders in use again, after they change */
+void menu_load_shader_params(struct menu_settings *settings);
 
 /*
  * A short message in a pill at the top right, as NextUI shows when a

@@ -213,8 +213,8 @@ static void select_setting(struct menu *menu, int setting)
   int group, row, found_group = -1, found_row = -1;
 
   for (group = 0; group < MENU_GROUP_COUNT; group++) {
-    for (row = 0; row < menu_group_size(group); row++) {
-      if (menu_group_setting(group, row) == setting) {
+    for (row = 0; row < menu_group_size(menu, group); row++) {
+      if (menu_group_setting(menu, group, row) == setting) {
         found_group = group;
         found_row = row;
       }
@@ -246,16 +246,17 @@ static void test_screen_mode_and_overlay(void)
   check(menu.page == MENU_PAGE_OPTIONS && menu.option_row == MENU_GROUP_FRONTEND,
         "Options opens on its first group, Frontend");
   check(press(&menu, MENU_RIGHT) == MENU_STAY && menu.page == MENU_PAGE_GROUP &&
-            menu.setting_row == 0 && menu_group_setting(MENU_GROUP_FRONTEND, 0) == MENU_SCREEN_MODE,
+            menu.setting_row == 0 &&
+            menu_group_setting(&menu, MENU_GROUP_FRONTEND, 0) == MENU_SCREEN_MODE,
         "Right opens Frontend at its first setting, Screen Mode");
   check(press(&menu, MENU_B) == MENU_STAY && menu.page == MENU_PAGE_OPTIONS &&
             menu.option_row == MENU_GROUP_FRONTEND,
         "B goes back to Options on the group");
-  check(menu_group_size(MENU_GROUP_SPLORE) == 4 &&
-            menu_group_setting(MENU_GROUP_SPLORE, 0) == MENU_COPY_CARTS &&
-            menu_group_setting(MENU_GROUP_SPLORE, 1) == MENU_SPLORE_ARTWORK &&
-            menu_group_setting(MENU_GROUP_SPLORE, 2) == MENU_HIDE_MATURE &&
-            menu_group_setting(MENU_GROUP_SPLORE, 3) == MENU_CHECK_UPDATES,
+  check(menu_group_size(&menu, MENU_GROUP_SPLORE) == 4 &&
+            menu_group_setting(&menu, MENU_GROUP_SPLORE, 0) == MENU_COPY_CARTS &&
+            menu_group_setting(&menu, MENU_GROUP_SPLORE, 1) == MENU_SPLORE_ARTWORK &&
+            menu_group_setting(&menu, MENU_GROUP_SPLORE, 2) == MENU_HIDE_MATURE &&
+            menu_group_setting(&menu, MENU_GROUP_SPLORE, 3) == MENU_CHECK_UPDATES,
         "Splore holds every Splore setting and nothing else");
   select_setting(&menu, MENU_SCREEN_MODE);
 
@@ -518,7 +519,8 @@ static void test_drawing(const char *minui_font, const char *nextui_font)
           all_inside &= guards_intact(&canvas);
           cleared &= canvas.pixels[(size_t)(h - 1) * w] == gfx_background(&theme);
           press(&menu, MENU_A);
-          rows = group == MENU_GROUP_SHORTCUTS ? MENU_SHORTCUT_COUNT : menu_group_size(group);
+          rows = group == MENU_GROUP_SHORTCUTS ? MENU_SHORTCUT_COUNT
+                                               : menu_group_size(&menu, group);
           for (row = 0; row < rows; row++) {
             menu_draw(&menu, &canvas, frame, font, &theme, &batteries[f]);
             all_inside &= guards_intact(&canvas);
@@ -1039,6 +1041,252 @@ static void test_cycle_helpers(void)
   check(settings.overlay == -1 && file_is(overlay_path, "disabled\n"), "and past the last to None");
 }
 
+static char *shader_presets[] = {"crt.cfg", "smooth.cfg"};
+static char *shader_programs[] = {"a.glsl", "b.glsl"};
+static char shaders_dir[4096];
+static char shader_programs_dir[4352];
+static char shaders_path[4096];
+
+/* NextUI's layout: presets in the folder and shaders in its glsl folder */
+static void make_shader_fixtures(void)
+{
+  char path[8192];
+
+  snprintf(shaders_dir, sizeof shaders_dir, "%s/Shaders", dir);
+  make_dir(shaders_dir);
+  snprintf(shader_programs_dir, sizeof shader_programs_dir, "%s/glsl", shaders_dir);
+  make_dir(shader_programs_dir);
+  snprintf(shaders_path, sizeof shaders_path, "%s/shaders", dir);
+
+  snprintf(path, sizeof path, "%s/a.glsl", shader_programs_dir);
+  write_file(path, "#pragma parameter SCANLINE \"Scanline Strength\" 0.5 0.0 1.0 0.1\n"
+                   "#pragma parameter MASK \"Mask\" 1.0 0.0 3.0 1.0\n"
+                   "void main() {}\n");
+  snprintf(path, sizeof path, "%s/b.glsl", shader_programs_dir);
+  write_file(path, "#pragma parameter MASK \"Mask\" 1.0 0.0 3.0 1.0\n"
+                   "#pragma parameter CURVE \"Curvature\" 0.2 0.0 0.5 0.05\n"
+                   "void main() {}\n");
+  /* as NextUI ships them, with no newline at the end */
+  snprintf(path, sizeof path, "%s/crt.cfg", shaders_dir);
+  write_file(path, "minarch_nrofshaders = 2\nminarch_shader1 = a.glsl\n"
+                   "minarch_shader1_upscale = screen\nminarch_shader2 = b.glsl\n"
+                   "minarch_shader2_filter = LINEAR\nminarch_scale_filter = LINEAR");
+  snprintf(path, sizeof path, "%s/smooth.cfg", shaders_dir);
+  write_file(path, "minarch_nrofshaders = 1\nminarch_shader1 = b.glsl\nCURVE = 0.40");
+}
+
+static void shader_settings_for_test(struct menu_settings *settings)
+{
+  settings_for_test(settings);
+  unlink(shaders_path);
+  settings->shaders_path = shaders_path;
+  shader_read_settings(&settings->shaders, shaders_path);
+  settings->shader_presets_dir = shaders_dir;
+  settings->shader_programs_dir = shader_programs_dir;
+  settings->shader_presets = shader_presets;
+  settings->shader_preset_count = 2;
+  settings->shader_programs = shader_programs;
+  settings->shader_program_count = 2;
+}
+
+/* whether the saved shaders hold line, which is one of minarch's key = value lines */
+static int shaders_saved(const char *line)
+{
+  char text[4096] = "", wanted[256];
+  FILE *file = fopen(shaders_path, "r");
+  size_t got;
+
+  if (file == NULL) {
+    return 0;
+  }
+  got = fread(text, 1, sizeof text - 1, file);
+  text[got] = '\0';
+  fclose(file);
+  snprintf(wanted, sizeof wanted, "%s\n", line);
+  return strstr(text, wanted) != NULL;
+}
+
+static void test_shaders(void)
+{
+  struct menu_settings settings;
+  struct menu menu;
+  char value[64];
+  int row;
+
+  make_shader_fixtures();
+
+  /* without shaders there is only the preset, which stays None */
+  settings_for_test(&settings);
+  settings.shaders_path = shaders_path;
+  menu = open_options(&settings);
+  check(menu_group_size(&menu, MENU_GROUP_SHADERS) == 1 &&
+            menu_group_setting(&menu, MENU_GROUP_SHADERS, 0) == MENU_SHADER_PRESET,
+        "with no shaders the Shaders group holds only the preset");
+  select_setting(&menu, MENU_SHADER_PRESET);
+  check(menu.option_row == MENU_GROUP_SHADERS, "Shaders comes after Emulator");
+  press(&menu, MENU_RIGHT);
+  menu_option_value(&menu, MENU_SHADER_PRESET, value, sizeof value);
+  check(strcmp(value, "None") == 0 && access(shaders_path, F_OK) != 0,
+        "which shows None and changes nothing");
+
+  shader_settings_for_test(&settings);
+  settings.shaders_unavailable = 1;
+  menu = open_options(&settings);
+  check(menu_group_size(&menu, MENU_GROUP_SHADERS) == 1,
+        "nor are there more rows when pico-8's renderer cannot draw them");
+
+  shader_settings_for_test(&settings);
+  menu = open_options(&settings);
+  check(menu_group_size(&menu, MENU_GROUP_SHADERS) == 3 &&
+            menu_group_setting(&menu, MENU_GROUP_SHADERS, 1) == MENU_SHADER_PASSES &&
+            menu_group_setting(&menu, MENU_GROUP_SHADERS, 2) == MENU_SHADER_SHARPNESS,
+        "with shaders but none in use it holds the preset, their number and the sharpness");
+  select_setting(&menu, MENU_SHADER_PRESET);
+  press(&menu, MENU_RIGHT);
+  menu_option_value(&menu, MENU_SHADER_PRESET, value, sizeof value);
+  check(strcmp(value, "crt") == 0 && settings.shaders.passes == 2 &&
+            strcmp(settings.shaders.pass[1].program, "b.glsl") == 0 &&
+            settings.shaders.pass[1].filter == SHADER_LINEAR &&
+            settings.shaders.pass[0].upscale == SHADER_UPSCALE_SCREEN &&
+            settings.shaders.scale_filter == SHADER_LINEAR,
+        "Right picks the first preset, shown without .cfg, and reads it over the shaders");
+  check(shaders_saved("minarch_shaders_preset = crt.cfg") && shaders_saved("minarch_nrofshaders = 2") &&
+            shaders_saved("minarch_shader2_filter = LINEAR") &&
+            shaders_saved("minarch_shader1_upscale = screen"),
+        "and saves them as minarch's keys");
+  check(menu_group_size(&menu, MENU_GROUP_SHADERS) == 3 + 2 * MENU_SHADER_PASS_ROWS + 1 &&
+            menu_group_setting(&menu, MENU_GROUP_SHADERS, 3) == MENU_SHADER1_PROGRAM &&
+            menu_group_setting(&menu, MENU_GROUP_SHADERS, 8) == MENU_SHADER1_PROGRAM +
+                                                                   MENU_SHADER_PASS_ROWS &&
+            menu_group_setting(&menu, MENU_GROUP_SHADERS, 13) == MENU_SHADER_PARAMETERS,
+        "each pass in use adds its five rows, and Parameters follows them");
+  check(settings.shader_param_count == 3 && strcmp(settings.shader_params[0].name, "SCANLINE") == 0 &&
+            strcmp(settings.shader_params[1].name, "MASK") == 0 &&
+            strcmp(settings.shader_params[2].name, "CURVE") == 0,
+        "Parameters lists each shader's parameters once");
+
+  select_setting(&menu, MENU_SHADER1_PROGRAM + MENU_SHADER_PASS_ROWS + 4);
+  menu_option_value(&menu, MENU_SHADER1_PROGRAM + MENU_SHADER_PASS_ROWS + 4, value, sizeof value);
+  check(strcmp(value, "1") == 0, "Shader 2 Scale shows the 1x it starts at");
+  press(&menu, MENU_LEFT);
+  check(settings.shaders.pass[1].upscale == SHADER_UPSCALE_SCREEN &&
+            shaders_saved("minarch_shader2_upscale = screen") &&
+            shaders_saved("minarch_shaders_preset = crt.cfg"),
+        "Left wraps a pass's scale to the screen, keeping the preset's name as minarch does");
+
+  select_setting(&menu, MENU_SHADER1_PROGRAM);
+  press(&menu, MENU_RIGHT);
+  menu_option_value(&menu, MENU_SHADER1_PROGRAM, value, sizeof value);
+  check(strcmp(value, "b") == 0 && shaders_saved("minarch_shader1 = b.glsl") &&
+            settings.shader_param_count == 2,
+        "Right steps a pass's shader, shown without .glsl, and reads its parameters again");
+  press(&menu, MENU_LEFT);
+
+  select_setting(&menu, MENU_SHADER_PARAMETERS);
+  press(&menu, MENU_A);
+  check(menu.page == MENU_PAGE_SHADER_PARAMS && menu.param_row == 0,
+        "A on Parameters opens their page");
+  press(&menu, MENU_RIGHT);
+  check(shader_param_value(&settings.shaders, &settings.shader_params[0]) > 0.55f &&
+            shaders_saved("SCANLINE = 0.60"),
+        "Right steps a parameter by its step and saves it by name");
+  for (row = 0; row < 5; row++) {
+    press(&menu, MENU_RIGHT);
+  }
+  check(shaders_saved("SCANLINE = 0.00"), "and past its end wraps to its start");
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_LEFT);
+  check(shaders_saved("MASK = 0.00"), "Left steps the next one down");
+  check(press(&menu, MENU_B) == MENU_STAY && menu.page == MENU_PAGE_GROUP,
+        "B goes back to the Shaders group");
+
+  select_setting(&menu, MENU_SHADER_PASSES);
+  press(&menu, MENU_LEFT);
+  check(settings.shaders.passes == 1 && menu_group_size(&menu, MENU_GROUP_SHADERS) ==
+                                            3 + MENU_SHADER_PASS_ROWS + 1,
+        "one shader fewer leaves one pass's rows");
+  menu_option_value(&menu, MENU_SHADER_PRESET, value, sizeof value);
+  check(strcmp(value, "crt") == 0, "and the preset its name");
+
+  select_setting(&menu, MENU_SHADER_PRESET);
+  press(&menu, MENU_LEFT);
+  check(settings.shaders.passes == 0 && shaders_saved("minarch_nrofshaders = off") &&
+            shaders_saved("minarch_shaders_preset = ") && shaders_saved("minarch_shader1 = a.glsl"),
+        "Left to None turns the shaders off and keeps the passes");
+  check(menu_group_size(&menu, MENU_GROUP_SHADERS) == 3 && !menu_shaders_on(&settings),
+        "which takes their rows away");
+
+  select_setting(&menu, MENU_SHADER_PASSES);
+  press(&menu, MENU_RIGHT);
+  menu_option_value(&menu, MENU_SHADER_PRESET, value, sizeof value);
+  check(strcmp(value, "Custom") == 0 && menu_shaders_on(&settings),
+        "shaders turned on by hand show as Custom");
+  select_setting(&menu, MENU_SHADER_PRESET);
+  press(&menu, MENU_RIGHT);
+  menu_option_value(&menu, MENU_SHADER_PRESET, value, sizeof value);
+  check(strcmp(value, "crt") == 0, "and Right from there picks the first preset");
+}
+
+static void test_shader_drawing(void)
+{
+  struct menu_settings settings;
+  struct menu menu;
+  gfx_canvas canvas = guarded_canvas(640, 480);
+  gfx_font *font = gfx_font_open(NULL);
+  gfx_theme theme;
+  int row, count;
+
+  gfx_theme_init(&theme, "nextui", NULL);
+  shader_settings_for_test(&settings);
+  shader_apply_preset(&settings.shaders, shaders_dir, "crt.cfg");
+  menu = open_options(&settings);
+  select_setting(&menu, MENU_SHADER_PRESET);
+  count = menu_group_size(&menu, MENU_GROUP_SHADERS);
+  for (row = 0; row < count; row++) {
+    menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
+    press(&menu, MENU_DOWN);
+  }
+  select_setting(&menu, MENU_SHADER_PARAMETERS);
+  press(&menu, MENU_A);
+  for (row = 0; row < settings.shader_param_count; row++) {
+    menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
+    press(&menu, MENU_DOWN);
+  }
+  check(menu.page == MENU_PAGE_SHADER_PARAMS && guards_intact(&canvas),
+        "the Shaders group and its parameters stay inside the canvas");
+  gfx_font_close(font);
+  free(canvas.pixels - GUARD);
+}
+
+static void test_cycle_shader(void)
+{
+  struct menu_settings settings;
+  char shown[64];
+
+  shader_settings_for_test(&settings);
+  menu_cycle_shader(&settings, shown, sizeof shown);
+  check(strcmp(shown, "Shader: crt") == 0 && settings.shaders.passes == 2 &&
+            shaders_saved("minarch_shaders_preset = crt.cfg"),
+        "the shader shortcut steps from None to the first preset and saves it");
+  menu_cycle_shader(&settings, shown, sizeof shown);
+  check(strcmp(shown, "Shader: smooth") == 0 && settings.shaders.passes == 1 &&
+            shaders_saved("CURVE = 0.40"),
+        "then to the next, with the parameters it sets");
+  menu_cycle_shader(&settings, shown, sizeof shown);
+  check(strcmp(shown, "Shader: None") == 0 && settings.shaders.passes == 0,
+        "and past the last to None");
+
+  settings.shader_preset_count = 0;
+  menu_cycle_shader(&settings, shown, sizeof shown);
+  check(strcmp(shown, "No shader presets") == 0 && settings.shaders.passes == 0,
+        "with no presets it says so and changes nothing");
+  settings.shader_preset_count = 2;
+  settings.shaders_unavailable = 1;
+  menu_cycle_shader(&settings, shown, sizeof shown);
+  check(strcmp(shown, "Shaders need OpenGL ES") == 0 && settings.shaders.passes == 0,
+        "and when pico-8's renderer cannot draw them, says why");
+}
+
 static void test_shortcut_drawing(const char *minui_font)
 {
   struct menu_settings settings;
@@ -1449,6 +1697,9 @@ int main(int argc, char **argv)
   test_splore_covers();
   test_shortcuts_page();
   test_cycle_helpers();
+  test_shaders();
+  test_shader_drawing();
+  test_cycle_shader();
   test_shortcut_drawing(minui_font);
   test_screenshot_file();
   test_slots();

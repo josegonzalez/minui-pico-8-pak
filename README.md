@@ -109,6 +109,7 @@ The last group of the options, `Shortcuts`, sets buttons that do something strai
 | Reset Game        | Restarts the cart, by pressing PICO-8's own `Ctrl` + `R` for it       |
 | Cycle Screen Mode | Switches between `Standard` and `Stretched`                           |
 | Cycle Overlay     | Steps through `None` and then each overlay                            |
+| Cycle Shader      | Steps through `None` and then each shader preset, naming the one used |
 | Toggle CPU Meter  | Shows or hides PICO-8's CPU meter, by pressing its `Ctrl` + `P`       |
 
 Screenshots and GIFs are saved to the `/Screenshots` folder on your SD card. PICO-8 names its GIFs for the cart and when they were saved, such as `celeste_20260124_120823.gif`, and shows its own message when one is saved.
@@ -129,22 +130,27 @@ The pak reads the volume and brightness from the launcher's own settings library
 
 #### Options
 
-`Options` lists four groups, as the options in MinUI and NextUI's own emulators are grouped: `Frontend`, `Emulator`, `Splore` and `Shortcuts`. Press `A` or `Right` to open one and `B` to go back. In a group, use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. Each change is saved to the SD card straight away.
+`Options` lists five groups, as the options in MinUI and NextUI's own emulators are grouped: `Frontend`, `Emulator`, `Shaders`, `Splore` and `Shortcuts`. Press `A` or `Right` to open one and `B` to go back. In a group, use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. Each change is saved to the SD card straight away.
 
-| Group    | Setting            | Values                  | Takes effect                |
-| -------- | ------------------ | ----------------------- | --------------------------- |
-| Frontend | Screen Mode        | Standard, Stretched     | When the menu closes        |
-| Frontend | Overlay            | None, or any overlay    | When the menu closes        |
-| Frontend | Show FPS           | Off, On                 | The next time a game starts |
-| Emulator | Volume             | 0%, 25%, 50%, 75%, 100% | The next time a game starts |
-| Emulator | Battery Saver      | Off, On                 | The next time a game starts |
-| Emulator | Auto Save on Exit  | Off, On                 | Straight away               |
-| Splore   | Copy Splore Carts  | Off, All, Favourites    | When you exit Splore        |
-| Splore   | Splore Artwork     | Standard, Fancy         | Straight away               |
-| Splore   | Hide Mature Carts  | Off, On                 | The next time a game starts |
-| Splore   | Check Cart Updates | Off, On                 | The next time a game starts |
+| Group    | Setting            | Values                           | Takes effect                |
+| -------- | ------------------ | -------------------------------- | --------------------------- |
+| Frontend | Screen Mode        | Standard, Stretched              | When the menu closes        |
+| Frontend | Overlay            | None, or any overlay             | When the menu closes        |
+| Frontend | Show FPS           | Off, On                          | The next time a game starts |
+| Emulator | Volume             | 0%, 25%, 50%, 75%, 100%          | The next time a game starts |
+| Emulator | Battery Saver      | Off, On                          | The next time a game starts |
+| Emulator | Auto Save on Exit  | Off, On                          | Straight away               |
+| Shaders  | Preset             | None, or any preset              | When the menu closes        |
+| Shaders  | Number of Shaders  | Off, 1, 2, 3                     | When the menu closes        |
+| Shaders  | Screen Sharpness   | NEAREST, LINEAR                  | When the menu closes        |
+| Shaders  | Shader 1 to 3      | Any shader, and how it is scaled | When the menu closes        |
+| Shaders  | Parameters         | Each shader's own                | When the menu closes        |
+| Splore   | Copy Splore Carts  | Off, All, Favourites             | When you exit Splore        |
+| Splore   | Splore Artwork     | Standard, Fancy                  | Straight away               |
+| Splore   | Hide Mature Carts  | Off, On                          | The next time a game starts |
+| Splore   | Check Cart Updates | Off, On                          | The next time a game starts |
 
-`Shortcuts` opens its own page, described [below](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Save states](#save-states), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
+`Shortcuts` opens its own page, described [below](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Shaders](#shaders), [Save states](#save-states), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
 
 - `Show FPS` draws the frame rate in the corner of the screen.
 - `Volume` is PICO-8's own volume, which applies under the device's volume.
@@ -216,7 +222,9 @@ The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead o
 
 The library is only loaded on `h700`, and only when it is present. A copy the device cannot load is skipped with a line in the log rather than stopping the launch.
 
-Overlays, switching the screen mode in game, the in-game menu, save states and the game switcher's previews come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c`, `shim/cart.c`, `shim/crash.c` and `shim/state.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
+Overlays, switching the screen mode in game, the in-game menu, save states and the game switcher's previews come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c`, `shim/cart.c`, `shim/crash.c`, `shim/state.c`, `shim/shader.c` and `shim/shader-gl.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
+
+For [shaders](#shaders), the library keeps each frame PICO-8 hands SDL and draws it through them itself, with the OpenGL ES context of SDL's own renderer, in place of PICO-8's own copy to the screen. SDL keeps its own record of what it last set in OpenGL, so the library puts back everything it changes, and SDL draws the overlay and the menu over the result as before. It finds OpenGL through SDL, so it needs no library of its own.
 
 For save states, the library gives PICO-8 every block of memory it asks for from an area at a fixed address, managed by Doug Lea's public domain malloc, so a state can save that area and put it back where it was. States are packed with LZ4, which is BSD licensed. PICO-8's 64-bit binary loads at a different address each time it runs, so with save states on the library starts it a second time with that turned off. In Splore it does neither.
 
@@ -376,6 +384,24 @@ While a game is running, choose one with `Overlay` in the `Frontend` options of 
 
 The PNG is decoded by the pak itself, so overlays work the same on every platform. The image is scaled to fit the screen without changing its shape and centred, leaving any space around it uncovered, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left, so a 4:3 image fills the screen. The Trimui Smart Pro also uses the `tg5040` build, and its 1280x720 screen is 16:9, so a 4:3 image there has bars at the sides and a 16:9 image fills it. No overlay is drawn in `stretched` mode, where the game fills the screen.
 
+### Shaders
+
+The `Shaders` options run the game through the same shaders NextUI's own emulators use, set up the same way. Shaders are `.glsl` files in the `/Shaders/glsl` folder on your SD card, and presets that set them up are `.cfg` files in `/Shaders`, as NextUI lays them out. NextUI ships both, so they work as they are. MinUI ships no shaders, so under MinUI copy NextUI's `Shaders` folder to the root of your SD card. The pak never creates the folder, and until it holds a shader, `Shaders` shows only `Preset`, set to `None`.
+
+- `Preset` reads a preset's settings over the ones below, as minarch does. `None` turns the shaders off, keeping the rest as they were. Changing a setting below keeps the preset's name, and shaders turned on without a preset show as `Custom`.
+- `Number of Shaders` is how many of the passes below the game is drawn through, up to three.
+- `Screen Sharpness` is how the last pass is scaled to the screen: `NEAREST` keeps it sharp and `LINEAR` smooths it.
+- Each pass has its `Shader`, the `Filter` it reads the pass before with, its `Source Type` and `Texture Type`, which tell the shader the size of the game or of the pass before, and its `Scale`, 1 to 8 times the pass before, or the size of the screen, which can be slow.
+- `Parameters` lists the settings the shaders in use offer, such as the strength of their scanlines.
+
+The [Cycle Shader](#shortcuts) shortcut steps through `None` and every preset while a game is running, and names the one it switched to at the top right of the screen.
+
+Your choices are saved to a file named `shaders` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card, in the same form minarch saves them in, so a preset is a file of the same lines.
+
+Shaders need the GPU, which PICO-8 only draws with when SDL uses its OpenGL ES renderer. Where it does not, `Shaders` shows only `Preset`, and `Cycle Shader` shows "Shaders need OpenGL ES". A shader that will not build on the device is drawn as if it were not there, with a notice naming it the first time, and the log says why.
+
+The overlay, the volume and brightness bar and the notices are drawn over the shaded game. The in-game menu, save state pictures and screenshots show the game with its shaders.
+
 ### Debug Logging
 
 Logs will be written to the`/.userdata/$PLATFORM/logs/` folder on your SD card.
@@ -402,8 +428,10 @@ make test
 
 `make build` and `make release` additionally need Docker, which is what the SDL sensor shim and the display shim are cross-compiled in, the display shim once for `arm` and once for `arm64`. The display shim decodes overlays with [stb_image](https://github.com/nothings/stb) and draws the menu's text with stb_truetype from the same project, both of which the build fetches at a pinned commit and checks against a checksum. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
 
+`test/carts/whiskers.p8.png` is a small cart for trying the [shaders](#shaders) on a device. Walk a calico cat with `Left` and `Right` and jump with `O` to catch the falling fish. The game has an outline sprite, text, circles, scrolling clouds and every colour along the top. Press `X` for a test pattern of colour bars, one pixel checkerboards and lines, a dither ramp and rings, and press it again to go back. Copy it into your PICO-8 roms folder to play it.
+
 `make build` also unpacks the pinned minui-power-control release into `bin/power-control` with `scripts/unpack-makeself.sh`. That script checks the archive against the MD5 it records for itself, and never runs any part of it.
 
-The build also tests the display shim on both architectures, by loading it into a small program in `shim/test` that stands in for PICO-8, linked against a fake `libSDL2` that records what the shim does to each frame, the controller, the audio and the event queue. The menu's pages, the files its settings write and its drawing are tested on their own by `shim/test/menu-test.c`, with the fonts MinUI and NextUI ship, which the build fetches at a pinned commit for the tests alone. A shim that fails these tests is not written to `lib/`.
+The build also tests the display shim on both architectures, by loading it into a small program in `shim/test` that stands in for PICO-8, linked against a fake `libSDL2` that records what the shim does to each frame, the controller, the audio and the event queue. The fake also stands in for OpenGL, recording each call, so the shader passes are checked from the frame PICO-8 uploads to the state put back for SDL. The menu's pages, the files its settings write and its drawing are tested on their own by `shim/test/menu-test.c`, with the fonts MinUI and NextUI ship, which the build fetches at a pinned commit for the tests alone, and the shader settings, presets and sources by `shim/test/shader-test.c`. A shim that fails these tests is not written to `lib/`.
 
 Eight environment variables exist for the test suites only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to. `PICO_PAK_UPTIME_FILE` overrides the `/proc/uptime` file the log's time marks are read from, in both `launch.sh` and the display shim. In the display shim, `PICO_PAK_INPUT_DIR` overrides the `/dev/input` directory watched for the volume buttons, `PICO_PAK_POWER_SUPPLY_DIR` overrides the `/sys/class/power_supply` directory the menu reads the battery from, `PICO_PAK_MSETTINGS` names the settings library to open in place of `libmsettings.so`, and `PICO_PAK_SHARED_SETTINGS` overrides the `/dev/shm/SharedSettings` file that has to exist before it is opened.

@@ -2,7 +2,7 @@
  * Plays pico-8's part against sdl-display.so, which is preloaded over the fake
  * libSDL2 in fake-sdl.c, and checks what reached the fake:
  *
- *   LD_PRELOAD=sdl-display.so display-test [quit-event | quit-shortcut]
+ *   LD_PRELOAD=sdl-display.so display-test [quit-event | quit-shortcut | shaders]
  *   PICO_PAK_STATES_DIR=/tmp/display-test-states/states \
  *     LD_PRELOAD=sdl-display.so display-test states | resume | shutdown | quit
  *
@@ -48,6 +48,7 @@
 #define AXIS_TRIGGERLEFT 4
 #define AXIS_TRIGGERRIGHT 5
 #define SDL_PIXELFORMAT_ARGB8888 0x16362004
+#define SDL_TEXTUREACCESS_STREAMING 1
 #define BUTTON_A 0
 #define BUTTON_B 1
 #define BUTTON_BACK 4
@@ -61,7 +62,7 @@
 #define BIT(button) (1u << (button))
 
 /* the menu's Options groups, in order, and the rows the tests change in each */
-enum { GROUP_FRONTEND, GROUP_EMULATOR, GROUP_SPLORE };
+enum { GROUP_FRONTEND, GROUP_EMULATOR, GROUP_SHADERS, GROUP_SPLORE };
 enum { ROW_SCREEN_MODE = 0, ROW_OVERLAY = 1 };
 enum { ROW_VOLUME = 0 };
 enum { ROW_COPY_CARTS = 0, ROW_SPLORE_ARTWORK = 1 };
@@ -78,6 +79,8 @@ int16_t SDL_GameControllerGetAxis(void *controller, int axis);
 uint32_t SDL_OpenAudioDevice(const char *device, int iscapture, const void *desired,
                              void *obtained, int allowed_changes);
 int SDL_GetModState(void);
+void *SDL_CreateTexture(void *renderer, uint32_t format, int access, int w, int h);
+int SDL_UpdateTexture(void *texture, const fake_rect *rect, const void *pixels, int pitch);
 
 /*
  * The counts live in a mapping of their own, outside the memory a state puts
@@ -1281,11 +1284,31 @@ static int slot_named(const char *slot)
 }
 
 /* a save is written in the background, and names its slot last of all */
+/* how many threads this process has, the save's own among them while it writes */
+static int thread_count(void)
+{
+  DIR *tasks = opendir("/proc/self/task");
+  struct dirent *entry;
+  int count = 0;
+
+  while (tasks != NULL && (entry = readdir(tasks)) != NULL) {
+    count += entry->d_name[0] != '.';
+  }
+  if (tasks != NULL) {
+    closedir(tasks);
+  }
+  return count;
+}
+
+/*
+ * The slot is named before the save's thread has finished, so this also waits
+ * for the thread to end, by when the game knows the save is done
+ */
 static int written(const char *slot)
 {
   int tries;
 
-  for (tries = 0; tries < 500 && !slot_named(slot); tries++) {
+  for (tries = 0; tries < 500 && (!slot_named(slot) || thread_count() > 1); tries++) {
     usleep(10000);
   }
   return slot_named(slot);
@@ -1522,6 +1545,291 @@ static void test_quit_without_saving(void *pad)
   check(access(path, F_OK) != 0, "and gives the switcher no frame, as the cart has states");
 }
 
+/* how many calls to GL or SDL_RenderFlush named starting with name, from the from'th */
+static int count_calls(const char *name, int from)
+{
+  int count = 0, i;
+
+  for (i = from; i < fake.gl_call_count; i++) {
+    count += strncmp(fake.gl_calls[i].name, name, strlen(name)) == 0;
+  }
+  return count;
+}
+
+/* the first such call from the from'th, or -1 */
+static int find_call(const char *name, int from)
+{
+  int i;
+
+  for (i = from; i < fake.gl_call_count; i++) {
+    if (strcmp(fake.gl_calls[i].name, name) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static char shaders_path[4096];
+
+/*
+ * NextUI's layout: crt runs a.glsl at 2x then b.glsl at the screen's size,
+ * and broken runs a shader that will not build. Cycle Shader is MENU+L1.
+ */
+static void make_shader_fixtures(void)
+{
+  static const char shortcuts[] = "screen-mode l1\nshader menu+l1\n";
+  char path[8192];
+
+  snprintf(path, sizeof path, "%s/Shaders", dir);
+  make_dir(path);
+  setenv("PICO_PAK_SHADERS_DIR", path, 1);
+  snprintf(path, sizeof path, "%s/Shaders/glsl", dir);
+  make_dir(path);
+  snprintf(path, sizeof path, "%s/Shaders/glsl/a.glsl", dir);
+  write_file(path, "#version 130\n#pragma parameter SCANLINE \"Scanline\" 0.25 0.0 1.0 0.05\nA\n",
+             strlen("#version 130\n#pragma parameter SCANLINE \"Scanline\" 0.25 0.0 1.0 0.05\nA\n"));
+  snprintf(path, sizeof path, "%s/Shaders/glsl/b.glsl", dir);
+  write_file(path, "B\n", 2);
+  snprintf(path, sizeof path, "%s/Shaders/glsl/bad.glsl", dir);
+  write_file(path, "FAIL\n", 5);
+  snprintf(path, sizeof path, "%s/Shaders/crt.cfg", dir);
+  write_file(path,
+             "minarch_nrofshaders = 2\nminarch_shader1 = a.glsl\nminarch_shader1_upscale = 2\n"
+             "minarch_shader2 = b.glsl\nminarch_shader2_upscale = screen",
+             strlen("minarch_nrofshaders = 2\nminarch_shader1 = a.glsl\nminarch_shader1_upscale = 2\n"
+                    "minarch_shader2 = b.glsl\nminarch_shader2_upscale = screen"));
+  snprintf(path, sizeof path, "%s/Shaders/zbroken.cfg", dir);
+  write_file(path, "minarch_nrofshaders = 1\nminarch_shader1 = bad.glsl\n",
+             strlen("minarch_nrofshaders = 1\nminarch_shader1 = bad.glsl\n"));
+
+  snprintf(shaders_path, sizeof shaders_path, "%s/shaders", dir);
+  setenv("PICO_PAK_SHADER_SETTINGS", shaders_path, 1);
+  write_file(shortcuts_path, shortcuts, strlen(shortcuts));
+}
+
+/* a frame as pico-8 draws one: its screen uploaded, cleared to, copied into its square and shown */
+static void play_frame(void *renderer, void *texture, uint32_t colour)
+{
+  static uint32_t pixels[128 * 128];
+  fake_rect square = {128, 0, 768, 768};
+  size_t i;
+
+  for (i = 0; i < sizeof pixels / sizeof *pixels; i++) {
+    pixels[i] = colour;
+  }
+  SDL_UpdateTexture(texture, NULL, pixels, 128 * 4);
+  SDL_RenderCopy(renderer, texture, NULL, &square);
+  SDL_RenderPresent(renderer);
+}
+
+/* presses MENU+L1, Cycle Shader, and lets it all go */
+static void cycle_shader(void *pad)
+{
+  release_all();
+  fake.buttons[BUTTON_GUIDE] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.buttons[BUTTON_L1] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_L1);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+}
+
+/* whether the copies from the from'th draw a notice at the top right */
+static int notice_drawn(int from)
+{
+  int i, drawn = 0;
+
+  for (i = from; i < fake.copies; i++) {
+    drawn |= fake.copy[i].has_dst && fake.copy[i].dst.h == 90 &&
+             fake.copy[i].dst.x + fake.copy[i].dst.w == 1024 - 15 && fake.copy[i].dst.y == 15;
+  }
+  return drawn;
+}
+
+/* whether a copy from the from'th was of texture */
+static int copied(void *texture, int from)
+{
+  int i;
+
+  for (i = from; i < fake.copies; i++) {
+    if (fake.copy[i].texture == texture) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void test_shaders(void *pad)
+{
+  struct fake_gl_state before = {.program = 7, .active_texture = 0x84C0 + 1, .textures = {3, 4},
+                                 .array_buffer = 5, .framebuffer = 6, .viewport = {1, 2, 3, 4},
+                                 .blend = 1, .scissor = 1, .attribs = {1, 1, 0, 1}};
+  void *game = SDL_CreateTexture(&renderer_a, SDL_PIXELFORMAT_ARGB8888,
+                                 SDL_TEXTUREACCESS_STREAMING, 128, 128);
+  void *fps = SDL_CreateTexture(&renderer_a, SDL_PIXELFORMAT_ARGB8888,
+                                SDL_TEXTUREACCESS_STREAMING, 128, 8);
+  fake_rect strip = {0, 0, 128, 8};
+  int from, at, draw, flush, i, uniform;
+
+  /* off, as the settings start */
+  fake.copies = 0;
+  play_frame(&renderer_a, game, 0xff112233);
+  check(copied(game, 0) && count_calls("glDrawArrays", 0) == 0,
+        "with the shaders off pico-8's own copy is drawn and GL draws nothing");
+  check(strncmp(fake.gl_sources[0], "#version 100", 12) == 0,
+        "but the copy to the screen is built, as there are shaders to draw");
+
+  cycle_shader(pad);
+  SDL_RenderPresent(&renderer_a);
+  check(file_has(shaders_path, "minarch_shaders_preset = crt.cfg") &&
+            file_has(shaders_path, "minarch_nrofshaders = 2"),
+        "MENU+L1 cycles to the first preset and saves it");
+
+  fake.gl = before;
+  fake.copies = 0;
+  fake.ticks += 2000;
+  from = fake.gl_call_count;
+  {
+    static uint32_t pixels[128 * 128];
+    fake_rect square = {128, 0, 768, 768};
+
+    for (i = 0; i < 128 * 128; i++) {
+      pixels[i] = 0xff112233;
+    }
+    SDL_UpdateTexture(game, NULL, pixels, 128 * 4);
+    SDL_UpdateTexture(fps, NULL, pixels, 128 * 4);
+    SDL_RenderCopy(&renderer_a, game, NULL, &square);
+    SDL_RenderCopy(&renderer_a, fps, NULL, &strip);
+    SDL_RenderPresent(&renderer_a);
+  }
+  draw = find_call("glDrawArrays", from);
+  flush = find_call("SDL_RenderFlush", from);
+  check(draw >= 0 && flush >= 0 && flush < find_call("glViewport", from),
+        "the next frame is drawn through the shaders, after what SDL queued before it");
+  at = find_call("glTexImage2D", from);
+  check(at >= 0 && fake.gl_calls[at].args[1] == 128 && fake.gl_calls[at].args[2] == 128 &&
+            fake.gl_calls[at].args[3] &&
+            memcmp(fake.gl_calls[at].pixel, "\x11\x22\x33\xff", 4) == 0,
+        "from pico-8's 128x128 frame, in GL's byte order");
+  check(count_calls("glDrawArrays", from) == 3, "one draw for each pass and one to the screen");
+  at = find_call("glViewport", from);
+  check(at >= 0 && fake.gl_calls[at].args[2] == 256 && fake.gl_calls[at].args[3] == 256,
+        "a.glsl at 2x draws 256x256");
+  at = find_call("glViewport", at + 1);
+  check(at >= 0 && fake.gl_calls[at].args[2] == 768 && fake.gl_calls[at].args[3] == 768 &&
+            fake.gl_calls[at].args[0] == 0,
+        "b.glsl at the screen's size draws as big as pico-8's square");
+  at = find_call("glViewport", at + 1);
+  check(at >= 0 && fake.gl_calls[at].args[0] == 128 && fake.gl_calls[at].args[1] == 0 &&
+            fake.gl_calls[at].args[2] == 768 && fake.gl_calls[at].args[3] == 768 &&
+            find_call("glBindFramebuffer", from) >= 0,
+        "and the last draw fills pico-8's square on the screen");
+  at = find_call("glDrawArrays", draw + 1);
+  at = find_call("glDrawArrays", at + 1);
+  check(at >= 0 && fake.gl_calls[at].args[3] == 6, "into the framebuffer SDL draws to");
+  uniform = -1;
+  for (i = 0; i < fake.uniform_count; i++) {
+    if (strcmp(fake.uniforms[i], "SCANLINE") == 0) {
+      uniform = i;
+    }
+  }
+  at = find_call("glUniform1f", from);
+  while (at >= 0 && fake.gl_calls[at].args[0] != uniform) {
+    at = find_call("glUniform1f", at + 1);
+  }
+  check(uniform >= 0 && at >= 0 && fake.gl_calls[at].floats[0] > 0.24f &&
+            fake.gl_calls[at].floats[0] < 0.26f,
+        "a shader's parameter is set to its default");
+  check(!copied(game, 0) && copied(fps, 0), "pico-8's copy of its screen is skipped, and not its frame rate");
+  check(fake.gl.program == before.program && fake.gl.active_texture == before.active_texture &&
+            fake.gl.textures[0] == before.textures[0] && fake.gl.textures[1] == before.textures[1] &&
+            fake.gl.array_buffer == before.array_buffer &&
+            fake.gl.framebuffer == before.framebuffer &&
+            memcmp(fake.gl.viewport, before.viewport, sizeof before.viewport) == 0 &&
+            fake.gl.blend && fake.gl.scissor &&
+            memcmp(fake.gl.attribs, before.attribs, sizeof before.attribs) == 0,
+        "and every piece of GL state SDL keeps track of is put back");
+  check(file_is(choice_path, "b.png") && fake.copies >= 2, "the overlay is still drawn over it");
+  for (i = 0; i < fake.gl_source_count; i++) {
+    if (strncmp(fake.gl_sources[i], "#version 300 es\n#define VERTEX", 30) == 0) {
+      break;
+    }
+  }
+  check(i < fake.gl_source_count, "a.glsl's desktop version is built as GLSL ES 3");
+
+  /* the second frame only replaces the pixels of the first */
+  from = fake.gl_call_count;
+  play_frame(&renderer_a, game, 0xff445566);
+  at = find_call("glTexSubImage2D", from);
+  check(at >= 0 && count_calls("glTexImage2D", from) == 0 &&
+            memcmp(fake.gl_calls[at].pixel, "\x44\x55\x66\xff", 4) == 0,
+        "the next frame is uploaded over the last without making its texture again");
+  check(count_calls("glCompileShader", from) == 0, "nor building the shaders again");
+
+  /* L1 stretches the game, and the shaders draw over the whole screen */
+  release_all();
+  fake.buttons[BUTTON_L1] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_L1);
+  SDL_RenderPresent(&renderer_a);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  from = fake.gl_call_count;
+  play_frame(&renderer_a, game, 0xff445566);
+  at = find_call("glViewport", find_call("glViewport", find_call("glViewport", from) + 1) + 1);
+  check(file_is(screen_mode_path, "stretched") && at >= 0 && fake.gl_calls[at].args[0] == 0 &&
+            fake.gl_calls[at].args[1] == 0 && fake.gl_calls[at].args[2] == FAKE_OUTPUT_W &&
+            fake.gl_calls[at].args[3] == FAKE_OUTPUT_H,
+        "stretched, the shaders draw over the whole screen");
+  fake.buttons[BUTTON_L1] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_L1);
+  SDL_RenderPresent(&renderer_a);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  /* the menu reads back what the shaders drew */
+  release_all();
+  from = fake.gl_call_count;
+  change_option(pad, &renderer_a, GROUP_SHADERS, 0, 1);
+  check(file_has(shaders_path, "minarch_shaders_preset = zbroken.cfg"),
+        "Right on the Shaders group's preset picks the next one");
+
+  fake.ticks += 2000;
+  fake.copies = 0;
+  from = fake.gl_call_count;
+  play_frame(&renderer_a, game, 0xff445566);
+  check(count_calls("glDrawArrays", from) == 2 && !copied(game, 0) && notice_drawn(0),
+        "a shader that will not build is passed through, with a notice that it cannot run");
+  fake.ticks += 2000;
+  fake.copies = 0;
+  play_frame(&renderer_a, game, 0xff445566);
+  check(!notice_drawn(0), "which is only given once");
+
+  cycle_shader(pad);
+  SDL_RenderPresent(&renderer_a);
+  check(file_has(shaders_path, "minarch_nrofshaders = off"), "MENU+L1 past the last preset is None");
+  fake.copies = 0;
+  from = fake.gl_call_count;
+  play_frame(&renderer_a, game, 0xff445566);
+  check(copied(game, 0) && count_calls("glDrawArrays", from) == 0,
+        "which leaves pico-8's own copy in place again");
+
+  /* a renderer that is not SDL's GLES one cannot draw them */
+  SDL_DestroyRenderer(&renderer_a);
+  fake.renderer_name = "software";
+  game = SDL_CreateTexture(&renderer_b, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 128,
+                           128);
+  cycle_shader(pad);
+  fake.ticks += 2000;
+  fake.copies = 0;
+  from = fake.gl_call_count;
+  SDL_RenderPresent(&renderer_b);
+  check(file_has(shaders_path, "minarch_nrofshaders = off") && notice_drawn(0),
+        "on the software renderer MENU+L1 changes nothing and says why");
+  fake.copies = 0;
+  play_frame(&renderer_b, game, 0xff445566);
+  check(copied(game, 0) && count_calls("gl", from) == 0, "and GL is never touched");
+}
+
 int main(int argc, char **argv)
 {
   const char *mode = argc > 1 ? argv[1] : "";
@@ -1535,6 +1843,9 @@ int main(int argc, char **argv)
     return 2;
   }
   make_fixtures(states);
+  if (strcmp(mode, "shaders") == 0) {
+    make_shader_fixtures();
+  }
 
   pad = SDL_GameControllerOpen(0);
   check(pad != NULL, "the pad pico-8 opens is passed through");
@@ -1553,6 +1864,8 @@ int main(int argc, char **argv)
     test_shutdown(pad);
   } else if (strcmp(mode, "quit") == 0) {
     test_quit_without_saving(pad);
+  } else if (strcmp(mode, "shaders") == 0) {
+    test_shaders(pad);
   }
   if (*mode != '\0') {
     printf("1..%d\n", tally->tests);
@@ -1573,6 +1886,7 @@ int main(int argc, char **argv)
   test_quit(pad);
   test_crash();
   test_closed_pad(pad);
+  check(count_calls("gl", 0) == 0, "with no shaders GL is never touched");
 
   printf("1..%d\n", tally->tests);
   return tally->failures == 0 ? 0 : 1;

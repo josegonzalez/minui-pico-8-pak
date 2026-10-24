@@ -61,7 +61,8 @@ ADD --checksum=sha256:b653557e79afa5c63ac5fd2a8c4e16c1a55c5addb6cbaf767b4bf4e57c
 FROM --platform=linux/arm64 ${BASE_IMAGE} AS build-arm64
 
 COPY sdl-nosensor.c /src/sdl-nosensor.c
-COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h state.c state.h /src/
+COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h state.c state.h \
+  shader.c shader.h shader-gl.c shader-gl.h /src/
 COPY --from=stb /stb_image.h /stb_truetype.h /stb_image_write.h /src/
 COPY --from=dlmalloc /dlmalloc.c /src/
 COPY --from=lz4 /lz4.c /lz4.h /src/
@@ -73,7 +74,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
 # and nothing of the menu can be bound to a function of the same name in pico-8.
 RUN gcc -shared -fPIC -fvisibility=hidden -O2 -Wall -Wextra -Werror \
   -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c /src/crash.c \
-  /src/state.c -ldl -lpthread
+  /src/state.c /src/shader.c /src/shader-gl.c -ldl -lpthread
 
 # The display shim has to export every wrapper and nothing of the decoders, the
 # menu or the save state arena, must not go looking for an SDL2_image at
@@ -83,6 +84,7 @@ RUN readelf -V /display.so | grep -q 'GLIBC_2.17' \
   && ! readelf -V /display.so | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_RenderPresent$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_RenderCopy$' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_UpdateTexture$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_PollEvent$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetButton$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetAxis$' \
@@ -95,7 +97,7 @@ RUN readelf -V /display.so | grep -q 'GLIBC_2.17' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ calloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ realloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ free$' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state)_' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state|shader)_' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs|frexp|ldexp)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
@@ -113,14 +115,15 @@ RUN readelf -V /out.so | grep -q 'GLIBC_2.17' \
 
 FROM --platform=linux/arm/v7 ${BASE_IMAGE} AS build-arm
 
-COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h state.c state.h /src/
+COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h state.c state.h \
+  shader.c shader.h shader-gl.c shader-gl.h /src/
 COPY --from=stb /stb_image.h /stb_truetype.h /stb_image_write.h /src/
 COPY --from=dlmalloc /dlmalloc.c /src/
 COPY --from=lz4 /lz4.c /lz4.h /src/
 
 RUN gcc -shared -fPIC -fvisibility=hidden -O2 -Wall -Wextra -Werror \
   -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c /src/crash.c \
-  /src/state.c -ldl -lpthread
+  /src/state.c /src/shader.c /src/shader-gl.c -ldl -lpthread
 
 # GLIBC_2.4 is the armhf base version, so the same ceiling holds here
 RUN readelf -h /display.so | grep -q 'ARM$' \
@@ -128,6 +131,7 @@ RUN readelf -h /display.so | grep -q 'ARM$' \
   && ! readelf -V /display.so | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_RenderPresent$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_RenderCopy$' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_UpdateTexture$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_PollEvent$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetButton$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetAxis$' \
@@ -140,18 +144,20 @@ RUN readelf -h /display.so | grep -q 'ARM$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ calloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ realloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ free$' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state)_' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state|shader)_' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs|frexp|ldexp)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
 
 # The display shim is run against a fake libSDL2 that records what reaches it,
-# as pico-8 would run it against the device's, and the menu is tested on its
-# own with the fonts it finds on the device. Export takes the shim from these
+# as pico-8 would run it against the device's, along with a fake GL for the
+# shaders, and the menu is tested on its own with the fonts it finds on the
+# device, as are the shader settings. Export takes the shim from these
 # stages, so one that fails here never reaches lib/.
 FROM build-arm64 AS test-arm64
 
-COPY test/fake-sdl.h test/fake-sdl.c test/display-test.c test/menu-test.c /src/test/
+COPY test/fake-sdl.h test/fake-sdl.c test/display-test.c test/menu-test.c test/shader-test.c \
+  /src/test/
 COPY --from=fonts /BPreplayBold-unhinted.otf /font1.ttf /fonts/
 
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
@@ -159,12 +165,15 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
   && gcc -O2 -Wall -Wextra -Werror -no-pie -o /src/test/display-test /src/test/display-test.c \
   /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test -ldl \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/menu-test /src/test/menu-test.c \
-  /src/menu.c /src/gfx.c /src/cart.c -lm
+  /src/menu.c /src/gfx.c /src/cart.c /src/shader.c -lm \
+  && gcc -O2 -Wall -Wextra -Werror -o /src/test/shader-test /src/test/shader-test.c /src/shader.c
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-event \
   && LD_PRELOAD=/display.so /src/test/display-test quit-shortcut \
-  && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
+  && LD_PRELOAD=/display.so /src/test/display-test shaders \
+  && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf \
+  && /src/test/shader-test
 
 # Save states, in runs that share a folder: states saves the slot resume
 # puts back in a process of its own, as a device starting a cart would, and
@@ -178,7 +187,8 @@ RUN export PICO_PAK_STATES_DIR=/tmp/display-test-states/states \
 
 FROM build-arm AS test-arm
 
-COPY test/fake-sdl.h test/fake-sdl.c test/display-test.c test/menu-test.c /src/test/
+COPY test/fake-sdl.h test/fake-sdl.c test/display-test.c test/menu-test.c test/shader-test.c \
+  /src/test/
 COPY --from=fonts /BPreplayBold-unhinted.otf /font1.ttf /fonts/
 
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
@@ -186,12 +196,15 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
   && gcc -O2 -Wall -Wextra -Werror -no-pie -o /src/test/display-test /src/test/display-test.c \
   /src/test/libSDL2-2.0.so.0 -Wl,-rpath,/src/test -ldl \
   && gcc -O2 -Wall -Wextra -Werror -o /src/test/menu-test /src/test/menu-test.c \
-  /src/menu.c /src/gfx.c /src/cart.c -lm
+  /src/menu.c /src/gfx.c /src/cart.c /src/shader.c -lm \
+  && gcc -O2 -Wall -Wextra -Werror -o /src/test/shader-test /src/test/shader-test.c /src/shader.c
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-event \
   && LD_PRELOAD=/display.so /src/test/display-test quit-shortcut \
-  && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
+  && LD_PRELOAD=/display.so /src/test/display-test shaders \
+  && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf \
+  && /src/test/shader-test
 
 # Save states, in runs that share a folder: states saves the slot resume
 # puts back in a process of its own, as a device starting a cart would, and

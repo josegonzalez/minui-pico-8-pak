@@ -67,7 +67,31 @@ static const struct config_option {
 };
 
 static const char *const option_labels[MENU_CONFIG_FIRST] = {
-    "Screen Mode", "Overlay", "Copy Splore Carts", "Splore Artwork", "Auto Save on Exit"};
+    "Screen Mode",
+    "Overlay",
+    "Copy Splore Carts",
+    "Splore Artwork",
+    "Auto Save on Exit",
+    "Preset",
+    "Number of Shaders",
+    "Screen Sharpness",
+    "Shader 1",
+    "Shader 1 Filter",
+    "Shader 1 Source Type",
+    "Shader 1 Texture Type",
+    "Shader 1 Scale",
+    "Shader 2",
+    "Shader 2 Filter",
+    "Shader 2 Source Type",
+    "Shader 2 Texture Type",
+    "Shader 2 Scale",
+    "Shader 3",
+    "Shader 3 Filter",
+    "Shader 3 Source Type",
+    "Shader 3 Texture Type",
+    "Shader 3 Scale",
+    "Parameters",
+};
 /* the values the auto-save file holds */
 static const char *const off_on_values[] = {"off", "on"};
 
@@ -77,6 +101,19 @@ static const char *const option_descriptions[MENU_CONFIG_FIRST] = {
     "Copies the carts Splore downloaded into the roms folder.\nApplies when Splore exits.",
     "The cover the Splore cart shows in the game list.\nApplies straight away.",
     "Saves the game for resuming when you quit.\nShutting down always saves it.",
+    "A preset from /Shaders, setting the shaders below.\nNeeds .glsl files in /Shaders/glsl.",
+    "How many shaders the game is drawn through.",
+    "How the last shader is scaled to the screen.\nLINEAR smooths it, NEAREST keeps it sharp.",
+    [MENU_SHADER_PARAMETERS] = "The settings the shaders in use offer.",
+};
+
+/* every pass's rows share these */
+static const char *const shader_pass_descriptions[MENU_SHADER_PASS_ROWS] = {
+    "The shader this pass runs, from /Shaders/glsl.",
+    "How this pass reads the one before it.",
+    "Whether the shader's input size is the game's\nor the pass before's.",
+    "Whether the shader's texture size is the game's\nor the pass before's.",
+    "How big this pass draws, times the pass before\nor the screen's size, which can be slow.",
 };
 
 static const int frontend_settings[] = {MENU_SCREEN_MODE, MENU_OVERLAY, MENU_SHOW_FPS};
@@ -94,17 +131,59 @@ static const struct group {
     {"Frontend", "The screen mode, the overlay and the frame rate.", 3, frontend_settings},
     {"Emulator", "PICO-8's own volume and battery saver, and saving on exit.", 3,
      emulator_settings},
+    /* its rows depend on the shaders found and in use, so shader_rows lists them */
+    {"Shaders", "NextUI's shaders and presets, from /Shaders.", 0, NULL},
     {"Splore", "Copying Splore's carts, its cover and what it shows.", 4, splore_settings},
     {"Shortcuts", "Buttons for a screenshot, quitting, resetting the game and more.", 0, NULL},
 };
 
-int menu_group_size(int group)
+/* whether there are shaders to choose from and a context to draw them with */
+static int shaders_usable(const struct menu_settings *settings)
 {
-  return groups[group].count;
+  return !settings->shaders_unavailable && settings->shader_program_count > 0;
 }
 
-int menu_group_setting(int group, int row)
+int menu_shaders_on(const struct menu_settings *settings)
 {
+  return shaders_usable(settings) && settings->shaders.passes > 0;
+}
+
+/* minarch's Shaders page, with a pass's rows for each pass in use and Parameters when there are any */
+static int shader_rows(const struct menu_settings *settings, int *rows)
+{
+  int count = 0, pass, row;
+
+  rows[count++] = MENU_SHADER_PRESET;
+  if (!shaders_usable(settings)) {
+    return count;
+  }
+  rows[count++] = MENU_SHADER_PASSES;
+  rows[count++] = MENU_SHADER_SHARPNESS;
+  for (pass = 0; pass < settings->shaders.passes && pass < SHADER_PASSES; pass++) {
+    for (row = 0; row < MENU_SHADER_PASS_ROWS; row++) {
+      rows[count++] = MENU_SHADER1_PROGRAM + pass * MENU_SHADER_PASS_ROWS + row;
+    }
+  }
+  if (settings->shaders.passes > 0 && settings->shader_param_count > 0) {
+    rows[count++] = MENU_SHADER_PARAMETERS;
+  }
+  return count;
+}
+
+int menu_group_size(const struct menu *menu, int group)
+{
+  int rows[MENU_SETTING_COUNT];
+
+  return group == MENU_GROUP_SHADERS ? shader_rows(menu->settings, rows) : groups[group].count;
+}
+
+int menu_group_setting(const struct menu *menu, int group, int row)
+{
+  int rows[MENU_SETTING_COUNT];
+
+  if (group == MENU_GROUP_SHADERS) {
+    return row < shader_rows(menu->settings, rows) ? rows[row] : MENU_SHADER_PRESET;
+  }
   return groups[group].settings[row];
 }
 
@@ -370,6 +449,124 @@ void menu_open(struct menu *menu, struct menu_settings *settings, const char *ti
   }
   menu->binding = -1;
   menu->dirty = 1;
+  menu_load_shader_params(settings);
+}
+
+/* which pass a shader row is for, and which of the pass's rows it is */
+static int shader_pass(int row)
+{
+  return (row - MENU_SHADER1_PROGRAM) / MENU_SHADER_PASS_ROWS;
+}
+
+static int shader_pass_row(int row)
+{
+  return MENU_SHADER1_PROGRAM + (row - MENU_SHADER1_PROGRAM) % MENU_SHADER_PASS_ROWS;
+}
+
+static int is_shader_pass_row(int row)
+{
+  return row >= MENU_SHADER1_PROGRAM && row < MENU_SHADER_PARAMETERS;
+}
+
+/* the index of name among count names, or -1 */
+static int find_name(char *const *names, int count, const char *name)
+{
+  int i;
+
+  for (i = 0; i < count; i++) {
+    if (strcmp(names[i], name) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/* a file named without what follows its last dot, as minarch shows shaders and presets */
+static void without_extension(const char *name, char *out, size_t size)
+{
+  const char *dot = strrchr(name, '.');
+
+  snprintf(out, size, "%.*s", (int)(dot != NULL && dot != name ? dot - name : (long)strlen(name)),
+           name);
+}
+
+/*
+ * The preset in use, as 1 and up, None, 0, when the shaders are off, or -1
+ * for shaders on without a preset that is in the folder
+ */
+static int current_preset(const struct menu_settings *settings)
+{
+  int found;
+
+  if (!menu_shaders_on(settings)) {
+    return 0;
+  }
+  found = find_name(settings->shader_presets, settings->shader_preset_count,
+                    settings->shaders.preset);
+  return found >= 0 ? found + 1 : -1;
+}
+
+void menu_load_shader_params(struct menu_settings *settings)
+{
+  settings->shader_param_count =
+      shaders_usable(settings)
+          ? shader_load_params(&settings->shaders, settings->shader_programs_dir,
+                               settings->shader_params, SHADER_MAX_PARAMS)
+          : 0;
+}
+
+/* the shaders changed, so they are saved and the parameters of those in use read again */
+static void save_shaders(struct menu_settings *settings)
+{
+  if (settings->shaders_path != NULL && *settings->shaders_path != '\0' &&
+      !shader_write_settings(&settings->shaders, settings->shaders_path)) {
+    LOG("cannot save the shaders to %s\n", settings->shaders_path);
+  }
+  menu_load_shader_params(settings);
+}
+
+/* None turns the shaders off and keeps the passes as they were, and a preset is read over them */
+static void set_preset(struct menu_settings *settings, int preset)
+{
+  struct shader_settings *shaders = &settings->shaders;
+
+  if (preset == 0) {
+    shaders->passes = 0;
+    shaders->preset[0] = '\0';
+    LOG("turned the shaders off\n");
+  } else if (!shader_apply_preset(shaders, settings->shader_presets_dir,
+                                  settings->shader_presets[preset - 1])) {
+    LOG("cannot read the preset %s/%s\n", settings->shader_presets_dir,
+        settings->shader_presets[preset - 1]);
+  } else {
+    LOG("switched to the %s shader preset\n", settings->shader_presets[preset - 1]);
+  }
+  save_shaders(settings);
+}
+
+void menu_cycle_shader(struct menu_settings *settings, char *shown, size_t size)
+{
+  char name[SHADER_NAME_SIZE];
+  int next;
+
+  if (settings->shaders_unavailable) {
+    snprintf(shown, size, "Shaders need OpenGL ES");
+    return;
+  }
+  if (!shaders_usable(settings) || settings->shader_preset_count == 0) {
+    snprintf(shown, size, "No shader presets");
+    return;
+  }
+
+  next = current_preset(settings);
+  next = (next < 0 ? 1 : next + 1) % (settings->shader_preset_count + 1);
+  set_preset(settings, next);
+  if (next == 0) {
+    snprintf(shown, size, "Shader: None");
+    return;
+  }
+  without_extension(settings->shader_presets[next - 1], name, sizeof name);
+  snprintf(shown, size, "Shader: %s", name);
 }
 
 static int choice_count(const struct menu *menu, int row)
@@ -385,6 +582,28 @@ static int choice_count(const struct menu *menu, int row)
     return MENU_SPLORE_ARTWORK_COUNT;
   case MENU_AUTO_SAVE:
     return 2;
+  case MENU_SHADER_PRESET:
+    return shaders_usable(menu->settings) ? menu->settings->shader_preset_count + 1 : 1;
+  case MENU_SHADER_PASSES:
+    return SHADER_PASSES + 1;
+  case MENU_SHADER_SHARPNESS:
+    return SHADER_FILTER_COUNT;
+  case MENU_SHADER_PARAMETERS:
+    return 1;
+  default:
+    break;
+  }
+
+  switch (is_shader_pass_row(row) ? shader_pass_row(row) : row) {
+  case MENU_SHADER1_PROGRAM:
+    return menu->settings->shader_program_count;
+  case MENU_SHADER1_FILTER:
+    return SHADER_FILTER_COUNT;
+  case MENU_SHADER1_SRCTYPE:
+  case MENU_SHADER1_SCALETYPE:
+    return SHADER_SIZE_TYPE_COUNT;
+  case MENU_SHADER1_UPSCALE:
+    return SHADER_UPSCALE_COUNT;
   default:
     return config_options[row - MENU_CONFIG_FIRST].count;
   }
@@ -418,8 +637,47 @@ static void choice_name(const struct menu *menu, int row, int choice, char *out,
   case MENU_AUTO_SAVE:
     snprintf(out, size, "%s", off_on[choice]);
     break;
+  case MENU_SHADER_PRESET:
+    if (choice < 0) {
+      snprintf(out, size, "Custom");
+    } else if (choice == 0) {
+      snprintf(out, size, "None");
+    } else {
+      without_extension(menu->settings->shader_presets[choice - 1], out, size);
+    }
+    break;
+  case MENU_SHADER_PASSES:
+    snprintf(out, size, "%s", choice == 0 ? "Off" : shader_pass_count_names[choice]);
+    break;
+  case MENU_SHADER_SHARPNESS:
+    snprintf(out, size, "%s", shader_filter_names[choice]);
+    break;
+  case MENU_SHADER_PARAMETERS:
+    snprintf(out, size, "%s", "");
+    break;
   default:
-    snprintf(out, size, "%s", config_options[row - MENU_CONFIG_FIRST].names[choice]);
+    if (!is_shader_pass_row(row)) {
+      snprintf(out, size, "%s", config_options[row - MENU_CONFIG_FIRST].names[choice]);
+      break;
+    }
+    switch (shader_pass_row(row)) {
+    case MENU_SHADER1_PROGRAM:
+      /* a file the settings name that is not in the folder is still shown, as it is what is used */
+      without_extension(choice >= 0 ? menu->settings->shader_programs[choice]
+                                    : menu->settings->shaders.pass[shader_pass(row)].program,
+                        out, size);
+      break;
+    case MENU_SHADER1_FILTER:
+      snprintf(out, size, "%s", shader_filter_names[choice]);
+      break;
+    case MENU_SHADER1_SRCTYPE:
+    case MENU_SHADER1_SCALETYPE:
+      snprintf(out, size, "%s", shader_size_type_names[choice]);
+      break;
+    default:
+      snprintf(out, size, "%s", shader_upscale_names[choice]);
+      break;
+    }
     break;
   }
 }
@@ -437,9 +695,36 @@ static int current_choice(const struct menu *menu, int row)
     return menu->splore_artwork;
   case MENU_AUTO_SAVE:
     return menu->settings->auto_save;
+  case MENU_SHADER_PRESET:
+    return shaders_usable(menu->settings) ? current_preset(menu->settings) : 0;
+  case MENU_SHADER_PASSES:
+    return menu->settings->shaders.passes;
+  case MENU_SHADER_SHARPNESS:
+    return menu->settings->shaders.scale_filter;
+  case MENU_SHADER_PARAMETERS:
+    return 0;
   default:
-    return menu->config[row - MENU_CONFIG_FIRST];
+    break;
   }
+
+  if (is_shader_pass_row(row)) {
+    const struct shader_pass *pass = &menu->settings->shaders.pass[shader_pass(row)];
+
+    switch (shader_pass_row(row)) {
+    case MENU_SHADER1_PROGRAM:
+      return find_name(menu->settings->shader_programs, menu->settings->shader_program_count,
+                       pass->program);
+    case MENU_SHADER1_FILTER:
+      return pass->filter;
+    case MENU_SHADER1_SRCTYPE:
+      return pass->srctype;
+    case MENU_SHADER1_SCALETYPE:
+      return pass->scaletype;
+    default:
+      return pass->upscale;
+    }
+  }
+  return menu->config[row - MENU_CONFIG_FIRST];
 }
 
 void menu_option_value(const struct menu *menu, int row, char *out, size_t size)
@@ -494,10 +779,10 @@ static const char *const button_labels[MENU_BINDABLE_BUTTONS] = {
 #define MENU_BUTTON 5
 
 static const char *const shortcut_keys[MENU_SHORTCUT_COUNT] = {
-    "screenshot", "save-gif", "quit", "reset", "screen-mode", "overlay", "cpu-meter"};
+    "screenshot", "save-gif", "quit", "reset", "screen-mode", "overlay", "shader", "cpu-meter"};
 static const char *const shortcut_labels[MENU_SHORTCUT_COUNT] = {
-    "Screenshot",        "Save GIF",      "Quit",           "Reset Game",
-    "Cycle Screen Mode", "Cycle Overlay", "Toggle CPU Meter"};
+    "Screenshot",    "Save GIF",     "Quit",           "Reset Game", "Cycle Screen Mode",
+    "Cycle Overlay", "Cycle Shader", "Toggle CPU Meter"};
 
 int menu_is_bindable(int button)
 {
@@ -617,11 +902,51 @@ void menu_bind(struct menu *menu, int button, int with_menu)
   menu->dirty = 1;
 }
 
+/* a pass's setting, which is saved with the rest of the shaders */
+static void set_shader_pass(struct menu_settings *settings, int row, int choice)
+{
+  struct shader_pass *pass = &settings->shaders.pass[shader_pass(row)];
+
+  switch (shader_pass_row(row)) {
+  case MENU_SHADER1_PROGRAM:
+    snprintf(pass->program, sizeof pass->program, "%s", settings->shader_programs[choice]);
+    break;
+  case MENU_SHADER1_FILTER:
+    pass->filter = choice;
+    break;
+  case MENU_SHADER1_SRCTYPE:
+    pass->srctype = choice;
+    break;
+  case MENU_SHADER1_SCALETYPE:
+    pass->scaletype = choice;
+    break;
+  default:
+    pass->upscale = choice;
+    break;
+  }
+  LOG("set %s to choice %d\n", option_labels[row], choice);
+  save_shaders(settings);
+}
+
 static void step_option(struct menu *menu, int row, int step)
 {
   struct menu_settings *settings = menu->settings;
   int count = choice_count(menu, row);
-  int choice = (current_choice(menu, row) + step + count) % count;
+  int current = current_choice(menu, row);
+  int choice;
+
+  /* with no presets, stepping None would turn off shaders set by hand */
+  if (count <= 0 || (row == MENU_SHADER_PRESET && count <= 1)) {
+    return;
+  }
+  /*
+   * Custom shaders step onto the first or last preset, and a shader file the
+   * folder no longer has onto the first or last there is
+   */
+  if (current < 0) {
+    current = row == MENU_SHADER_PRESET ? 0 : step > 0 ? -1 : 0;
+  }
+  choice = (current + step + count) % count;
 
   switch (row) {
   case MENU_SCREEN_MODE:
@@ -647,12 +972,49 @@ static void step_option(struct menu *menu, int row, int step)
     LOG("set Auto Save on Exit to %s\n", off_on_values[choice]);
     menu_write_line(settings->auto_save_path, off_on_values[choice]);
     break;
+  case MENU_SHADER_PRESET:
+    if (shaders_usable(settings)) {
+      set_preset(settings, choice);
+    }
+    break;
+  case MENU_SHADER_PASSES:
+    settings->shaders.passes = choice;
+    LOG("set Number of Shaders to %s\n", shader_pass_count_names[choice]);
+    save_shaders(settings);
+    break;
+  case MENU_SHADER_SHARPNESS:
+    settings->shaders.scale_filter = choice;
+    LOG("set Screen Sharpness to %s\n", shader_filter_names[choice]);
+    save_shaders(settings);
+    break;
+  case MENU_SHADER_PARAMETERS:
+    break;
   default:
+    if (is_shader_pass_row(row)) {
+      set_shader_pass(settings, row, choice);
+      break;
+    }
     menu->config[row - MENU_CONFIG_FIRST] = choice;
     LOG("set %s to %s\n", config_options[row - MENU_CONFIG_FIRST].key,
         config_options[row - MENU_CONFIG_FIRST].values[choice]);
     write_config(settings, row - MENU_CONFIG_FIRST, choice);
     break;
+  }
+}
+
+/* steps a shader parameter through its range, wrapping as the other settings do */
+static void step_param(struct menu_settings *settings, int index, int step)
+{
+  const struct shader_param *param = &settings->shader_params[index];
+  int count = shader_param_steps(param);
+  int at = shader_param_index(param, shader_param_value(&settings->shaders, param));
+  float value = shader_param_at(param, (at + step + count) % count);
+
+  shader_set_value(&settings->shaders, param->name, value);
+  LOG("set the shader parameter %s to %.2f\n", param->name, value);
+  if (settings->shaders_path != NULL && *settings->shaders_path != '\0' &&
+      !shader_write_settings(&settings->shaders, settings->shaders_path)) {
+    LOG("cannot save the shaders to %s\n", settings->shaders_path);
   }
 }
 
@@ -678,9 +1040,13 @@ static void move_row(struct menu *menu, int step)
   } else if (menu->page == MENU_PAGE_SHORTCUTS) {
     menu->shortcut_row = (menu->shortcut_row + step + MENU_SHORTCUT_COUNT) % MENU_SHORTCUT_COUNT;
   } else if (menu->page == MENU_PAGE_GROUP) {
-    int count = menu_group_size(menu->option_row);
+    int count = menu_group_size(menu, menu->option_row);
 
     menu->setting_row = (menu->setting_row + step + count) % count;
+  } else if (menu->page == MENU_PAGE_SHADER_PARAMS) {
+    int count = menu->settings->shader_param_count;
+
+    menu->param_row = count > 0 ? (menu->param_row + step + count) % count : 0;
   } else {
     menu->option_row = (menu->option_row + step + MENU_GROUP_COUNT) % MENU_GROUP_COUNT;
   }
@@ -784,13 +1150,37 @@ enum menu_result menu_update(struct menu *menu, unsigned pressed, unsigned held,
     return MENU_STAY;
   }
 
+  if (menu->page == MENU_PAGE_SHADER_PARAMS) {
+    if (pressed & MENU_B) {
+      menu->page = MENU_PAGE_GROUP;
+      menu->dirty = 1;
+    } else if ((pressed & (MENU_LEFT | MENU_RIGHT | MENU_A)) &&
+               menu->param_row < menu->settings->shader_param_count) {
+      step_param(menu->settings, menu->param_row, pressed & MENU_LEFT ? -1 : 1);
+      menu->dirty = 1;
+    }
+    return MENU_STAY;
+  }
+
   if (menu->page == MENU_PAGE_GROUP) {
+    int setting = menu_group_setting(menu, menu->option_row, menu->setting_row);
+
     if (pressed & MENU_B) {
       menu->page = MENU_PAGE_OPTIONS;
       menu->dirty = 1;
+    } else if (setting == MENU_SHADER_PARAMETERS) {
+      if (pressed & (MENU_RIGHT | MENU_A)) {
+        menu->page = MENU_PAGE_SHADER_PARAMS;
+        menu->param_row = 0;
+        menu->param_top = 0;
+        menu->dirty = 1;
+      }
     } else if (pressed & (MENU_LEFT | MENU_RIGHT | MENU_A)) {
-      step_option(menu, menu_group_setting(menu->option_row, menu->setting_row),
-                  pressed & MENU_LEFT ? -1 : 1);
+      step_option(menu, setting, pressed & MENU_LEFT ? -1 : 1);
+      /* fewer passes leave fewer rows */
+      if (menu->setting_row >= menu_group_size(menu, menu->option_row)) {
+        menu->setting_row = menu_group_size(menu, menu->option_row) - 1;
+      }
       menu->dirty = 1;
     }
     return MENU_STAY;
@@ -1175,6 +1565,9 @@ static const char *option_label(int row)
 
 static const char *option_description(int row)
 {
+  if (is_shader_pass_row(row)) {
+    return shader_pass_descriptions[shader_pass_row(row) - MENU_SHADER1_PROGRAM];
+  }
   return row < MENU_CONFIG_FIRST ? option_descriptions[row]
                                  : config_options[row - MENU_CONFIG_FIRST].description;
 }
@@ -1208,12 +1601,24 @@ static void groups_value(const struct menu *menu, int row, char *out, size_t siz
 
 static const char *group_label(const struct menu *menu, int row)
 {
-  return option_label(menu_group_setting(menu->option_row, row));
+  return option_label(menu_group_setting(menu, menu->option_row, row));
 }
 
 static void group_value(const struct menu *menu, int row, char *out, size_t size)
 {
-  menu_option_value(menu, menu_group_setting(menu->option_row, row), out, size);
+  menu_option_value(menu, menu_group_setting(menu, menu->option_row, row), out, size);
+}
+
+/* a parameter shows the label its shader gives it, as minarch's list shows its name */
+static const char *param_label(const struct menu *menu, int row)
+{
+  return menu->settings->shader_params[row].label;
+}
+
+static void param_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  snprintf(out, size, "%.2f",
+           shader_param_value(&menu->settings->shaders, &menu->settings->shader_params[row]));
 }
 
 static const char *shortcuts_label(const struct menu *menu, int row)
@@ -1337,16 +1742,19 @@ static void draw_group(struct menu *menu, gfx_canvas *canvas, const gfx_metrics 
                        const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
 {
   const struct group *group = &groups[menu->option_row];
+  int count = menu_group_size(menu, menu->option_row);
   int small = gfx_u(m, GFX_FONT_SMALL), tiny = gfx_u(m, GFX_FONT_TINY);
   int op = gfx_u(m, GFX_OPTION_PADDING);
-  struct list_page page = {group->label, group->count, menu->setting_row, &menu->setting_top, 0,
-                           option_description(group->settings[menu->setting_row]), group_label,
-                           group_value};
+  struct list_page page = {
+      group->label,       count,       menu->setting_row,
+      &menu->setting_top, 0,
+      option_description(menu_group_setting(menu, menu->option_row, menu->setting_row)),
+      group_label,        group_value};
   char value[256];
   int row, choice;
 
-  for (row = 0; row < group->count; row++) {
-    int setting = group->settings[row];
+  for (row = 0; row < count; row++) {
+    int setting = menu_group_setting(menu, menu->option_row, row);
 
     for (choice = 0; choice < choice_count(menu, setting); choice++) {
       int w;
@@ -1357,6 +1765,45 @@ static void draw_group(struct menu *menu, gfx_canvas *canvas, const gfx_metrics 
       page.widest = w > page.widest ? w : page.widest;
     }
   }
+
+  draw_list(menu, canvas, m, font, theme, battery, &page);
+}
+
+/* the shaders' parameters, as wide as the longest label and any value in its range needs */
+static void draw_params(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                        const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
+{
+  const struct menu_settings *settings = menu->settings;
+  int small = gfx_u(m, GFX_FONT_SMALL), tiny = gfx_u(m, GFX_FONT_TINY);
+  int op = gfx_u(m, GFX_OPTION_PADDING);
+  struct list_page page = {"Parameters", settings->shader_param_count, menu->param_row,
+                           &menu->param_top, 0, NULL, param_label, param_value};
+  char value[64], description[256];
+  int row;
+
+  for (row = 0; row < settings->shader_param_count; row++) {
+    const struct shader_param *param = &settings->shader_params[row];
+    float ends[] = {param->min, param->max, param->def};
+    size_t i;
+
+    for (i = 0; i < sizeof ends / sizeof *ends; i++) {
+      int w;
+
+      snprintf(value, sizeof value, "%.2f", ends[i]);
+      w = gfx_text_width(font, small, param->label) + gfx_text_width(font, tiny, value) + 4 * op;
+      page.widest = w > page.widest ? w : page.widest;
+    }
+  }
+
+  if (menu->param_row < settings->shader_param_count) {
+    const struct shader_param *param = &settings->shader_params[menu->param_row];
+
+    snprintf(description, sizeof description, "%s, from %.2f to %.2f.\nIt starts at %.2f.",
+             param->name, param->min, param->max, param->def);
+  } else {
+    description[0] = '\0';
+  }
+  page.description = description;
 
   draw_list(menu, canvas, m, font, theme, battery, &page);
 }
@@ -1460,6 +1907,8 @@ void menu_draw(struct menu *menu, gfx_canvas *canvas, const uint32_t *frame, con
     draw_shortcuts(menu, canvas, &metrics, font, theme, battery);
   } else if (menu->page == MENU_PAGE_GROUP) {
     draw_group(menu, canvas, &metrics, font, theme, battery);
+  } else if (menu->page == MENU_PAGE_SHADER_PARAMS) {
+    draw_params(menu, canvas, &metrics, font, theme, battery);
   } else {
     draw_options(menu, canvas, &metrics, font, theme, battery);
   }
