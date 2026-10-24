@@ -995,6 +995,12 @@ teardown() {
   [ "$(grep -c "^desktop_path" "$HOME/config.txt")" -eq 1 ]
 }
 
+@test "every config names pico-8's GIFs for when they were saved" {
+  for config in "$REPO_ROOT"/config/*.txt; do
+    grep -qx "capture_timestamps 1" "$config"
+  done
+}
+
 @test "install_config keeps every other key from the template" {
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
 

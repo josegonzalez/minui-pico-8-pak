@@ -109,7 +109,7 @@ The last row of the options, `Shortcuts`, sets buttons that do something straigh
 | Cycle Overlay     | Steps through `None` and then each overlay                            |
 | Toggle CPU Meter  | Shows or hides PICO-8's CPU meter, by pressing its `Ctrl` + `P`       |
 
-Screenshots and GIFs are saved to the `/Screenshots` folder on your SD card. PICO-8 names its GIFs for the cart, such as `celeste_0.gif`, and shows its own message when one is saved.
+Screenshots and GIFs are saved to the `/Screenshots` folder on your SD card. PICO-8 names its GIFs for the cart and when they were saved, such as `celeste_20260124_120823.gif`, and shows its own message when one is saved.
 
 To bind one, choose it and press `A`, then press the button to use. Hold `Menu` while pressing it to make the shortcut `Menu` + that button. Tap `Menu` alone to give up, and press `X` on a shortcut to clear it. A button can only do one thing, so binding it to one shortcut takes it from any other.
 

@@ -158,5 +158,5 @@ gfx_grid_lines 16
 
 // file naming for screenshot / gif / wav captures
 // 0 sequential (foo_0.png, foo_1.png)    1 timestamp (foo_20240115_120823.png)
-capture_timestamps 0
+capture_timestamps 1
 
