@@ -260,7 +260,7 @@ pak_platforms() {
 # into pico-8 instead, and malloc's family is exported for the save state arena
 @test "the display shim exports only its SDL wrappers and malloc's family" {
   [ "$(grep -c -- '-fvisibility=hidden' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
-  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace| (gfx|menu|cart|crash|state)_'" \
+  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state)_'" \
     "$REPO_ROOT/shim/Dockerfile"
   [ "$(grep -c -- 'DEFAULT +\[0-9\]+ malloc\$' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
 }

@@ -4,7 +4,7 @@
  *
  *   LD_PRELOAD=sdl-display.so display-test [quit-event | quit-shortcut]
  *   PICO_PAK_STATES_DIR=/tmp/display-test-states/states \
- *     LD_PRELOAD=sdl-display.so display-test states | resume | shutdown
+ *     LD_PRELOAD=sdl-display.so display-test states | resume | shutdown | quit
  *
  * The menu holds pico-8 inside SDL_RenderPresent, so each menu is driven by a
  * script of pad states the fake steps through on every SDL_Delay. The shim
@@ -115,6 +115,7 @@ static char switcher_dir[4096];
 static char shortcuts_path[4096];
 static char screenshots_dir[4096];
 static char auto_resume_path[4096];
+static char auto_save_path[4096];
 
 static int preview_is_frame(int slot, int w, int h, uint32_t colour);
 static char input_path[4096];
@@ -367,6 +368,8 @@ static void make_fixtures(int states)
   snprintf(auto_resume_path, sizeof auto_resume_path, "%s/auto_resume.txt", dir);
   setenv("PICO_PAK_AUTO_RESUME_PATH", auto_resume_path, 1);
   setenv("PICO_PAK_AUTO_RESUME_ROM", "/Roms/Pico-8 (PICO)/Celeste.p8", 1);
+  snprintf(auto_save_path, sizeof auto_save_path, "%s/auto-save-on-exit", dir);
+  setenv("PICO_PAK_AUTO_SAVE", auto_save_path, 1);
 
   /*
    * MENU+X screenshot, MENU+Y reset, L1 alone screen mode, MENU+R2 overlay,
@@ -1288,6 +1291,20 @@ static int written(const char *slot)
   return slot_named(slot);
 }
 
+/* a copy drawn into the bottom right corner, NextUI's 12 units in, as the save toast is */
+static int toast_drawn(void)
+{
+  int i, margin = 12 * 3;
+
+  for (i = 0; i < fake.copies && i < 256; i++) {
+    if (fake.copy[i].has_dst && fake.copy[i].dst.x + fake.copy[i].dst.w == FAKE_OUTPUT_W - margin &&
+        fake.copy[i].dst.y + fake.copy[i].dst.h == FAKE_OUTPUT_H - margin) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static long state_size(int slot)
 {
   char path[8192];
@@ -1297,14 +1314,26 @@ static long state_size(int slot)
   return stat(path, &info) == 0 ? (long)info.st_size : -1;
 }
 
-/* the same in every run, as what pico-8 loads from pico8.dat is */
+/*
+ * The same in every run, as what pico-8 loads from pico8.dat is, and as hard
+ * to pack, so a state that holds it is as big as it is
+ */
+static unsigned char big_byte(size_t i)
+{
+  uint32_t x = (uint32_t)i * 2654435761u + 7;
+
+  x ^= x >> 13;
+  x *= 0x5bd1e995u;
+  return (unsigned char)(x ^ (x >> 15));
+}
+
 static void make_big(void)
 {
   size_t i;
 
   big = malloc(BIG_SIZE);
   for (i = 0; big != NULL && i < BIG_SIZE; i++) {
-    big[i] = (unsigned char)(i * 31 + 7);
+    big[i] = big_byte(i);
   }
 }
 
@@ -1342,6 +1371,8 @@ static void test_states(void *pad)
   static const uint32_t quit[] = {BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_A)};
   int pushed;
 
+  /* Quit saves the resume slot here, which resume puts back */
+  write_file(auto_save_path, "on\n", 3);
   make_big();
   L0_cart = &marker;
   fake.frame_colour = 0x00205080;
@@ -1356,6 +1387,20 @@ static void test_states(void *pad)
   check(written("2") && state_exists(2), "Save on the slot two to the right saves slot 2");
   check(state_size(2) > 0 && state_size(2) < (long)BIG_SIZE,
         "leaving out what pico-8 loaded before its cart, which is as it was");
+
+  fake.copies = 0;
+  SDL_RenderPresent(&renderer_a);
+  check(toast_drawn() && fake.last_alpha == 255,
+        "once it is written the game shows it saved, in the bottom right corner");
+  fake.ticks += 1200;
+  fake.copies = 0;
+  SDL_RenderPresent(&renderer_a);
+  check(toast_drawn() && fake.last_alpha > 0 && fake.last_alpha < 255,
+        "and fades that out after a second");
+  fake.ticks += 1000;
+  fake.copies = 0;
+  SDL_RenderPresent(&renderer_a);
+  check(!toast_drawn(), "until it is gone");
   check(preview_is_frame(2, 341, 256, 0x00205080) && slot_named("2"),
         "with the game as its preview, named as the slot to resume");
   check(fake.audio_locks == 1 && fake.audio_unlocks == 1, "pico-8's audio is held while it saves");
@@ -1387,7 +1432,7 @@ static void test_states(void *pad)
   run_script(pad, quit, 3);
   check(fake.pushed == pushed + 1 && fake.pushed_type == SDL_QUIT, "Quit still quits pico-8");
   check(state_exists(9) && preview_is_frame(9, 341, 256, 0x00205080) && slot_named("9"),
-        "after saving slot 9, which the launchers resume, with its preview");
+        "after saving slot 9 with Auto Save on Exit on, with its preview, for the launchers to resume");
   check(access(auto_resume_path, F_OK) != 0, "Quit does not start the cart again at boot");
 }
 
@@ -1410,7 +1455,7 @@ static void test_resume(void *pad)
   SDL_RenderPresent(&renderer_a);
   check(marker == 7 && heap != NULL && strcmp(heap, "saved") == 0,
         "then the slot is put back, as it was when the last run quit");
-  check(big != NULL && big[0] == 7 && big[BIG_SIZE - 1] == (unsigned char)((BIG_SIZE - 1) * 31 + 7),
+  check(big != NULL && big[0] == big_byte(0) && big[BIG_SIZE - 1] == big_byte(BIG_SIZE - 1),
         "with what it left out as this run loaded it, wherever this run put it");
   (void)pad;
 }
@@ -1423,6 +1468,8 @@ static void test_shutdown(void *pad)
   int pushed = fake.pushed, status;
   pid_t child;
 
+  /* a shutdown saves whatever Auto Save on Exit is set to, as minarch does on powering off */
+  write_file(auto_save_path, "off\n", 4);
   SDL_RenderPresent(&renderer_a);
 
   /* a pico-8 that never presents again is still ended, a little after the signal */
@@ -1456,11 +1503,30 @@ static void test_shutdown(void *pad)
   (void)pad;
 }
 
+/* with Auto Save on Exit off, as it starts, Quit saves nothing and leaves the slot to resume alone */
+static void test_quit_without_saving(void *pad)
+{
+  static const uint32_t quit[] = {BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_A)};
+  char path[8192];
+  int pushed = fake.pushed;
+
+  unlink(auto_save_path);
+  snprintf(path, sizeof path, "%s/states/Celeste.p8.st9", dir);
+  unlink(path);
+  snprintf(path, sizeof path, "%s/Celeste.p8.0.bmp", switcher_dir);
+  unlink(path);
+  SDL_RenderPresent(&renderer_a);
+  run_script(pad, quit, 3);
+  check(fake.pushed == pushed + 1 && fake.pushed_type == SDL_QUIT, "Quit quits pico-8");
+  check(!state_exists(9) && slot_named("9"), "without saving, leaving the slot to resume as it was");
+  check(access(path, F_OK) != 0, "and gives the switcher no frame, as the cart has states");
+}
+
 int main(int argc, char **argv)
 {
   const char *mode = argc > 1 ? argv[1] : "";
   int states = strcmp(mode, "states") == 0 || strcmp(mode, "resume") == 0 ||
-               strcmp(mode, "shutdown") == 0;
+               strcmp(mode, "shutdown") == 0 || strcmp(mode, "quit") == 0;
   void *pad;
 
   tally = mmap(NULL, sizeof *tally, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -1485,6 +1551,8 @@ int main(int argc, char **argv)
     test_resume(pad);
   } else if (strcmp(mode, "shutdown") == 0) {
     test_shutdown(pad);
+  } else if (strcmp(mode, "quit") == 0) {
+    test_quit_without_saving(pad);
   }
   if (*mode != '\0') {
     printf("1..%d\n", tally->tests);

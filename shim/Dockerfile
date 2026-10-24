@@ -39,6 +39,15 @@ ADD --checksum=sha256:be7be56b40b4b31417e74e77687f9b96127ea6cae534cf236aee40a4c7
   https://gee.cs.oswego.edu/pub/misc/malloc.c \
   /dlmalloc.c
 
+# LZ4, BSD licensed, packs each save state as it is taken.
+FROM scratch AS lz4
+ADD --checksum=sha256:9396f7de527bc8435de9c7569fb7998e56545a84b4f3c2d808c0235c01774539 \
+  https://raw.githubusercontent.com/lz4/lz4/ebb370ca83af193212df4dcbadcc5d87bc0de2f0/lib/lz4.c \
+  /lz4.c
+ADD --checksum=sha256:26b82efc53d1570f3b54eef02e9c4764c1ad374ff03cac04e2ced5ea4d4c552f \
+  https://raw.githubusercontent.com/lz4/lz4/ebb370ca83af193212df4dcbadcc5d87bc0de2f0/lib/lz4.h \
+  /lz4.h
+
 # The fonts the menu finds on the device, MinUI's CFF one and NextUI's
 # TrueType one, for the menu tests alone: neither may ship with the pak.
 FROM scratch AS fonts
@@ -55,6 +64,7 @@ COPY sdl-nosensor.c /src/sdl-nosensor.c
 COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h state.c state.h /src/
 COPY --from=stb /stb_image.h /stb_truetype.h /stb_image_write.h /src/
 COPY --from=dlmalloc /dlmalloc.c /src/
+COPY --from=lz4 /lz4.c /lz4.h /src/
 
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
   -o /out.so /src/sdl-nosensor.c -ldl
@@ -85,7 +95,7 @@ RUN readelf -V /display.so | grep -q 'GLIBC_2.17' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ calloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ realloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ free$' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace| (gfx|menu|cart|crash|state)_' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state)_' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs|frexp|ldexp)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
@@ -106,6 +116,7 @@ FROM --platform=linux/arm/v7 ${BASE_IMAGE} AS build-arm
 COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h state.c state.h /src/
 COPY --from=stb /stb_image.h /stb_truetype.h /stb_image_write.h /src/
 COPY --from=dlmalloc /dlmalloc.c /src/
+COPY --from=lz4 /lz4.c /lz4.h /src/
 
 RUN gcc -shared -fPIC -fvisibility=hidden -O2 -Wall -Wextra -Werror \
   -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c /src/crash.c \
@@ -129,7 +140,7 @@ RUN readelf -h /display.so | grep -q 'ARM$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ calloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ realloc$' \
   && readelf -W --dyn-syms /display.so | grep -Eq ' FUNC +GLOBAL +DEFAULT +[0-9]+ free$' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace| (gfx|menu|cart|crash|state)_' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state)_' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs|frexp|ldexp)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
@@ -155,14 +166,15 @@ RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-shortcut \
   && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
 
-# Save states, in three runs that share a folder: states saves the slot
-# resume puts back in a process of its own, as a device starting a cart
-# would. The test is built at a fixed address, as pico8_dyn is, since the
+# Save states, in runs that share a folder: states saves the slot resume
+# puts back in a process of its own, as a device starting a cart would, and
+# shutdown and quit save it or not after that. The test is built at a fixed address, as pico8_dyn is, since the
 # build's sandbox cannot turn address randomising off for pico8_64's restart.
 RUN export PICO_PAK_STATES_DIR=/tmp/display-test-states/states \
   && LD_PRELOAD=/display.so /src/test/display-test states \
   && LD_PRELOAD=/display.so /src/test/display-test resume \
-  && LD_PRELOAD=/display.so /src/test/display-test shutdown
+  && LD_PRELOAD=/display.so /src/test/display-test shutdown \
+  && LD_PRELOAD=/display.so /src/test/display-test quit
 
 FROM build-arm AS test-arm
 
@@ -181,14 +193,15 @@ RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-shortcut \
   && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
 
-# Save states, in three runs that share a folder: states saves the slot
-# resume puts back in a process of its own, as a device starting a cart
-# would. The test is built at a fixed address, as pico8_dyn is, since the
+# Save states, in runs that share a folder: states saves the slot resume
+# puts back in a process of its own, as a device starting a cart would, and
+# shutdown and quit save it or not after that. The test is built at a fixed address, as pico8_dyn is, since the
 # build's sandbox cannot turn address randomising off for pico8_64's restart.
 RUN export PICO_PAK_STATES_DIR=/tmp/display-test-states/states \
   && LD_PRELOAD=/display.so /src/test/display-test states \
   && LD_PRELOAD=/display.so /src/test/display-test resume \
-  && LD_PRELOAD=/display.so /src/test/display-test shutdown
+  && LD_PRELOAD=/display.so /src/test/display-test shutdown \
+  && LD_PRELOAD=/display.so /src/test/display-test quit
 
 FROM scratch AS export
 COPY --from=build-arm64 /out.so /h700/sdl-nosensor.so

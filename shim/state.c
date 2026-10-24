@@ -37,6 +37,22 @@
 #include "dlmalloc.c"
 #pragma GCC diagnostic pop
 
+/*
+ * LZ4 packs a state to about a fifth of its size in tens of milliseconds on
+ * these cores, where zlib took seconds. The SD cards on these devices write
+ * at as little as 1.5MB a second, so what it saves in writing is most of a
+ * save. It is built in hidden, like dlmalloc.
+ */
+#define LZ4LIB_VISIBILITY
+/* dlmalloc's assert is an empty statement, where LZ4 needs one that is an expression */
+#undef assert
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wall"
+#pragma GCC diagnostic ignored "-Wextra"
+#pragma GCC diagnostic ignored "-Wempty-body"
+#include "lz4.c"
+#pragma GCC diagnostic pop
+
 #define LOG(...) gfx_log(__VA_ARGS__)
 #define EXPORT __attribute__((visibility("default")))
 
@@ -109,7 +125,7 @@ struct state_kept {
 };
 
 /* written ahead of the memory, every field checked before any of it is put back */
-#define STATE_MAGIC "P8STATE2"
+#define STATE_MAGIC "P8STATE3"
 #define STATE_CART_SIZE 1024
 
 struct state_header {
@@ -120,6 +136,8 @@ struct state_header {
   uint64_t arena, arena_end;
   uint64_t range_count;
   uint64_t kept_count;
+  /* the pages in the file, before and after packing */
+  uint64_t stored_size, packed_size;
   uint32_t ticks;
   uint32_t page_size;
   char cart[STATE_CART_SIZE];
@@ -130,12 +148,18 @@ struct state_snapshot {
   struct state_header header;
   struct range *ranges;
   struct state_kept kept[BIG_BLOCKS];
-  /* a byte for each page, and the pages that hold anything, one after another */
+  /* a byte for each page, and the pages in the file, one after another and packed */
   unsigned char *flags;
   size_t page_total;
-  unsigned char *pages;
-  size_t pages_size;
+  unsigned char *packed;
+  size_t packed_capacity;
 };
+
+/*
+ * The pages are packed in chunks of this much, each after its size before and
+ * after, or kept as they are where packing would not make them smaller
+ */
+#define CHUNK (256u << 10)
 
 /* what a page of a state is: all zero, in the file, or kept from the run it is loaded into */
 enum { PAGE_ZERO, PAGE_STORED, PAGE_KEPT };
@@ -693,16 +717,47 @@ void state_free(struct state_snapshot *snapshot)
   }
   __libc_free(snapshot->ranges);
   __libc_free(snapshot->flags);
-  __libc_free(snapshot->pages);
+  __libc_free(snapshot->packed);
   __libc_free(snapshot);
+}
+
+static int pack_chunk(struct state_snapshot *snapshot, const unsigned char *raw, size_t size)
+{
+  size_t need = snapshot->header.packed_size + 2 * sizeof(uint32_t) + LZ4_compressBound((int)size);
+  uint32_t sizes[2];
+  unsigned char *at;
+  int packed;
+
+  if (need > snapshot->packed_capacity) {
+    size_t capacity = need + need / 2;
+    unsigned char *grown = __libc_realloc(snapshot->packed, capacity);
+    if (grown == NULL) {
+      return 0;
+    }
+    snapshot->packed = grown;
+    snapshot->packed_capacity = capacity;
+  }
+
+  at = snapshot->packed + snapshot->header.packed_size + sizeof sizes;
+  packed = LZ4_compress_default((const char *)raw, (char *)at, (int)size, LZ4_compressBound((int)size));
+  sizes[0] = (uint32_t)size;
+  sizes[1] = packed > 0 && (size_t)packed < size ? (uint32_t)packed : 0;
+  if (sizes[1] == 0) {
+    memcpy(at, raw, size);
+  }
+  memcpy(snapshot->packed + snapshot->header.packed_size, sizes, sizeof sizes);
+  snapshot->header.packed_size += sizeof sizes + (sizes[1] != 0 ? sizes[1] : sizes[0]);
+  snapshot->header.stored_size += size;
+  return 1;
 }
 
 struct state_snapshot *state_capture(const char *cart, uint32_t ticks)
 {
   struct state_snapshot *snapshot;
   struct region regions[2];
-  size_t page, at = 0, stored = 0;
-  int r;
+  unsigned char *chunk;
+  size_t page, at = 0, filled = 0;
+  int r, ok;
 
   if (!state_available() || state_busy() || cart == NULL || strlen(cart) >= STATE_CART_SIZE) {
     return NULL;
@@ -749,27 +804,39 @@ struct state_snapshot *state_capture(const char *cart, uint32_t ticks)
         snapshot->flags[at++] = PAGE_ZERO;
       } else {
         snapshot->flags[at++] = PAGE_STORED;
-        stored++;
       }
     }
   }
 
-  /* only the pages that go in the file are copied, so pico-8 is held for as short a time as can be */
-  snapshot->pages = __libc_malloc(stored * PAGE);
-  if (stored > 0 && snapshot->pages == NULL) {
-    state_free(snapshot);
-    return NULL;
-  }
+  /*
+   * Only the pages that go in the file are copied, packed as they go, so
+   * pico-8 is held for as short a time as can be and the copy is small
+   */
+  chunk = __libc_malloc(CHUNK);
+  ok = chunk != NULL;
   at = 0;
-  for (r = 0; r < 2; r++) {
-    for (page = 0; page * PAGE < regions[r].size; page++) {
+  for (r = 0; ok && r < 2; r++) {
+    for (page = 0; ok && page * PAGE < regions[r].size; page++) {
       size_t size = page_size_at(regions[r].size, page);
 
-      if (snapshot->flags[at++] == PAGE_STORED) {
-        memcpy(snapshot->pages + snapshot->pages_size, regions[r].at + page * PAGE, size);
-        snapshot->pages_size += size;
+      if (snapshot->flags[at++] != PAGE_STORED) {
+        continue;
       }
+      if (filled + size > CHUNK) {
+        ok = pack_chunk(snapshot, chunk, filled);
+        filled = 0;
+      }
+      memcpy(chunk + filled, regions[r].at + page * PAGE, size);
+      filled += size;
     }
+  }
+  if (ok && filled > 0) {
+    ok = pack_chunk(snapshot, chunk, filled);
+  }
+  __libc_free(chunk);
+  if (!ok) {
+    state_free(snapshot);
+    return NULL;
   }
   return snapshot;
 }
@@ -797,7 +864,8 @@ int state_write(const struct state_snapshot *snapshot, const char *path)
        fwrite(snapshot->kept, sizeof *snapshot->kept, snapshot->header.kept_count, file) ==
            snapshot->header.kept_count &&
        fwrite(snapshot->flags, 1, snapshot->page_total, file) == snapshot->page_total &&
-       fwrite(snapshot->pages, 1, snapshot->pages_size, file) == snapshot->pages_size;
+       fwrite(snapshot->packed, 1, snapshot->header.packed_size, file) ==
+           snapshot->header.packed_size;
   if (file != NULL) {
     ok = fclose(file) == 0 && ok;
   }
@@ -809,8 +877,9 @@ int state_write(const struct state_snapshot *snapshot, const char *path)
   for (i = 0; i < snapshot->header.kept_count; i++) {
     kept += snapshot->kept[i].size;
   }
-  LOG("saved the state %s, %zu KB, leaving out %lu KB of pico-8's own data\n", path,
-      snapshot->pages_size >> 10, (unsigned long)(kept >> 10));
+  LOG("saved the state %s, %lu KB packed to %lu KB, leaving out %lu KB of pico-8's own data\n", path,
+      (unsigned long)(snapshot->header.stored_size >> 10),
+      (unsigned long)(snapshot->header.packed_size >> 10), (unsigned long)(kept >> 10));
   return 1;
 }
 
@@ -898,22 +967,60 @@ static const unsigned char *kept_source(const struct state_kept *kept, const uns
   return NULL;
 }
 
-static int read_pages(FILE *file, unsigned char **into, const size_t *sizes, int count,
-                      const struct state_kept *kept, const unsigned char *const *sources,
-                      uint64_t kept_count)
+/* the pages in the file, unpacked one chunk after another into stored */
+static int unpack(const unsigned char *packed, size_t packed_size, unsigned char *stored,
+                  size_t stored_size)
 {
-  size_t total = 0, page, at = 0;
-  unsigned char *flags;
+  size_t in = 0, out = 0;
+  uint32_t sizes[2];
+
+  while (in < packed_size) {
+    if (packed_size - in < sizeof sizes) {
+      return 0;
+    }
+    memcpy(sizes, packed + in, sizeof sizes);
+    in += sizeof sizes;
+    if (sizes[0] > CHUNK || sizes[0] > stored_size - out ||
+        (sizes[1] != 0 ? sizes[1] : sizes[0]) > packed_size - in) {
+      return 0;
+    }
+    if (sizes[1] == 0) {
+      memcpy(stored + out, packed + in, sizes[0]);
+      in += sizes[0];
+    } else {
+      if (LZ4_decompress_safe((const char *)packed + in, (char *)stored + out, (int)sizes[1],
+                              (int)sizes[0]) != (int)sizes[0]) {
+        return 0;
+      }
+      in += sizes[1];
+    }
+    out += sizes[0];
+  }
+  return out == stored_size;
+}
+
+static int read_pages(FILE *file, const struct state_header *header, unsigned char **into,
+                      const size_t *sizes, int count, const struct state_kept *kept,
+                      const unsigned char *const *sources, uint64_t kept_count)
+{
+  size_t total = 0, page, at = 0, used = 0;
+  unsigned char *flags, *packed = NULL, *stored = NULL;
   int r, ok;
 
   for (r = 0; r < count; r++) {
     total += (sizes[r] + PAGE - 1) / PAGE;
   }
-  flags = __libc_malloc(total);
-  if (flags == NULL) {
+  if (header->stored_size > sizes[0] + sizes[1] ||
+      header->packed_size > header->stored_size + header->stored_size / 8 + 65536) {
     return 0;
   }
-  ok = fread(flags, 1, total, file) == total;
+  flags = __libc_malloc(total);
+  packed = __libc_malloc(header->packed_size + 1);
+  stored = __libc_malloc(header->stored_size + 1);
+  ok = flags != NULL && packed != NULL && stored != NULL && fread(flags, 1, total, file) == total &&
+       fread(packed, 1, header->packed_size, file) == header->packed_size &&
+       unpack(packed, header->packed_size, stored, header->stored_size);
+  __libc_free(packed);
   for (r = 0; ok && r < count; r++) {
     for (page = 0; ok && page * PAGE < sizes[r]; page++) {
       size_t size = page_size_at(sizes[r], page);
@@ -921,7 +1028,11 @@ static int read_pages(FILE *file, unsigned char **into, const size_t *sizes, int
 
       switch (flags[at++]) {
       case PAGE_STORED:
-        ok = fread(to, 1, size, file) == size;
+        ok = size <= header->stored_size - used;
+        if (ok) {
+          memcpy(to, stored + used, size);
+          used += size;
+        }
         break;
       case PAGE_KEPT: {
         const unsigned char *from =
@@ -940,7 +1051,8 @@ static int read_pages(FILE *file, unsigned char **into, const size_t *sizes, int
     }
   }
   __libc_free(flags);
-  return ok;
+  __libc_free(stored);
+  return ok && used == header->stored_size;
 }
 
 /*
@@ -1007,7 +1119,7 @@ int state_load(const char *path, const char *cart, uint32_t *ticks)
          fread(kept, sizeof *kept, header.kept_count, file) == header.kept_count;
     if (ok) {
       ok = find_kept_sources(kept, header.kept_count, path, sources);
-      if (ok && !read_pages(file, staged, sizes, 2, kept, sources, header.kept_count)) {
+      if (ok && !read_pages(file, &header, staged, sizes, 2, kept, sources, header.kept_count)) {
         LOG("cannot read the state %s, it is cut short\n", path);
         ok = 0;
       }

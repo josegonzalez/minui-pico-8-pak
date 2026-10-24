@@ -66,18 +66,21 @@ static const struct config_option {
      zero_one, 1},
 };
 
-static const char *const option_labels[MENU_CONFIG_FIRST] = {"Screen Mode", "Overlay",
-                                                             "Copy Splore Carts", "Splore Artwork"};
+static const char *const option_labels[MENU_CONFIG_FIRST] = {
+    "Screen Mode", "Overlay", "Copy Splore Carts", "Splore Artwork", "Auto Save on Exit"};
+/* the values the auto-save file holds */
+static const char *const off_on_values[] = {"off", "on"};
 
 static const char *const option_descriptions[MENU_CONFIG_FIRST] = {
     "Standard keeps the game square, Stretched fills the screen.",
     "A PNG from /Overlays/PICO drawn over the game in Standard mode.",
     "Copies the carts Splore downloaded into the roms folder.\nApplies when Splore exits.",
     "The cover the Splore cart shows in the game list.\nApplies straight away.",
+    "Saves the game for resuming when you quit.\nShutting down always saves it.",
 };
 
 static const int frontend_settings[] = {MENU_SCREEN_MODE, MENU_OVERLAY, MENU_SHOW_FPS};
-static const int emulator_settings[] = {MENU_VOLUME, MENU_BATTERY_SAVER};
+static const int emulator_settings[] = {MENU_VOLUME, MENU_BATTERY_SAVER, MENU_AUTO_SAVE};
 static const int splore_settings[] = {MENU_COPY_CARTS, MENU_SPLORE_ARTWORK, MENU_HIDE_MATURE,
                                       MENU_CHECK_UPDATES};
 
@@ -89,7 +92,8 @@ static const struct group {
   const int *settings;
 } groups[MENU_GROUP_COUNT] = {
     {"Frontend", "The screen mode, the overlay and the frame rate.", 3, frontend_settings},
-    {"Emulator", "PICO-8's own volume and battery saver.", 2, emulator_settings},
+    {"Emulator", "PICO-8's own volume and battery saver, and saving on exit.", 3,
+     emulator_settings},
     {"Splore", "Copying Splore's carts, its cover and what it shows.", 4, splore_settings},
     {"Shortcuts", "Buttons for a screenshot, quitting, resetting the game and more.", 0, NULL},
 };
@@ -180,6 +184,14 @@ int menu_read_splore_artwork(const char *path)
   }
 
   return 0;
+}
+
+int menu_read_auto_save(const char *path)
+{
+  char line[64];
+
+  menu_read_line(path, line, sizeof line);
+  return strcmp(line, off_on_values[1]) == 0;
 }
 
 static int marker_exists(const char *dir, const char *name)
@@ -371,6 +383,8 @@ static int choice_count(const struct menu *menu, int row)
     return MENU_COPY_COUNT;
   case MENU_SPLORE_ARTWORK:
     return MENU_SPLORE_ARTWORK_COUNT;
+  case MENU_AUTO_SAVE:
+    return 2;
   default:
     return config_options[row - MENU_CONFIG_FIRST].count;
   }
@@ -401,6 +415,9 @@ static void choice_name(const struct menu *menu, int row, int choice, char *out,
   case MENU_SPLORE_ARTWORK:
     snprintf(out, size, "%s", splore_artwork_names[choice]);
     break;
+  case MENU_AUTO_SAVE:
+    snprintf(out, size, "%s", off_on[choice]);
+    break;
   default:
     snprintf(out, size, "%s", config_options[row - MENU_CONFIG_FIRST].names[choice]);
     break;
@@ -418,6 +435,8 @@ static int current_choice(const struct menu *menu, int row)
     return menu->copy_carts;
   case MENU_SPLORE_ARTWORK:
     return menu->splore_artwork;
+  case MENU_AUTO_SAVE:
+    return menu->settings->auto_save;
   default:
     return menu->config[row - MENU_CONFIG_FIRST];
   }
@@ -622,6 +641,11 @@ static void step_option(struct menu *menu, int row, int step)
     menu_write_line(settings->splore_artwork_path, menu_splore_artworks[choice]);
     cart_apply_splore_artwork(settings->roms_dir, settings->tag, settings->splore_covers_dir,
                               choice == 1);
+    break;
+  case MENU_AUTO_SAVE:
+    settings->auto_save = choice;
+    LOG("set Auto Save on Exit to %s\n", off_on_values[choice]);
+    menu_write_line(settings->auto_save_path, off_on_values[choice]);
     break;
   default:
     menu->config[row - MENU_CONFIG_FIRST] = choice;
@@ -1032,11 +1056,14 @@ static void draw_slot(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *
   x += radius;
   y += radius;
   gfx_fill(canvas, x, y, hw, hh, GFX_BLACK);
-  if (states->exists[slot] && states->preview[slot] != NULL) {
+  if (!states->saving[slot] && states->exists[slot] && states->preview[slot] != NULL) {
     gfx_blit_scaled(canvas, x, y, hw, hh, states->preview[slot], states->preview_w[slot],
                     states->preview_h[slot]);
   } else {
-    draw_message(canvas, m, font, x, y, hw, hh, states->exists[slot] ? "No Preview" : "Empty Slot");
+    draw_message(canvas, m, font, x, y, hw, hh,
+                 states->saving[slot]   ? "Saving..."
+                 : states->exists[slot] ? "No Preview"
+                                        : "Empty Slot");
   }
 
   dots = x + (pw - gfx_u(m, 15 * MENU_SLOTS)) / 2;
@@ -1386,6 +1413,40 @@ void menu_draw_notification(gfx_canvas *canvas, int screen_w, int screen_h, cons
   gfx_pill(canvas, x, y, w, h, gfx_indicator_pill(theme));
   gfx_text_draw(canvas, font, x + gfx_u(&m, GFX_BUTTON_PADDING),
                 y + (h - gfx_line_height(font, px)) / 2, px, gfx_indicator_icon(theme), text);
+}
+
+/* NextUI's toast: 8 by 4 units of padding around tiny text, 12 units in from the corner */
+#define TOAST_PADDING_X 8
+#define TOAST_PADDING_Y 4
+#define TOAST_MARGIN 12
+
+void menu_toast_size(int screen_w, int screen_h, const gfx_font *font, const char *text, int *w,
+                     int *h)
+{
+  gfx_metrics m = gfx_metrics_for(screen_w, screen_h);
+  int px = gfx_u(&m, GFX_FONT_TINY);
+
+  *w = gfx_text_width(font, px, text) + 2 * gfx_u(&m, TOAST_PADDING_X);
+  *h = gfx_line_height(font, px) + 2 * gfx_u(&m, TOAST_PADDING_Y);
+}
+
+int menu_toast_margin(int screen_w, int screen_h)
+{
+  gfx_metrics m = gfx_metrics_for(screen_w, screen_h);
+
+  return gfx_u(&m, TOAST_MARGIN);
+}
+
+void menu_draw_toast(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
+                     const gfx_font *font, int x, int y, const char *text)
+{
+  gfx_metrics m = gfx_metrics_for(screen_w, screen_h);
+  int px = gfx_u(&m, GFX_FONT_TINY), w, h;
+
+  menu_toast_size(screen_w, screen_h, font, text, &w, &h);
+  gfx_pill(canvas, x, y, w, h, gfx_toast_pill(theme));
+  gfx_text_draw(canvas, font, x + gfx_u(&m, TOAST_PADDING_X), y + gfx_u(&m, TOAST_PADDING_Y), px,
+                gfx_toast_text(theme), text);
 }
 
 void menu_draw(struct menu *menu, gfx_canvas *canvas, const uint32_t *frame, const gfx_font *font,

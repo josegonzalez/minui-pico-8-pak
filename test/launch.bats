@@ -565,6 +565,7 @@ teardown() {
   [ "$PICO_PAK_STATES_DIR" = "$USERDATA_PATH/Pico-8-native/states" ]
   [ "$PICO_PAK_AUTO_RESUME_PATH" = "$SHARED_USERDATA_PATH/.minui/auto_resume.txt" ]
   [ "$PICO_PAK_AUTO_RESUME_ROM" = "/Roms/Pico-8 (PICO)/Celeste.p8" ]
+  [ "$PICO_PAK_AUTO_SAVE" = "$USERDATA_PATH/Pico-8-native/auto-save-on-exit" ]
   [ "$PICO_PAK_STATELESS_PREVIEWS" = "0" ]
 
   SPLORE_SESSION=true

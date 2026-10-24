@@ -63,6 +63,7 @@ enum menu_setting {
   MENU_OVERLAY,
   MENU_COPY_CARTS,
   MENU_SPLORE_ARTWORK,
+  MENU_AUTO_SAVE,
   /* the PICO-8 settings follow, one each, in the order config_options in menu.c lists them */
   MENU_CONFIG_FIRST,
   MENU_SHOW_FPS = MENU_CONFIG_FIRST,
@@ -136,6 +137,9 @@ struct menu_settings {
   const char *shared_copy_carts_dir;
   /* the Splore cover chosen, which the menu gives the Splore carts as it changes */
   const char *splore_artwork_path;
+  /* whether Quit saves the slot the launchers resume, off unless the file says on */
+  const char *auto_save_path;
+  int auto_save;
   /* the roms folders, the tag that marks this pak's, and the pak's two covers */
   const char *roms_dir;
   const char *tag;
@@ -169,6 +173,8 @@ struct menu_states {
   int available;
   int slot;
   int exists[MENU_SLOTS];
+  /* a slot still being written in the background, which shows as saving */
+  int saving[MENU_SLOTS];
   /* each slot's preview, 0xAARRGGBB, or NULL when it has none */
   const uint32_t *preview[MENU_SLOTS];
   int preview_w[MENU_SLOTS], preview_h[MENU_SLOTS];
@@ -220,6 +226,9 @@ int menu_read_overlay(const char *path, char *const *names, int count);
 
 /* the saved Splore artwork as an index into menu_splore_artworks, standard if unknown */
 int menu_read_splore_artwork(const char *path);
+
+/* whether Quit saves the resume slot, which only "on" in the file turns on */
+int menu_read_auto_save(const char *path);
 
 /* starts on Continue, with the settings launch.sh applies read from disk */
 void menu_open(struct menu *menu, struct menu_settings *settings, const char *title);
@@ -276,5 +285,17 @@ void menu_notification_size(int screen_w, int screen_h, const gfx_font *font, co
                             int *w, int *h);
 void menu_draw_notification(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
                             const gfx_font *font, int x, int y, const char *text);
+
+/*
+ * NextUI's toast, a pill of tiny text such as "Saving" that the game shows in
+ * the bottom right corner while a state is written. Like the notification,
+ * its size depends on the text.
+ */
+void menu_toast_size(int screen_w, int screen_h, const gfx_font *font, const char *text, int *w,
+                     int *h);
+void menu_draw_toast(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
+                     const gfx_font *font, int x, int y, const char *text);
+/* how far in from the bottom right corner the toast sits */
+int menu_toast_margin(int screen_w, int screen_h);
 
 #endif

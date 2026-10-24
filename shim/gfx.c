@@ -720,6 +720,17 @@ uint32_t gfx_indicator_track(const gfx_theme *theme)
   return theme->nextui ? theme->color[2] : GFX_DARK_GRAY;
 }
 
+/* NextUI's toasts, its colour 1 on its accent, which the pak draws under either launcher */
+uint32_t gfx_toast_pill(const gfx_theme *theme)
+{
+  return theme->color[1];
+}
+
+uint32_t gfx_toast_text(const gfx_theme *theme)
+{
+  return theme->color[0];
+}
+
 int gfx_shadow(const gfx_theme *theme)
 {
   return !theme->nextui;

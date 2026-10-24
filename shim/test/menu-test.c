@@ -1314,9 +1314,68 @@ static void test_slot_drawing(const char *minui_font)
             has_colour(&canvas, x, y + 150, 512, 84, GFX_WHITE),
         "an empty slot is black with its message in the middle");
 
+  press(&menu, MENU_RIGHT);
+  menu.states.saving[1] = 1;
+  menu_draw(&menu, &canvas, frame, font, &theme, NULL);
+  check(canvas.pixels[(size_t)(y + 192) * 1024 + x + 256] != GFX_ARGB(0x123456) &&
+            has_colour(&canvas, x, y + 150, 512, 84, GFX_WHITE),
+        "a slot still being written says so rather than showing what it held");
+
   gfx_font_close(font);
   free(frame);
   free(canvas.pixels - GUARD);
+}
+
+static void test_auto_save(void)
+{
+  char path[8192];
+  struct menu_settings settings;
+  struct menu menu;
+
+  snprintf(path, sizeof path, "%s/auto-save-on-exit", dir);
+  check(!menu_read_auto_save(path), "Auto Save on Exit is off without its file");
+  write_file(path, "yes\n");
+  check(!menu_read_auto_save(path), "and off for anything but on");
+
+  settings_for_test(&settings);
+  settings.auto_save_path = path;
+  menu = open_options(&settings);
+  select_setting(&menu, MENU_AUTO_SAVE);
+  check(menu.option_row == MENU_GROUP_EMULATOR, "it is one of the Emulator settings");
+  press(&menu, MENU_A);
+  check(settings.auto_save && file_is(path, "on\n") && menu_read_auto_save(path),
+        "turning it on saves on to its file");
+  press(&menu, MENU_LEFT);
+  check(!settings.auto_save && file_is(path, "off\n"), "and turning it off saves off");
+}
+
+static void test_toast(const char *nextui_font)
+{
+  gfx_font *font = gfx_font_open(nextui_font);
+  gfx_theme minui, nextui;
+  gfx_canvas canvas;
+  int w, h, other_w, other_h;
+
+  gfx_theme_init(&minui, "minui", NULL);
+  gfx_theme_init(&nextui, "nextui", ",0x112233FF,,,,,");
+  check(gfx_toast_pill(&minui) == minui.color[1] && gfx_toast_pill(&nextui) == GFX_ARGB(0x112233),
+        "the toast is NextUI's accent under either launcher");
+  check(menu_toast_margin(1024, 768) == 36, "and sits 12 units in from the corner");
+
+  menu_toast_size(1024, 768, font, "Saving...", &w, &h);
+  menu_toast_size(1024, 768, font, "Saved", &other_w, &other_h);
+  check(w > other_w && h == other_h && h > 24, "its width follows its text, padded 8 by 4 units");
+
+  canvas = guarded_canvas(w, h);
+  gfx_clear(&canvas, 0);
+  menu_draw_toast(&canvas, 1024, 768, &nextui, font, 0, 0, "Saving...");
+  check(guards_intact(&canvas), "the toast stays inside its canvas");
+  check(canvas.pixels[(size_t)(h / 2) * w + 4] == gfx_toast_pill(&nextui) && canvas.pixels[0] == 0,
+        "a pill, its corners left clear for the game");
+  check(has_colour(&canvas, 0, 0, w, h, gfx_toast_text(&nextui)), "with its text in NextUI's colour 1");
+
+  free(canvas.pixels - GUARD);
+  gfx_font_close(font);
 }
 
 static void test_state_files(void)
@@ -1394,6 +1453,8 @@ int main(int argc, char **argv)
   test_screenshot_file();
   test_slots();
   test_slot_drawing(minui_font);
+  test_toast(nextui_font);
+  test_auto_save();
   test_state_files();
 
   printf("1..%d\n", tests);

@@ -164,6 +164,14 @@ int SDL_SetTextureBlendMode(void *texture, int mode)
   return 0;
 }
 
+int SDL_SetTextureAlphaMod(void *texture, uint8_t alpha)
+{
+  (void)texture;
+  fake.alpha_mods++;
+  fake.last_alpha = alpha;
+  return 0;
+}
+
 int SDL_SetTextureScaleMode(void *texture, int mode)
 {
   (void)texture;

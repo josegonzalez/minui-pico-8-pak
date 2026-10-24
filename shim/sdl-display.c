@@ -139,6 +139,10 @@ typedef struct {
  * ending pico-8 without it, inside the five seconds power control waits
  */
 #define TERMINATE_WAIT_S 4
+/* how long the save toast takes to fade in, how long "Saved" stays, and how long it fades out over */
+#define TOAST_FADE_IN_MS 250
+#define TOAST_HOLD_MS 1000
+#define TOAST_FADE_OUT_MS 500
 /* how long a notice such as "Screenshot saved" stays up */
 #define NOTIFICATION_MS 1500
 /* the steps the menu fades to black in after Quit, and how long each lasts */
@@ -183,6 +187,7 @@ static struct {
   void (*DestroyTexture)(void *);
   void (*FreeSurface)(void *);
   int (*SetTextureBlendMode)(void *, int);
+  int (*SetTextureAlphaMod)(void *, uint8_t);
   int (*SetTextureScaleMode)(void *, int);
   const char *(*GetError)(void);
   int (*RenderCopy)(void *, void *, const SDL_Rect *, const SDL_Rect *);
@@ -309,6 +314,16 @@ static int state_running;
 static int writing_slot = -1;
 static volatile sig_atomic_t state_written;
 static volatile sig_atomic_t state_write_failed;
+/*
+ * The toast at the bottom right while a state is written: "Saving..." fading
+ * in until the write finishes, then how it went, which fades out
+ */
+static enum { TOAST_NONE, TOAST_SAVING, TOAST_DONE } toast_phase;
+static const char *toast_text;
+static uint32_t toast_at;
+static void *toast_renderer;
+static void *toast_texture;
+static const char *toast_drawn;
 static const char *power_supply_dir;
 static gfx_font *menu_font;
 static gfx_theme menu_theme;
@@ -360,6 +375,8 @@ static int resolve_sdl(void)
   /* without these the menu still opens, over a game whose sound keeps playing */
   RESOLVE(PauseAudioDevice);
   RESOLVE(GetAudioDeviceStatus);
+  /* fades the save toast, which without it shows and goes at once */
+  RESOLVE(SetTextureAlphaMod);
   /* save states hold pico-8's audio while they run, and its clock is wrapped */
   RESOLVE(LockAudioDevice);
   RESOLVE(UnlockAudioDevice);
@@ -653,6 +670,8 @@ static void init_display(void)
   settings.copy_carts_dir = getenv("PICO_PAK_COPY_CARTS_DIR");
   settings.shared_copy_carts_dir = getenv("PICO_PAK_SHARED_COPY_CARTS_DIR");
   settings.splore_artwork_path = getenv("PICO_PAK_SPLORE_ARTWORK");
+  settings.auto_save_path = getenv("PICO_PAK_AUTO_SAVE");
+  settings.auto_save = menu_read_auto_save(settings.auto_save_path);
   settings.roms_dir = getenv("PICO_PAK_ROMS_DIR");
   settings.tag = getenv("PICO_PAK_TAG");
   settings.splore_covers_dir = getenv("PICO_PAK_SPLORE_COVERS");
@@ -1369,6 +1388,9 @@ static int save_slot(int slot, const uint32_t *frame, int width, int height, int
       waits_at_exit = 1;
     }
     state_written = 0;
+    toast_phase = TOAST_SAVING;
+    toast_text = "Saving...";
+    toast_at = sdl.GetTicks();
     if (pthread_create(&state_thread, NULL, write_state, job) == 0) {
       state_running = 1;
       writing_slot = slot;
@@ -1467,7 +1489,8 @@ static void open_slots(struct menu *menu)
   slot = writing_slot >= 0 ? writing_slot : cart_read_slot(switcher_dir, cart_path);
   states->slot = slot >= 0 && slot < MENU_SLOTS ? slot : 0;
   for (slot = 0; slot < MENU_SLOTS; slot++) {
-    states->exists[slot] = slot == writing_slot ||
+    states->saving[slot] = slot == writing_slot && !state_written;
+    states->exists[slot] = states->saving[slot] ||
                            (cart_state_path(states_dir, cart_path, slot, path, sizeof path) &&
                             access(path, F_OK) == 0);
     slot_previews_read[slot] = 0;
@@ -1485,15 +1508,25 @@ static void show_slot_preview(struct menu *menu)
   int slot = states->slot;
   char path[8192];
 
-  if (!states->available || (menu->root_row != MENU_SAVE && menu->root_row != MENU_LOAD) ||
-      menu->page != MENU_PAGE_ROOT || !states->exists[slot] || slot_previews_read[slot]) {
+  if (!states->available) {
     return;
   }
-  if (slot == writing_slot) {
-    if (!state_written) {
-      return;
-    }
+  /* the save in the background has finished, so its slot shows what was written */
+  if (writing_slot >= 0 && state_written) {
+    int written = writing_slot;
+
     wait_for_state();
+    if (states->saving[written]) {
+      states->saving[written] = 0;
+      states->exists[written] = cart_state_path(states_dir, cart_path, written, path, sizeof path) &&
+                                access(path, F_OK) == 0;
+      menu->dirty = 1;
+    }
+  }
+  if ((menu->root_row != MENU_SAVE && menu->root_row != MENU_LOAD) ||
+      menu->page != MENU_PAGE_ROOT || !states->exists[slot] || states->saving[slot] ||
+      slot_previews_read[slot]) {
+    return;
   }
   slot_previews_read[slot] = 1;
   if (cart_preview_path(switcher_dir, cart_path, slot, path, sizeof path)) {
@@ -1673,10 +1706,12 @@ static void run_menu(void *renderer, int quit_now)
 
   if (result == MENU_QUIT) {
     /*
-     * The cart's sound stays paused and every frame left is black. The game
-     * is saved to the slot the launchers resume, before the fade draws over
-     * the frame the menu read. Without states, that frame becomes the
-     * switcher's preview on its own, written once the screen is dark.
+     * The cart's sound stays paused and every frame left is black. A shutdown
+     * saves the game to the slot the launchers resume, as minarch does before
+     * sleeping or powering off, and Quit does too when Auto Save on Exit is
+     * on, before the fade draws over the frame the menu read. A cart with no
+     * state at all gives the switcher that frame instead, written once the
+     * screen is dark. Otherwise the slot to resume stays the last one used.
      */
     uint32_t *last_frame;
     int saved;
@@ -1685,8 +1720,10 @@ static void run_menu(void *renderer, int quit_now)
     if (terminating) {
       alarm(0);
     }
-    saved = states_ready() && save_slot(CART_RESUME_SLOT, menu_frame, width, height, 0);
-    last_frame = !saved && stateless_previews && switcher_dir != NULL && *switcher_dir != '\0'
+    saved = states_ready() && (terminating || settings.auto_save) &&
+            save_slot(CART_RESUME_SLOT, menu_frame, width, height, 0);
+    last_frame = !saved && stateless_previews && switcher_dir != NULL && *switcher_dir != '\0' &&
+                         !cart_has_state(states_dir, cart_path)
                      ? malloc((size_t)width * height * sizeof *last_frame)
                      : NULL;
 
@@ -1876,6 +1913,97 @@ static void draw_notification(void *renderer)
   restore_letterbox(renderer, &saved);
 }
 
+/* how opaque the toast is now, moving it on to its next part as the write finishes and time passes */
+static int toast_alpha(uint32_t now)
+{
+  uint32_t elapsed;
+
+  if (toast_phase == TOAST_SAVING && state_written) {
+    toast_phase = TOAST_DONE;
+    toast_text = state_write_failed ? "Save failed" : "Saved";
+    toast_at = now;
+    state_write_failed = 0;
+  }
+
+  elapsed = now - toast_at;
+  if (toast_phase == TOAST_SAVING) {
+    return elapsed < TOAST_FADE_IN_MS ? (int)(255 * elapsed / TOAST_FADE_IN_MS) : 255;
+  }
+  if (toast_phase == TOAST_DONE) {
+    if (elapsed < TOAST_HOLD_MS) {
+      return 255;
+    }
+    if (elapsed < TOAST_HOLD_MS + TOAST_FADE_OUT_MS) {
+      return (int)(255 - 255 * (elapsed - TOAST_HOLD_MS) / TOAST_FADE_OUT_MS);
+    }
+    toast_phase = TOAST_NONE;
+  }
+  return 0;
+}
+
+/* NextUI's toast at the bottom right, from a texture redrawn only when its text changes */
+static void draw_toast(void *renderer)
+{
+  static int texture_w, texture_h;
+  struct letterbox saved;
+  gfx_canvas canvas;
+  SDL_Rect dst;
+  int width, height, w, h, alpha, margin;
+  uint32_t *pixels;
+
+  if (toast_phase == TOAST_NONE || sdl.GetTicks == NULL) {
+    return;
+  }
+  alpha = toast_alpha(sdl.GetTicks());
+  if (alpha <= 0 || overlay_broken || menu_broken ||
+      sdl.GetRendererOutputSize(renderer, &width, &height) != 0) {
+    return;
+  }
+  /* without fading, the toast is only shown once it would be mostly there */
+  if (sdl.SetTextureAlphaMod == NULL && alpha < 128) {
+    return;
+  }
+
+  load_menu_look();
+  menu_toast_size(width, height, menu_font, toast_text, &w, &h);
+  if (renderer != toast_renderer || w != texture_w || h != texture_h || toast_text != toast_drawn) {
+    if (toast_texture != NULL && renderer == toast_renderer) {
+      sdl.DestroyTexture(toast_texture);
+    }
+    toast_renderer = renderer;
+    toast_drawn = NULL;
+    toast_texture = sdl.CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                                      SDL_TEXTUREACCESS_STREAMING, w, h);
+    pixels = calloc((size_t)w * h, sizeof *pixels);
+    if (toast_texture == NULL || pixels == NULL) {
+      free(pixels);
+      return;
+    }
+    canvas.pixels = pixels;
+    canvas.w = w;
+    canvas.h = h;
+    menu_draw_toast(&canvas, width, height, &menu_theme, menu_font, 0, 0, toast_text);
+    sdl.UpdateTexture(toast_texture, NULL, pixels, w * (int)sizeof *pixels);
+    sdl.SetTextureBlendMode(toast_texture, SDL_BLENDMODE_BLEND);
+    free(pixels);
+    texture_w = w;
+    texture_h = h;
+    toast_drawn = toast_text;
+  }
+
+  if (sdl.SetTextureAlphaMod != NULL) {
+    sdl.SetTextureAlphaMod(toast_texture, (uint8_t)alpha);
+  }
+  margin = menu_toast_margin(width, height);
+  dst.x = width - margin - w;
+  dst.y = height - margin - h;
+  dst.w = w;
+  dst.h = h;
+  clear_letterbox(renderer, &saved);
+  sdl.RenderCopy(renderer, toast_texture, NULL, &dst);
+  restore_letterbox(renderer, &saved);
+}
+
 static void push_key(uint32_t type, int32_t scancode, int32_t sym, uint16_t mod)
 {
   /* SDL_KeyboardEvent: the state at byte 12, then the scancode, symbol and modifiers */
@@ -2023,10 +2151,6 @@ EXPORT void SDL_RenderPresent(void *renderer)
   }
 
   state_frame();
-  if (state_write_failed) {
-    state_write_failed = 0;
-    notify("Save failed");
-  }
   if (resume()) {
     clear_to_black(renderer);
     sdl.RenderPresent(renderer);
@@ -2073,6 +2197,7 @@ EXPORT void SDL_RenderPresent(void *renderer)
   }
   draw_indicator(renderer);
   draw_notification(renderer);
+  draw_toast(renderer);
   sdl.RenderPresent(renderer);
 }
 
@@ -2259,6 +2384,10 @@ EXPORT void SDL_DestroyRenderer(void *renderer)
   if (renderer == notification_renderer) {
     notification_renderer = NULL;
     notification_texture = NULL;
+  }
+  if (renderer == toast_renderer) {
+    toast_renderer = NULL;
+    toast_texture = NULL;
   }
 
   if (sdl.DestroyRenderer != NULL) {

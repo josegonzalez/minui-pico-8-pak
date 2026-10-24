@@ -737,6 +737,8 @@ setup_display_preload() {
     unset PICO_PAK_STATES_DIR
   fi
   export PICO_PAK_AUTO_RESUME_PATH="$SHARED_USERDATA_PATH/.minui/auto_resume.txt"
+  # whether Quit also saves the slot to resume, which only shutting down does unless it is on
+  export PICO_PAK_AUTO_SAVE="$USERDATA_PATH/Pico-8-native/auto-save-on-exit"
   export PICO_PAK_AUTO_RESUME_ROM="${1#"$SDCARD_PATH"}"
   PICO_PAK_MENU_STYLE="$(get_menu_style)"
   PICO_PAK_MENU_FONT="$(get_menu_font "$PICO_PAK_MENU_STYLE")"

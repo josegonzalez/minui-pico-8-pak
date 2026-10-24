@@ -126,6 +126,9 @@ uint32_t gfx_indicator_pill(const gfx_theme *theme);
 uint32_t gfx_indicator_icon(const gfx_theme *theme);
 uint32_t gfx_indicator_bar(const gfx_theme *theme);
 uint32_t gfx_indicator_track(const gfx_theme *theme);
+/* NextUI's toast, whichever launcher started pico-8 */
+uint32_t gfx_toast_pill(const gfx_theme *theme);
+uint32_t gfx_toast_text(const gfx_theme *theme);
 /* minarch draws a black copy under every unselected row, NextUI does not */
 int gfx_shadow(const gfx_theme *theme);
 

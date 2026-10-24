@@ -61,6 +61,9 @@ struct fake_state {
 
   int textures_live;
   int streaming_textures;
+  /* how many times a texture's alpha was set, and the last it was set to */
+  int alpha_mods;
+  uint8_t last_alpha;
 
   /* SDL_RenderReadPixels fills the frame with this, and records how it was asked */
   uint32_t frame_colour;
