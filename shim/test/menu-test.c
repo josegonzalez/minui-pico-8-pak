@@ -865,6 +865,172 @@ static void test_preview_size(void)
   check(access(path, F_OK) != 0, "nothing is left under the temporary name");
 }
 
+static void test_shortcuts_page(void)
+{
+  char path[8192], name[64];
+  struct menu_settings settings;
+  struct menu menu;
+  struct menu_binding read_back[MENU_SHORTCUT_COUNT];
+
+  snprintf(path, sizeof path, "%s/shortcuts", dir);
+  settings_for_test(&settings);
+  settings.shortcuts_path = path;
+  menu_read_shortcuts(path, settings.shortcuts);
+  check(settings.shortcuts[MENU_SHORTCUT_SCREENSHOT].button == -1,
+        "every shortcut starts unbound, as NextUI's do");
+  menu_binding_name(&settings.shortcuts[MENU_SHORTCUT_SCREENSHOT], name, sizeof name);
+  check(strcmp(name, "None") == 0, "and shows None");
+
+  menu = open_options(&settings);
+  press(&menu, MENU_UP);
+  check(menu.option_row == MENU_SHORTCUTS_ROW, "Shortcuts is the last Options row");
+  press(&menu, MENU_A);
+  check(menu.page == MENU_PAGE_SHORTCUTS && menu.shortcut_row == 0, "A on it opens the Shortcuts page");
+
+  press(&menu, MENU_A);
+  check(menu_is_binding(&menu), "A on a shortcut waits for its button");
+  check(press(&menu, MENU_B) == MENU_STAY && menu_is_binding(&menu),
+        "while waiting the menu's own buttons do nothing, as the next press is the binding");
+  menu_bind(&menu, 2, 1);
+  menu_binding_name(&settings.shortcuts[MENU_SHORTCUT_SCREENSHOT], name, sizeof name);
+  check(!menu_is_binding(&menu) && strcmp(name, "MENU+X") == 0, "Menu held with X binds MENU+X");
+  check(file_is(path, "screenshot menu+x\n"), "and saves it");
+
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_A);
+  menu_bind(&menu, 2, 1);
+  menu_binding_name(&settings.shortcuts[MENU_SHORTCUT_SCREENSHOT], name, sizeof name);
+  check(strcmp(name, "None") == 0 && settings.shortcuts[MENU_SHORTCUT_QUIT].button == 2,
+        "binding the same button to another shortcut takes it from the first");
+  menu_bind(&menu, 9, 0);
+  check(settings.shortcuts[MENU_SHORTCUT_QUIT].button == 2, "nothing is bound once the wait is over");
+
+  press(&menu, MENU_A);
+  menu_bind(&menu, 5, 0);
+  check(menu_is_binding(&menu), "Menu itself cannot be bound");
+  check(press(&menu, MENU_MENU) == MENU_STAY && !menu_is_binding(&menu),
+        "a tap of Menu gives up waiting rather than closing the menu");
+
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_A);
+  menu_bind(&menu, 9, 0);
+  menu_binding_name(&settings.shortcuts[MENU_SHORTCUT_RESET], name, sizeof name);
+  check(strcmp(name, "L1") == 0, "a button pressed alone binds it alone");
+  check(file_is(path, "quit menu+x\nreset l1\n"), "and every binding is saved");
+
+  press(&menu, MENU_X);
+  check(settings.shortcuts[MENU_SHORTCUT_RESET].button == -1 && file_is(path, "quit menu+x\n"),
+        "X clears the shortcut");
+
+  menu_read_shortcuts(path, read_back);
+  check(read_back[MENU_SHORTCUT_QUIT].button == 2 && read_back[MENU_SHORTCUT_QUIT].with_menu &&
+            read_back[MENU_SHORTCUT_RESET].button == -1,
+        "the saved shortcuts read back");
+  write_file(path, "quit menu+menu\nreset sideways\nnonsense a\n");
+  menu_read_shortcuts(path, read_back);
+  check(read_back[MENU_SHORTCUT_QUIT].button == -1 && read_back[MENU_SHORTCUT_RESET].button == -1,
+        "a binding to Menu, or to no button, reads as unbound");
+
+  check(press(&menu, MENU_B) == MENU_STAY && menu.page == MENU_PAGE_OPTIONS &&
+            menu.option_row == MENU_SHORTCUTS_ROW,
+        "B goes back to Options on the Shortcuts row");
+  unlink(path);
+}
+
+static void test_cycle_helpers(void)
+{
+  struct menu_settings settings;
+
+  settings_for_test(&settings);
+  menu_cycle_screen_mode(&settings);
+  check(settings.screen_mode == MENU_SCREEN_MODE_STRETCHED && file_is(screen_mode_path, "stretched\n"),
+        "the screen mode shortcut steps to stretched and saves it");
+  menu_cycle_screen_mode(&settings);
+  check(settings.screen_mode == 0, "and back to standard");
+
+  menu_cycle_overlay(&settings);
+  check(settings.overlay == 0 && file_is(overlay_path, "a.png\n"),
+        "the overlay shortcut steps from None to the first");
+  menu_cycle_overlay(&settings);
+  menu_cycle_overlay(&settings);
+  check(settings.overlay == -1 && file_is(overlay_path, "disabled\n"), "and past the last to None");
+}
+
+static void test_shortcut_drawing(const char *minui_font)
+{
+  struct menu_settings settings;
+  struct menu menu;
+  gfx_font *font = gfx_font_open(minui_font);
+  gfx_theme theme;
+  gfx_canvas canvas = guarded_canvas(640, 480);
+  gfx_canvas pill;
+  int w, h;
+
+  settings_for_test(&settings);
+  gfx_theme_init(&theme, "minui", NULL);
+  menu = open_options(&settings);
+  press(&menu, MENU_UP);
+  press(&menu, MENU_A);
+  menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
+  press(&menu, MENU_A);
+  menu_draw(&menu, &canvas, NULL, font, &theme, NULL);
+  check(guards_intact(&canvas), "the Shortcuts page, waiting or not, stays inside the canvas");
+  free(canvas.pixels - GUARD);
+
+  menu_notification_size(1024, 768, font, "Screenshot saved", &w, &h);
+  check(h == 90 && w > 72, "a notice is a pill as tall as the title's, as wide as its text");
+  pill = guarded_canvas(w, h);
+  gfx_clear(&pill, 0);
+  menu_draw_notification(&pill, 1024, 768, &theme, font, 0, 0, "Screenshot saved");
+  check(guards_intact(&pill) && pill.pixels[0] == 0 &&
+            pill.pixels[(size_t)(h / 2) * w + w / 2] != 0,
+        "and is drawn inside it, with clear corners");
+  free(pill.pixels - GUARD);
+  gfx_font_close(font);
+}
+
+static void test_screenshot_file(void)
+{
+  char folder[8192], cart[16384], written[16384], expected[32768];
+  static uint32_t pixels[4 * 3];
+  unsigned char png[24];
+  struct tm when = {0};
+  time_t at;
+  FILE *file;
+  int i, ok;
+
+  for (i = 0; i < 12; i++) {
+    pixels[i] = 0xff000000u | (uint32_t)i;
+  }
+  snprintf(folder, sizeof folder, "%s/shots/Pico-8 (PICO)", dir);
+  put_file(folder, "1) Celeste.p8", "cart");
+  snprintf(cart, sizeof cart, "%s/1) Celeste.p8", folder);
+  when.tm_year = 2026 - 1900;
+  when.tm_mon = 9;
+  when.tm_mday = 24;
+  when.tm_hour = 13;
+  when.tm_min = 5;
+  when.tm_sec = 9;
+  when.tm_isdst = -1;
+  at = mktime(&when);
+
+  snprintf(folder, sizeof folder, "%s/shots/Screenshots", dir);
+  check(cart_write_screenshot(folder, cart, pixels, 4, 3, at, written, sizeof written),
+        "a screenshot is written, making its folder");
+  snprintf(expected, sizeof expected, "%s/Celeste.2026-10-24-13-05-09.png", folder);
+  check(strcmp(written, expected) == 0, "named for the game and when, as NextUI names its own");
+
+  file = fopen(written, "rb");
+  ok = file != NULL && fread(png, 1, sizeof png, file) == sizeof png;
+  if (file != NULL) {
+    fclose(file);
+  }
+  check(ok && memcmp(png, "\x89PNG\r\n\x1a\n", 8) == 0 && png[19] == 4 && png[23] == 3,
+        "as a PNG the size of the screen");
+  snprintf(expected, sizeof expected, "%s.part", written);
+  check(access(expected, F_OK) != 0, "with nothing left under the temporary name");
+}
+
 static void test_splore_covers(void)
 {
   char covers[8192], roms[8192], folder[16384], other[16384], path[32768];
@@ -1004,6 +1170,10 @@ int main(int argc, char **argv)
   test_switcher_preview();
   test_preview_size();
   test_splore_covers();
+  test_shortcuts_page();
+  test_cycle_helpers();
+  test_shortcut_drawing(minui_font);
+  test_screenshot_file();
 
   printf("1..%d\n", tests);
   return failures == 0 ? 0 : 1;

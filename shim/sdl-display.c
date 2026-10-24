@@ -45,11 +45,13 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "gfx.h"
@@ -92,10 +94,18 @@ typedef struct {
 #define SDL_TEXTUREACCESS_STREAMING 1
 #define SDL_AUDIO_PLAYING 1
 #define SDL_QUIT 0x100
+#define SDL_KEYDOWN 0x300
+#define SDL_KEYUP 0x301
+#define SDL_SCANCODE_R 21
+#define SDL_SCANCODE_LCTRL 224
+#define SDLK_r 'r'
+#define SDLK_LCTRL 0x400000e0
+#define KMOD_LCTRL 0x0040
 #define SDL_CONTROLLERBUTTONDOWN 0x650
 #define SDL_CONTROLLERBUTTONUP 0x651
 #define SDL_CONTROLLER_BUTTON_A 0
 #define SDL_CONTROLLER_BUTTON_B 1
+#define SDL_CONTROLLER_BUTTON_X 2
 #define SDL_CONTROLLER_BUTTON_GUIDE 5
 #define SDL_CONTROLLER_BUTTON_DPAD_UP 11
 #define SDL_CONTROLLER_BUTTON_DPAD_DOWN 12
@@ -107,6 +117,8 @@ typedef struct {
 #define INPUT_DEVICES 16
 /* how long the volume or brightness stays on screen after it last changed, as in minarch */
 #define INDICATOR_MS 500
+/* how long a notice such as "Screenshot saved" stays up */
+#define NOTIFICATION_MS 1500
 /* the steps the menu fades to black in after Quit, and how long each lasts */
 #define FADE_STEPS 8
 #define FADE_STEP_MS 20
@@ -165,6 +177,7 @@ static struct {
   int (*OpenAudio)(void *, void *);
   void (*PauseAudioDevice)(uint32_t, int);
   int (*GetAudioDeviceStatus)(uint32_t);
+  int (*GetModState)(void);
 } sdl;
 
 static void *overlay_renderer;
@@ -213,6 +226,25 @@ static int quitting;
 
 /* the device pico-8 plays through, paused while the menu is open */
 static uint32_t audio_device;
+
+/* the shortcut pressed, carried out by the next SDL_RenderPresent, or -1 */
+static int pending_shortcut = -1;
+/* where screenshots go, and whether one shows a notice */
+static const char *screenshots_dir;
+static int notify_screenshot = 1;
+/* the screenshot being saved in the background, so a later one or exiting waits for it */
+static pthread_t screenshot_thread;
+static int screenshot_running;
+/* the notice shown at the top right, and until when */
+static const char *notification;
+static uint32_t notification_until;
+static void *notification_renderer;
+static void *notification_texture;
+static const char *notification_drawn;
+/* Ctrl is reported held from the reset shortcut until pico-8 reads its release */
+static int reset_ctrl_held;
+
+static void wait_for_screenshot(void);
 
 /* the cart pico-8 was started with, and the menu's title for it, worked out on first use */
 static const char *cart_path;
@@ -271,6 +303,8 @@ static int resolve_sdl(void)
   /* without these the frames after Quit show the game rather than black */
   RESOLVE(RenderGetDrawColor);
   RESOLVE(RenderSetDrawColor);
+  /* wrapped, for the reset shortcut's Ctrl */
+  RESOLVE(GetModState);
 
   resolved = RESOLVE(CreateRGBSurfaceFrom) && RESOLVE(CreateTextureFromSurface) &&
                      RESOLVE(DestroyTexture) &&
@@ -523,6 +557,11 @@ static void init_display(void)
   settings.splore_covers_dir = getenv("PICO_PAK_SPLORE_COVERS");
   settings.pico8_config_path = getenv("PICO_PAK_PICO8_CONFIG");
   settings.installed_config_path = getenv("PICO_PAK_INSTALLED_CONFIG");
+  settings.shortcuts_path = getenv("PICO_PAK_SHORTCUTS");
+  menu_read_shortcuts(settings.shortcuts_path, settings.shortcuts);
+  screenshots_dir = getenv("PICO_PAK_SCREENSHOTS_DIR");
+  notify_screenshot = getenv("PICO_PAK_NOTIFY_SCREENSHOT") == NULL ||
+                      strcmp(getenv("PICO_PAK_NOTIFY_SCREENSHOT"), "0") != 0;
   cart_path = getenv("PICO_PAK_CART_PATH");
   switcher_dir = getenv("PICO_PAK_SWITCHER_DIR");
   /* the artwork stands in until Quit gives the switcher a frame of the game */
@@ -611,7 +650,8 @@ static int other_buttons_down(void)
 static void update_buttons(void)
 {
   static unsigned presses_at_press;
-  int down, button;
+  static int shortcut_was_down[MENU_SHORTCUT_COUNT];
+  int down, button, shortcut;
 
   if (!menu_available()) {
     return;
@@ -634,6 +674,31 @@ static void update_buttons(void)
   }
   menu_was_down = down;
 
+  /*
+   * A shortcut's button does its action once a press. With Menu held only the
+   * MENU+button ones count, and without it only the plain ones, so MENU+A and
+   * A can do different things. The button stays from pico-8 until let go.
+   */
+  for (shortcut = 0; shortcut < MENU_SHORTCUT_COUNT; shortcut++) {
+    const struct menu_binding *binding = &settings.shortcuts[shortcut];
+    int pressed;
+
+    if (!menu_is_bindable(binding->button)) {
+      continue;
+    }
+    pressed = pad_button(binding->button);
+    if (pressed && !shortcut_was_down[shortcut] && binding->with_menu == down &&
+        pending_shortcut < 0) {
+      pending_shortcut = shortcut;
+      LOG("%s pressed\n", menu_shortcut_label(shortcut));
+      if (!hidden[binding->button]) {
+        hidden[binding->button] = 1;
+        hidden_count++;
+      }
+    }
+    shortcut_was_down[shortcut] = pressed;
+  }
+
   for (button = 0; hidden_count > 0 && button < SDL_CONTROLLER_BUTTON_MAX; button++) {
     if (hidden[button] && !pad_button(button)) {
       hidden[button] = 0;
@@ -642,13 +707,28 @@ static void update_buttons(void)
   }
 }
 
+/*
+ * Menu never reaches pico-8, nor does a button bound to a shortcut: a plain
+ * one ever, as in minarch, and a MENU+button one while Menu is held.
+ */
 static int is_hidden(int button)
 {
+  int shortcut;
+
   if (!menu_available() || button < 0 || button >= SDL_CONTROLLER_BUTTON_MAX) {
     return 0;
   }
+  if (button == SDL_CONTROLLER_BUTTON_GUIDE || hidden[button]) {
+    return 1;
+  }
 
-  return button == SDL_CONTROLLER_BUTTON_GUIDE || hidden[button];
+  for (shortcut = 0; shortcut < MENU_SHORTCUT_COUNT; shortcut++) {
+    const struct menu_binding *binding = &settings.shortcuts[shortcut];
+    if (binding->button == button && (!binding->with_menu || menu_was_down)) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /* Covers pico-8 reading the pad from events as well as from button state. */
@@ -849,7 +929,7 @@ static unsigned read_menu_buttons(void)
       {SDL_CONTROLLER_BUTTON_DPAD_UP, MENU_UP},     {SDL_CONTROLLER_BUTTON_DPAD_DOWN, MENU_DOWN},
       {SDL_CONTROLLER_BUTTON_DPAD_LEFT, MENU_LEFT}, {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, MENU_RIGHT},
       {SDL_CONTROLLER_BUTTON_A, MENU_A},            {SDL_CONTROLLER_BUTTON_B, MENU_B},
-      {SDL_CONTROLLER_BUTTON_GUIDE, MENU_MENU},
+      {SDL_CONTROLLER_BUTTON_X, MENU_X},            {SDL_CONTROLLER_BUTTON_GUIDE, MENU_MENU},
   };
   unsigned held = 0;
   size_t i;
@@ -1011,16 +1091,19 @@ static void clear_to_black(void *renderer)
  * launch.sh still has work to do before the launcher draws again, so the
  * screen fades from the menu to black rather than going back to the game.
  */
-static void fade_out(void *renderer, void *texture, gfx_canvas *canvas, int drawn)
+static void fade_out(void *renderer, void *texture, gfx_canvas *canvas, int drawn, int start_dim)
 {
   size_t count = (size_t)canvas->w * canvas->h;
   int step;
 
-  /* fade from what is on screen, which is the dimmed game if the menu never drew */
+  /*
+   * Fade from what is on screen: the menu if it drew, and otherwise the game,
+   * dimmed by half when the menu was about to draw over it
+   */
   if (drawn) {
     memcpy(menu_frame, canvas->pixels, count * sizeof *menu_frame);
   } else {
-    gfx_dim(canvas, menu_frame, 0x80);
+    gfx_dim(canvas, menu_frame, start_dim);
     memcpy(menu_frame, canvas->pixels, count * sizeof *menu_frame);
   }
 
@@ -1036,15 +1119,18 @@ static void fade_out(void *renderer, void *texture, gfx_canvas *canvas, int draw
  * The cart waits here, in the middle of presenting a frame, until the menu
  * closes. The frame it was presenting is drawn again on the way out, for the
  * SDL_RenderPresent the menu was opened from to show, or black after Quit.
+ * The Quit shortcut comes here too, with quit_now set, to quit as the menu's
+ * Quit does without the menu ever drawing.
  */
-static void run_menu(void *renderer)
+static void run_menu(void *renderer, int quit_now)
 {
-  enum menu_result result = MENU_STAY;
+  enum menu_result result = quit_now ? MENU_QUIT : MENU_STAY;
   struct letterbox saved;
   struct menu menu;
   gfx_canvas canvas;
   gfx_battery battery;
   uint32_t event[14];
+  uint8_t raw_was_down[MENU_BINDABLE_BUTTONS];
   unsigned held, was_held, pressed, presses_at_menu = 0;
   int width, height, paused, button, drawn = 0, menu_chord = 0;
   size_t i;
@@ -1078,7 +1164,11 @@ static void run_menu(void *renderer)
 
   load_menu_look();
   paused = pause_audio();
-  LOG("opening the menu%s\n", paused ? " and pausing pico-8's audio" : "");
+  if (quit_now) {
+    LOG("quitting from the shortcut%s\n", paused ? " and pausing pico-8's audio" : "");
+  } else {
+    LOG("opening the menu%s\n", paused ? " and pausing pico-8's audio" : "");
+  }
   if (cart_name[0] == '\0' && cart_path != NULL && *cart_path != '\0') {
     cart_title(cart_path, cart_name, sizeof cart_name);
   }
@@ -1092,6 +1182,9 @@ static void run_menu(void *renderer)
 
   /* a button already down when the menu opens is not a press */
   was_held = read_menu_buttons();
+  for (button = 0; button < MENU_BINDABLE_BUTTONS; button++) {
+    raw_was_down[button] = pad_button(button);
+  }
   while (result == MENU_STAY) {
     while (sdl.PollEvent(event)) {
       if (event[0] == SDL_QUIT) {
@@ -1126,6 +1219,25 @@ static void run_menu(void *renderer)
       menu.dirty = 1;
     }
 
+    /*
+     * A shortcut waiting for its button takes the next one pressed, with
+     * Menu held or not, and only a tap of Menu alone reaches the menu, to
+     * give up. A button already down when it started waiting does not count.
+     */
+    for (button = 0; button < MENU_BINDABLE_BUTTONS; button++) {
+      int down = pad_button(button);
+
+      if (menu_is_binding(&menu) && menu_is_bindable(button) && down && !raw_was_down[button]) {
+        menu_bind(&menu, button, (held & MENU_MENU) != 0);
+        menu_chord = 1;
+        pressed = 0;
+      }
+      raw_was_down[button] = down;
+    }
+    if (menu_is_binding(&menu)) {
+      pressed &= MENU_MENU;
+    }
+
     result = menu_update(&menu, pressed, held, sdl.GetTicks());
     was_held = held;
 
@@ -1153,7 +1265,7 @@ static void run_menu(void *renderer)
     if (last_frame != NULL) {
       memcpy(last_frame, menu_frame, (size_t)width * height * sizeof *last_frame);
     }
-    fade_out(renderer, texture, &canvas, drawn);
+    fade_out(renderer, texture, &canvas, drawn, quit_now ? 0 : 0x80);
     quitting = 1;
     LOG("faded out, every frame is black until pico-8 exits\n");
     if (last_frame != NULL && cart_path != NULL && *cart_path != '\0') {
@@ -1181,7 +1293,204 @@ static void run_menu(void *renderer)
 
   LOG("closing the menu\n");
   if (result == MENU_QUIT) {
+    wait_for_screenshot();
     request_quit();
+  }
+}
+
+struct screenshot {
+  uint32_t *pixels;
+  int w, h;
+  time_t when;
+};
+
+static void *save_screenshot(void *data)
+{
+  struct screenshot *shot = data;
+
+  cart_write_screenshot(screenshots_dir, cart_path, shot->pixels, shot->w, shot->h, shot->when,
+                        NULL, 0);
+  free(shot->pixels);
+  free(shot);
+  return NULL;
+}
+
+/* a screenshot still being saved is finished before another starts or pico-8 exits */
+static void wait_for_screenshot(void)
+{
+  if (screenshot_running) {
+    pthread_join(screenshot_thread, NULL);
+    screenshot_running = 0;
+  }
+}
+
+/*
+ * Takes the screen as it is shown, overlay and all, and saves it on a thread
+ * of its own, as encoding a PNG on these cores would hold up the game.
+ */
+static void take_screenshot(void *renderer)
+{
+  static int waits_at_exit;
+  struct screenshot *shot;
+  struct letterbox saved;
+  size_t i, count;
+  int width, height;
+
+  if (screenshots_dir == NULL || *screenshots_dir == '\0' || cart_path == NULL ||
+      sdl.GetRendererOutputSize(renderer, &width, &height) != 0) {
+    LOG("cannot take a screenshot without a folder and a cart\n");
+    return;
+  }
+
+  count = (size_t)width * height;
+  shot = malloc(sizeof *shot);
+  if (shot == NULL || (shot->pixels = malloc(count * sizeof *shot->pixels)) == NULL) {
+    free(shot);
+    return;
+  }
+
+  clear_letterbox(renderer, &saved);
+  if (sdl.RenderReadPixels(renderer, NULL, SDL_PIXELFORMAT_ARGB8888, shot->pixels,
+                           width * (int)sizeof *shot->pixels) != 0) {
+    restore_letterbox(renderer, &saved);
+    LOG("cannot read the screen for a screenshot: %s\n", sdl.GetError());
+    free(shot->pixels);
+    free(shot);
+    return;
+  }
+  restore_letterbox(renderer, &saved);
+  for (i = 0; i < count; i++) {
+    shot->pixels[i] |= 0xff000000u;
+  }
+  shot->w = width;
+  shot->h = height;
+  shot->when = time(NULL);
+
+  wait_for_screenshot();
+  if (!waits_at_exit) {
+    atexit(wait_for_screenshot);
+    waits_at_exit = 1;
+  }
+  if (pthread_create(&screenshot_thread, NULL, save_screenshot, shot) != 0) {
+    save_screenshot(shot);
+  } else {
+    screenshot_running = 1;
+  }
+
+  if (notify_screenshot && sdl.GetTicks != NULL) {
+    notification = "Screenshot saved";
+    notification_until = sdl.GetTicks() + NOTIFICATION_MS;
+  }
+}
+
+/* the notice at the top right, below the indicator when that is showing too */
+static void draw_notification(void *renderer)
+{
+  static int texture_w, texture_h;
+  struct letterbox saved;
+  gfx_canvas canvas;
+  gfx_metrics m;
+  SDL_Rect dst;
+  int width, height, w, h, indicator_w, indicator_h;
+  uint32_t *pixels;
+
+  if (notification == NULL || sdl.GetTicks == NULL ||
+      (int32_t)(sdl.GetTicks() - notification_until) >= 0) {
+    notification = NULL;
+    return;
+  }
+  if (overlay_broken || menu_broken || sdl.GetRendererOutputSize(renderer, &width, &height) != 0) {
+    return;
+  }
+
+  load_menu_look();
+  menu_notification_size(width, height, menu_font, notification, &w, &h);
+  if (renderer != notification_renderer || w != texture_w || h != texture_h ||
+      notification != notification_drawn) {
+    if (notification_texture != NULL && renderer == notification_renderer) {
+      sdl.DestroyTexture(notification_texture);
+    }
+    notification_renderer = renderer;
+    notification_drawn = NULL;
+    notification_texture = sdl.CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                                             SDL_TEXTUREACCESS_STREAMING, w, h);
+    pixels = calloc((size_t)w * h, sizeof *pixels);
+    if (notification_texture == NULL || pixels == NULL) {
+      free(pixels);
+      return;
+    }
+    canvas.pixels = pixels;
+    canvas.w = w;
+    canvas.h = h;
+    menu_draw_notification(&canvas, width, height, &menu_theme, menu_font, 0, 0, notification);
+    sdl.UpdateTexture(notification_texture, NULL, pixels, w * (int)sizeof *pixels);
+    sdl.SetTextureBlendMode(notification_texture, SDL_BLENDMODE_BLEND);
+    free(pixels);
+    texture_w = w;
+    texture_h = h;
+    notification_drawn = notification;
+  }
+
+  m = gfx_metrics_for(width, height);
+  dst.x = width - gfx_u(&m, m.padding) - w;
+  dst.y = gfx_u(&m, m.padding);
+  if (indicator != MENU_INDICATOR_NONE) {
+    menu_indicator_size(width, height, &indicator_w, &indicator_h);
+    dst.y += indicator_h + gfx_u(&m, m.padding);
+  }
+  dst.w = w;
+  dst.h = h;
+  clear_letterbox(renderer, &saved);
+  sdl.RenderCopy(renderer, notification_texture, NULL, &dst);
+  restore_letterbox(renderer, &saved);
+}
+
+static void push_key(uint32_t type, int32_t scancode, int32_t sym, uint16_t mod)
+{
+  /* SDL_KeyboardEvent: the state at byte 12, then the scancode, symbol and modifiers */
+  uint32_t event[14] = {type};
+  unsigned char *bytes = (unsigned char *)event;
+
+  bytes[12] = type == SDL_KEYDOWN ? 1 : 0;
+  memcpy(bytes + 16, &scancode, sizeof scancode);
+  memcpy(bytes + 20, &sym, sizeof sym);
+  memcpy(bytes + 24, &mod, sizeof mod);
+  sdl.PushEvent(event);
+}
+
+/*
+ * pico-8 restarts the cart on Ctrl+R, so the shortcut presses it: Ctrl down,
+ * R down and up, then Ctrl up. Until pico-8 reads that last release, Ctrl is
+ * also reported held to SDL_GetModState, for a pico-8 that asks it.
+ */
+static void reset_cart(void)
+{
+  if (sdl.PushEvent == NULL) {
+    LOG("this SDL2 has no SDL_PushEvent, cannot reset the cart\n");
+    return;
+  }
+
+  LOG("resetting the cart with Ctrl+R\n");
+  reset_ctrl_held = 1;
+  push_key(SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL, KMOD_LCTRL);
+  push_key(SDL_KEYDOWN, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
+  push_key(SDL_KEYUP, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
+  push_key(SDL_KEYUP, SDL_SCANCODE_LCTRL, SDLK_LCTRL, 0);
+}
+
+/* the shortcuts that change things before the frame is drawn */
+static void run_shortcut(int shortcut)
+{
+  switch (shortcut) {
+  case MENU_SHORTCUT_RESET:
+    reset_cart();
+    break;
+  case MENU_SHORTCUT_SCREEN_MODE:
+    menu_cycle_screen_mode(&settings);
+    break;
+  case MENU_SHORTCUT_OVERLAY:
+    menu_cycle_overlay(&settings);
+    break;
   }
 }
 
@@ -1214,18 +1523,38 @@ EXPORT void SDL_RenderPresent(void *renderer)
    * switcher's preview after Quit is the game alone. The frame it puts back
    * then gets the overlay as any other frame would.
    */
-  if (menu_requested) {
+  if (menu_requested || pending_shortcut == MENU_SHORTCUT_QUIT) {
+    int quit_now = !menu_requested;
+
     menu_requested = 0;
-    run_menu(renderer);
+    pending_shortcut = -1;
+    run_menu(renderer, quit_now);
     if (quitting) {
       clear_to_black(renderer);
       sdl.RenderPresent(renderer);
       return;
     }
   }
+  if (pending_shortcut >= 0 && pending_shortcut != MENU_SHORTCUT_SCREENSHOT) {
+    run_shortcut(pending_shortcut);
+    pending_shortcut = -1;
+  }
+
   draw_overlay(renderer);
+  /* the screen as it is shown, without the notices drawn over it */
+  if (pending_shortcut == MENU_SHORTCUT_SCREENSHOT) {
+    pending_shortcut = -1;
+    take_screenshot(renderer);
+  }
   draw_indicator(renderer);
+  draw_notification(renderer);
   sdl.RenderPresent(renderer);
+}
+
+EXPORT int SDL_GetModState(void)
+{
+  resolve_sdl();
+  return (sdl.GetModState != NULL ? sdl.GetModState() : 0) | (reset_ctrl_held ? KMOD_LCTRL : 0);
 }
 
 EXPORT int SDL_RenderCopy(void *renderer, void *texture, const SDL_Rect *src, const SDL_Rect *dst)
@@ -1263,6 +1592,12 @@ EXPORT int SDL_PollEvent(void *event)
   do {
     got = sdl.PollEvent(event);
   } while (got && swallow_event(event));
+
+  /* the reset shortcut's Ctrl is let go once pico-8 has read it being let go */
+  if (got && reset_ctrl_held && *(const uint32_t *)event == SDL_KEYUP &&
+      *(const int32_t *)((const unsigned char *)event + 16) == SDL_SCANCODE_LCTRL) {
+    reset_ctrl_held = 0;
+  }
 
   return got;
 }
@@ -1369,6 +1704,10 @@ EXPORT void SDL_DestroyRenderer(void *renderer)
   if (renderer == indicator_renderer) {
     indicator_renderer = NULL;
     indicator_texture = NULL;
+  }
+  if (renderer == notification_renderer) {
+    notification_renderer = NULL;
+    notification_texture = NULL;
   }
 
   if (sdl.DestroyRenderer != NULL) {

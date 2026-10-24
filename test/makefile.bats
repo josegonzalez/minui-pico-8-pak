@@ -250,7 +250,7 @@ pak_platforms() {
 }
 
 @test "the png and font decoders are pinned by commit and checksum" {
-  for header in stb_image.h stb_truetype.h; do
+  for header in stb_image.h stb_truetype.h stb_image_write.h; do
     grep -B1 "nothings/stb/[0-9a-f]\{40\}/$header" "$REPO_ROOT/shim/Dockerfile" |
       grep -Eq '^ADD --checksum=sha256:[0-9a-f]{64} '
   done

@@ -93,6 +93,11 @@ struct fake_state {
 
   int pushed;
   uint32_t pushed_type;
+  /* every event pushed, as SDL_Event's 56 bytes */
+  uint32_t pushed_events[16][14];
+
+  /* what SDL_GetModState reports before the shim adds to it */
+  int mod_state;
 
   /* SDL_Event is a 56 byte union */
   uint32_t queue[8][14];

@@ -27,6 +27,9 @@ ADD --checksum=sha256:594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f
 ADD --checksum=sha256:ecd30b05e0dd4fea3a13c26810dd9e1992dc379049482c393d5a19e6b5090aab \
   https://raw.githubusercontent.com/nothings/stb/003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5/stb_truetype.h \
   /stb_truetype.h
+ADD --checksum=sha256:cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05 \
+  https://raw.githubusercontent.com/nothings/stb/003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5/stb_image_write.h \
+  /stb_image_write.h
 
 # The fonts the menu finds on the device, MinUI's CFF one and NextUI's
 # TrueType one, for the menu tests alone: neither may ship with the pak.
@@ -42,7 +45,7 @@ FROM --platform=linux/arm64 ${BASE_IMAGE} AS build-arm64
 
 COPY sdl-nosensor.c /src/sdl-nosensor.c
 COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h /src/
-COPY --from=stb /stb_image.h /stb_truetype.h /src/
+COPY --from=stb /stb_image.h /stb_truetype.h /stb_image_write.h /src/
 
 RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
   -o /out.so /src/sdl-nosensor.c -ldl
@@ -50,7 +53,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
 # Hidden by default, so only the SDL wrappers are exported and nothing of the
 # menu can be bound to a function of the same name in pico-8.
 RUN gcc -shared -fPIC -fvisibility=hidden -O2 -Wall -Wextra -Werror \
-  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c /src/crash.c -ldl
+  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c /src/crash.c -ldl -lpthread
 
 # The display shim has to export every wrapper and nothing of the decoders or
 # the menu, must not go looking for an SDL2_image at runtime, and must take
@@ -64,8 +67,9 @@ RUN readelf -V /display.so | grep -q 'GLIBC_2.17' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_DestroyRenderer$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_OpenAudioDevice$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_OpenAudio$' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_GetModState$' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu|cart|crash)_' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs)f?(@|$)' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs|frexp|ldexp)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
 
@@ -83,10 +87,10 @@ RUN readelf -V /out.so | grep -q 'GLIBC_2.17' \
 FROM --platform=linux/arm/v7 ${BASE_IMAGE} AS build-arm
 
 COPY sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h /src/
-COPY --from=stb /stb_image.h /stb_truetype.h /src/
+COPY --from=stb /stb_image.h /stb_truetype.h /stb_image_write.h /src/
 
 RUN gcc -shared -fPIC -fvisibility=hidden -O2 -Wall -Wextra -Werror \
-  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c /src/crash.c -ldl
+  -o /display.so /src/sdl-display.c /src/menu.c /src/gfx.c /src/cart.c /src/crash.c -ldl -lpthread
 
 # GLIBC_2.4 is the armhf base version, so the same ceiling holds here
 RUN readelf -h /display.so | grep -q 'ARM$' \
@@ -99,8 +103,9 @@ RUN readelf -h /display.so | grep -q 'ARM$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_DestroyRenderer$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_OpenAudioDevice$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_OpenAudio$' \
+  && readelf --dyn-syms /display.so | grep -q ' SDL_GetModState$' \
   && ! readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu|cart|crash)_' \
-  && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs)f?(@|$)' \
+  && ! readelf -W --dyn-syms /display.so | grep -Eq ' (sqrt|pow|cos|acos|fmod|floor|ceil|fabs|frexp|ldexp)f?(@|$)' \
   && ! readelf -d /display.so | grep -q 'libm\.so' \
   && ! strings /display.so | grep -q 'libSDL2_image'
 
@@ -122,6 +127,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-event \
+  && LD_PRELOAD=/display.so /src/test/display-test quit-shortcut \
   && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
 
 FROM build-arm AS test-arm
@@ -138,6 +144,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
 
 RUN LD_PRELOAD=/display.so /src/test/display-test \
   && LD_PRELOAD=/display.so /src/test/display-test quit-event \
+  && LD_PRELOAD=/display.so /src/test/display-test quit-shortcut \
   && /src/test/menu-test /fonts/BPreplayBold-unhinted.otf /fonts/font1.ttf
 
 FROM scratch AS export

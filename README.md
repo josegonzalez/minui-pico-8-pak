@@ -95,6 +95,26 @@ The menu has these entries:
 
 The menu takes its look from the launcher, using NextUI's theme colours and font, or MinUI's font. If neither font is on the SD card, it draws with a small built-in font instead.
 
+#### Shortcuts
+
+The last row of the options, `Shortcuts`, sets buttons that do something straight away while a game is running, as NextUI's own shortcuts do. Every shortcut starts unbound.
+
+| Shortcut          | What it does                                                         |
+| ----------------- | -------------------------------------------------------------------- |
+| Screenshot        | Saves the screen as a PNG, as NextUI does                            |
+| Quit              | Quits, as `Quit` in the menu does                                    |
+| Reset Game        | Restarts the cart, by pressing PICO-8's own `Ctrl` + `R` for it      |
+| Cycle Screen Mode | Switches between `Standard` and `Stretched`                          |
+| Cycle Overlay     | Steps through `None` and then each overlay                           |
+
+To bind one, choose it and press `A`, then press the button to use. Hold `Menu` while pressing it to make the shortcut `Menu` + that button. Tap `Menu` alone to give up, and press `X` on a shortcut to clear it. A button can only do one thing, so binding it to one shortcut takes it from any other.
+
+A button bound on its own never reaches the game, and one bound with `Menu` does not reach it while `Menu` is held. `Menu` cannot be bound itself.
+
+The shortcuts are saved to a file named `shortcuts` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card.
+
+A screenshot is the screen as you see it, overlay included. It is saved to the `/Screenshots` folder on your SD card, named for the game and the time it was taken, such as `Celeste.2026-10-24-13-05-09.png`, the same way NextUI names its own. A "Screenshot saved" notice shows at the top right of the screen, unless NextUI's own setting for screenshot notifications is turned off.
+
 ### Volume and brightness
 
 Changing the volume or brightness while a game is running, or in the menu, shows the same bar MinUI and NextUI show over their own emulators, in the top right of the screen. It goes away half a second after the last change. In the menu it takes the battery's place until then.

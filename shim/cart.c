@@ -8,10 +8,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "cart.h"
 #include "gfx.h"
+
+/*
+ * Only the PNG encoder is used, writing to memory, static so none of it is
+ * exported into pico-8. Its HDR writer would take frexp from libm, but nothing
+ * calls it, so it is never built in, which shim/Dockerfile checks. Its file
+ * writers stay in, unused: STBI_WRITE_NO_STDIO leaves the HDR one declared
+ * but not defined, which gcc refuses.
+ */
+#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STBIW_ASSERT(x) ((void)0)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#include "stb_image_write.h"
+#pragma GCC diagnostic pop
 
 #define LOG(...) gfx_log(__VA_ARGS__)
 
@@ -367,19 +384,38 @@ int cart_preview_step(int w, int h)
 }
 
 /*
- * A 24-bit BMP, which every SDL_image loads, of every step-th pixel. It is put
- * together in memory and written with one write, as the SD card makes each
- * write wait for the card, and under a temporary name, so a picture cut short
- * never replaces the one there.
+ * Writes data under a temporary name and then puts it in place. It is one
+ * write, as the SD card makes each write wait for the card, and a file cut
+ * short never replaces the one there.
  */
+static int write_whole(const char *path, const void *data, size_t size)
+{
+  char temporary[8192];
+  FILE *file;
+  int ok;
+
+  if (snprintf(temporary, sizeof temporary, "%s.part", path) >= (int)sizeof temporary) {
+    return 0;
+  }
+  file = fopen(temporary, "wb");
+  ok = file != NULL && fwrite(data, 1, size, file) == size;
+  if (file != NULL) {
+    ok = fclose(file) == 0 && ok;
+  }
+  if (!ok || rename(temporary, path) != 0) {
+    unlink(temporary);
+    return 0;
+  }
+  return 1;
+}
+
+/* a 24-bit BMP, which every SDL_image loads, of every step-th pixel */
 static int write_bmp(const char *path, const uint32_t *pixels, int w, int h, int step)
 {
   int out_w = w / step, out_h = h / step, x, y;
   size_t row_size = ((size_t)out_w * 3 + 3) & ~(size_t)3;
   size_t size = 54 + row_size * out_h;
   unsigned char *bmp = calloc(1, size);
-  char temporary[8192];
-  FILE *file;
   int ok;
 
   if (bmp == NULL || out_w <= 0 || out_h <= 0) {
@@ -410,22 +446,9 @@ static int write_bmp(const char *path, const uint32_t *pixels, int w, int h, int
     }
   }
 
-  if (snprintf(temporary, sizeof temporary, "%s.part", path) >= (int)sizeof temporary) {
-    free(bmp);
-    return 0;
-  }
-  file = fopen(temporary, "wb");
-  ok = file != NULL && fwrite(bmp, 1, size, file) == size;
-  if (file != NULL) {
-    ok = fclose(file) == 0 && ok;
-  }
+  ok = write_whole(path, bmp, size);
   free(bmp);
-
-  if (!ok || rename(temporary, path) != 0) {
-    unlink(temporary);
-    return 0;
-  }
-  return 1;
+  return ok;
 }
 
 int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
@@ -446,6 +469,63 @@ int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
 
   LOG("gave the game switcher the last frame as the preview for %s, at %dx%d\n", name, w / step,
       h / step);
+  return 1;
+}
+
+int cart_write_screenshot(const char *dir, const char *cart_path, const uint32_t *pixels, int w,
+                          int h, time_t when, char *written, size_t size)
+{
+  char title[256], stamp[32], path[8192];
+  unsigned char *rgb, *png;
+  struct tm local;
+  size_t i, count = (size_t)w * h;
+  int png_size, ok;
+  char *slash;
+
+  if (dir == NULL || *dir == '\0' || cart_path == NULL || w <= 0 || h <= 0 || !make_dirs(dir)) {
+    return 0;
+  }
+
+  /* NextUI's name: the game's name and when, as <name>.<YYYY-MM-DD-HH-MM-SS>.png */
+  cart_title(cart_path, title, sizeof title);
+  while ((slash = strchr(title, '/')) != NULL) {
+    *slash = '-';
+  }
+  localtime_r(&when, &local);
+  strftime(stamp, sizeof stamp, "%Y-%m-%d-%H-%M-%S", &local);
+  if (snprintf(path, sizeof path, "%s/%s.%s.png", dir, title, stamp) >= (int)sizeof path) {
+    return 0;
+  }
+
+  rgb = malloc(count * 3);
+  if (rgb == NULL) {
+    return 0;
+  }
+  for (i = 0; i < count; i++) {
+    rgb[i * 3] = (pixels[i] >> 16) & 0xff;
+    rgb[i * 3 + 1] = (pixels[i] >> 8) & 0xff;
+    rgb[i * 3 + 2] = pixels[i] & 0xff;
+  }
+
+  /* a light compression, as this runs on the device's slow cores */
+  stbi_write_png_compression_level = 2;
+  png = stbi_write_png_to_mem(rgb, w * 3, w, h, 3, &png_size);
+  free(rgb);
+  if (png == NULL) {
+    return 0;
+  }
+
+  ok = write_whole(path, png, (size_t)png_size);
+  free(png);
+  if (!ok) {
+    LOG("cannot save the screenshot %s\n", path);
+    return 0;
+  }
+
+  LOG("saved the screenshot %s\n", path);
+  if (written != NULL) {
+    snprintf(written, size, "%s", path);
+  }
   return 1;
 }
 

@@ -65,9 +65,17 @@ int SDL_PollEvent(void *event)
 
 int SDL_PushEvent(void *event)
 {
+  if (fake.pushed < (int)(sizeof fake.pushed_events / sizeof *fake.pushed_events)) {
+    memcpy(fake.pushed_events[fake.pushed], event, sizeof fake.pushed_events[0]);
+  }
   fake.pushed++;
   fake.pushed_type = *(uint32_t *)event;
   return 1;
+}
+
+int SDL_GetModState(void)
+{
+  return fake.mod_state;
 }
 
 void *SDL_GameControllerOpen(int index)

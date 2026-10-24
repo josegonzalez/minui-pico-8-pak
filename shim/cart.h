@@ -14,6 +14,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 /*
  * The name the game list shows: the cart's row in map.txt, or its file name
@@ -45,6 +46,14 @@ int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
 
 /* how many of the screen's pixels each of the frame preview's stands for */
 int cart_preview_step(int w, int h);
+
+/*
+ * Saves a screenshot to dir as NextUI saves its own, a PNG named for the game
+ * and when it was taken, <name>.<YYYY-MM-DD-HH-MM-SS>.png, making dir if it is
+ * missing. Puts the path it wrote in written, and returns 0 when it could not.
+ */
+int cart_write_screenshot(const char *dir, const char *cart_path, const uint32_t *pixels, int w,
+                          int h, time_t when, char *written, size_t size);
 
 /*
  * Gives every Splore cart in the roms folders tagged "(<tag>)" the pak's

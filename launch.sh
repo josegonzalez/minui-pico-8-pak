@@ -605,6 +605,18 @@ has_overlays() {
   return 1
 }
 
+# Takes the style get_menu_style printed. 1 when a screenshot should show a
+# notice: NextUI's own notifyScreenshot setting, which is on unless set to 0,
+# and always under MinUI, which has no such setting.
+get_notify_screenshot() {
+  if [ "$1" = "nextui" ] && [ "$(read_nextui_setting notifyScreenshot)" = "0" ]; then
+    echo "0"
+    return 0
+  fi
+
+  echo "1"
+}
+
 # NextUI's game switcher folder, which the display shim gives the cart's
 # preview. MinUI reads the same files to offer a resume, so it gets none.
 get_switcher_dir() {
@@ -644,6 +656,10 @@ setup_display_preload() {
   export PICO_PAK_PICO8_CONFIG
   export PICO_PAK_INSTALLED_CONFIG="$HOME/config.txt"
 
+  # the shortcuts set in the menu, and where the screenshot one saves to
+  export PICO_PAK_SHORTCUTS="$USERDATA_PATH/Pico-8-native/shortcuts"
+  export PICO_PAK_SCREENSHOTS_DIR="$SDCARD_PATH/Screenshots"
+
   # the menu gives every Splore cart the cover it is set to, as it changes
   export PICO_PAK_ROMS_DIR="$SDCARD_PATH/Roms"
   export PICO_PAK_TAG="$PAK_NAME"
@@ -654,7 +670,9 @@ setup_display_preload() {
   PICO_PAK_MENU_STYLE="$(get_menu_style)"
   PICO_PAK_MENU_FONT="$(get_menu_font "$PICO_PAK_MENU_STYLE")"
   PICO_PAK_MENU_COLORS="$(get_menu_colors "$PICO_PAK_MENU_STYLE")"
+  PICO_PAK_NOTIFY_SCREENSHOT="$(get_notify_screenshot "$PICO_PAK_MENU_STYLE")"
   export PICO_PAK_SWITCHER_DIR PICO_PAK_MENU_STYLE PICO_PAK_MENU_FONT PICO_PAK_MENU_COLORS
+  export PICO_PAK_NOTIFY_SCREENSHOT
   echo "In-game menu: $PICO_PAK_MENU_STYLE look, font ${PICO_PAK_MENU_FONT:-built-in}" 1>&2
 
   export LD_PRELOAD="$display_shim${LD_PRELOAD:+:$LD_PRELOAD}"

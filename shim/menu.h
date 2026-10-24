@@ -26,6 +26,7 @@ enum {
   MENU_A = 1 << 4,
   MENU_B = 1 << 5,
   MENU_MENU = 1 << 6,
+  MENU_X = 1 << 7,
 };
 
 enum menu_result { MENU_STAY, MENU_CLOSE, MENU_QUIT };
@@ -37,7 +38,7 @@ enum menu_indicator { MENU_INDICATOR_NONE, MENU_INDICATOR_BRIGHTNESS, MENU_INDIC
 #define MENU_BRIGHTNESS_MAX 10
 #define MENU_VOLUME_MAX 20
 
-enum menu_page { MENU_PAGE_ROOT, MENU_PAGE_OPTIONS };
+enum menu_page { MENU_PAGE_ROOT, MENU_PAGE_OPTIONS, MENU_PAGE_SHORTCUTS };
 
 enum menu_root_row { MENU_CONTINUE, MENU_SAVE, MENU_LOAD, MENU_OPTIONS, MENU_EXIT, MENU_ROOT_COUNT };
 
@@ -51,7 +52,33 @@ enum menu_option_row {
 };
 
 #define MENU_CONFIG_COUNT 5
-#define MENU_OPTION_COUNT (MENU_CONFIG_FIRST + MENU_CONFIG_COUNT)
+/* the last Options row opens the Shortcuts page */
+#define MENU_SHORTCUTS_ROW (MENU_CONFIG_FIRST + MENU_CONFIG_COUNT)
+#define MENU_OPTION_COUNT (MENU_SHORTCUTS_ROW + 1)
+
+/* what a shortcut does, one row each of the Shortcuts page */
+enum menu_shortcut {
+  MENU_SHORTCUT_SCREENSHOT,
+  MENU_SHORTCUT_QUIT,
+  MENU_SHORTCUT_RESET,
+  MENU_SHORTCUT_SCREEN_MODE,
+  MENU_SHORTCUT_OVERLAY,
+  MENU_SHORTCUT_COUNT,
+};
+
+/*
+ * A shortcut's button, as SDL numbers a game controller's, and whether Menu
+ * has to be held with it, as NextUI's MENU+button shortcuts are. A button
+ * of -1 is a shortcut nothing is bound to.
+ */
+struct menu_binding {
+  int button;
+  int with_menu;
+};
+
+/* the controller buttons a shortcut can use: all but Menu itself */
+#define MENU_BINDABLE_BUTTONS 15
+int menu_is_bindable(int button);
 
 /* the values the screen-mode file holds, in the order the menu steps through */
 extern const char *const menu_screen_modes[];
@@ -86,6 +113,10 @@ struct menu_settings {
   /* the config.txt pico-8 was started with, for the settings never changed */
   const char *installed_config_path;
 
+  /* the shortcuts' buttons, saved here as they change */
+  const char *shortcuts_path;
+  struct menu_binding shortcuts[MENU_SHORTCUT_COUNT];
+
   char *const *overlay_names;
   int overlay_count;
 
@@ -103,6 +134,10 @@ struct menu {
   int option_row;
   /* the first option row on screen, when they do not all fit */
   int option_top;
+  int shortcut_row;
+  int shortcut_top;
+  /* the shortcut waiting for a button to be pressed for it, or -1 */
+  int binding;
 
   int copy_carts;
   int splore_artwork;
@@ -159,5 +194,33 @@ void menu_draw_indicator(gfx_canvas *canvas, int screen_w, int screen_h, const g
 
 /* the text an option row shows for its current value */
 void menu_option_value(const struct menu *menu, int row, char *out, size_t size);
+
+/* reads the shortcuts saved at path, leaving every other one unbound */
+void menu_read_shortcuts(const char *path, struct menu_binding *shortcuts);
+/* the name a binding shows, such as A or MENU+A, or None */
+void menu_binding_name(const struct menu_binding *binding, char *out, size_t size);
+/* the name a shortcut shows, such as Screenshot */
+const char *menu_shortcut_label(int shortcut);
+
+/*
+ * While a shortcut waits for its button, every button pressed is given here
+ * rather than to menu_update, which binds it, unbinding any other shortcut
+ * that used the same one, and saves them all.
+ */
+int menu_is_binding(const struct menu *menu);
+void menu_bind(struct menu *menu, int button, int with_menu);
+
+/* what the screen mode and overlay shortcuts do, saved as the menu saves them */
+void menu_cycle_screen_mode(struct menu_settings *settings);
+void menu_cycle_overlay(struct menu_settings *settings);
+
+/*
+ * A short message in a pill at the top right, as NextUI shows when a
+ * screenshot is saved. The size depends on the text, so it takes the font.
+ */
+void menu_notification_size(int screen_w, int screen_h, const gfx_font *font, const char *text,
+                            int *w, int *h);
+void menu_draw_notification(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
+                            const gfx_font *font, int x, int y, const char *text);
 
 #endif

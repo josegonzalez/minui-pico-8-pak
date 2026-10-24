@@ -12,6 +12,7 @@
  */
 
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <link.h>
@@ -58,6 +59,7 @@ void SDL_GameControllerClose(void *controller);
 uint8_t SDL_GameControllerGetButton(void *controller, int button);
 uint32_t SDL_OpenAudioDevice(const char *device, int iscapture, const void *desired,
                              void *obtained, int allowed_changes);
+int SDL_GetModState(void);
 
 static int tests;
 static int failures;
@@ -68,6 +70,8 @@ static char copy_carts_dir[4096];
 static char pico8_config_path[4096];
 static char splore_artwork_path[4096];
 static char switcher_dir[4096];
+static char shortcuts_path[4096];
+static char screenshots_dir[4096];
 
 static int preview_is_frame(int w, int h, uint32_t colour);
 static char input_path[4096];
@@ -219,6 +223,8 @@ static unsigned char square_pixels[2 * 2 * 4];
 
 static void make_fixtures(void)
 {
+  static const char shortcuts[] =
+      "screenshot menu+x\nreset menu+y\nscreen-mode l1\noverlay menu+r1\n";
   char path[8192];
   size_t i;
 
@@ -308,6 +314,14 @@ static void make_fixtures(void)
   setenv("PICO_PAK_CART_PATH", path, 1);
   snprintf(switcher_dir, sizeof switcher_dir, "%s/.minui/PICO", dir);
   setenv("PICO_PAK_SWITCHER_DIR", switcher_dir, 1);
+
+  /* MENU+X screenshot, MENU+Y reset, L1 alone screen mode, MENU+R1 overlay */
+  snprintf(shortcuts_path, sizeof shortcuts_path, "%s/shortcuts", dir);
+  write_file(shortcuts_path, shortcuts, strlen(shortcuts));
+  setenv("PICO_PAK_SHORTCUTS", shortcuts_path, 1);
+  snprintf(screenshots_dir, sizeof screenshots_dir, "%s/Screenshots", dir);
+  setenv("PICO_PAK_SCREENSHOTS_DIR", screenshots_dir, 1);
+  unsetenv("PICO_PAK_NOTIFY_SCREENSHOT");
   /* no font, so the menu draws with its built-in one */
   unsetenv("PICO_PAK_MENU_FONT");
 }
@@ -586,13 +600,13 @@ static void test_quit(void *pad)
 {
   static const uint32_t quit[] = {BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_DPAD_DOWN), 0,
                                   BIT(BUTTON_A)};
-  int resumes = fake.audio_resumes, copies, black_clears;
+  int resumes = fake.audio_resumes, pushed = fake.pushed, copies, black_clears;
 
   fake.updates = 0;
   tap_menu(pad);
   set_script(quit, 5);
   SDL_RenderPresent(&renderer_b);
-  check(fake.pushed == 1 && fake.pushed_type == SDL_QUIT,
+  check(fake.pushed == pushed + 1 && fake.pushed_type == SDL_QUIT,
         "Quit, past the unavailable Save and Load, pushes SDL_QUIT");
   check(fake.delays == 5 + 8 && fake.updates >= 9 &&
             fake.updated[fake.updates - 1] == 0xff000000u &&
@@ -619,6 +633,27 @@ static void test_quit(void *pad)
  * An SDL_QUIT arriving while the menu is open quits as Quit does. Quitting
  * cannot be undone, so this runs in a process of its own.
  */
+static void test_quit_shortcut(void *pad)
+{
+  write_file(shortcuts_path, "quit menu+b\n", 12);
+  fake.frame_colour = 0x00ff8040;
+  fake.updates = 0;
+  fake.buttons[BUTTON_GUIDE] = 1;
+  fake.buttons[BUTTON_B] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  set_script(NULL, 0);
+  SDL_RenderPresent(&renderer_a);
+
+  check(fake.pushed == 1 && fake.pushed_type == SDL_QUIT, "the Quit shortcut quits pico-8");
+  /* the first step of eight darkens by 31 of 255, from the game itself */
+  check(fake.reads == 1 && fake.delays == 8 && fake.updated[0] == 0xffe07038u &&
+            fake.updated[fake.updates - 1] == 0xff000000u,
+        "fading to black from the game, as no menu was drawn over it");
+  check(preview_is_frame(341, 256, 0x00ff8040), "and gives the switcher the game's last frame");
+}
+
 static void test_quit_event(void *pad)
 {
   fake.updates = 0;
@@ -843,6 +878,167 @@ static void test_settings(void *pad)
         "Volume steps down from the installed config.txt's value and saves it");
 }
 
+#define BUTTON_X 2
+#define BUTTON_Y 3
+#define BUTTON_L1 9
+#define BUTTON_R1 10
+#define SDL_KEYUP 0x301
+#define KMOD_LCTRL 0x0040
+
+/* the PNG the screenshot shortcut saved, waiting for its thread to finish */
+static int find_screenshot(char *found, size_t size)
+{
+  struct dirent *entry;
+  DIR *folder;
+  int tries;
+
+  for (tries = 0; tries < 200; tries++) {
+    folder = opendir(screenshots_dir);
+    while (folder != NULL && (entry = readdir(folder)) != NULL) {
+      size_t length = strlen(entry->d_name);
+      if (length > 4 && strcmp(entry->d_name + length - 4, ".png") == 0) {
+        int fits = snprintf(found, size, "%s/%s", screenshots_dir, entry->d_name) < (int)size;
+        closedir(folder);
+        return fits;
+      }
+    }
+    if (folder != NULL) {
+      closedir(folder);
+    }
+    usleep(10000);
+  }
+  return 0;
+}
+
+static void test_shortcuts(void *pad)
+{
+  char found[8192];
+  unsigned char png[24];
+  FILE *file;
+  int pushed, reads, copies, i, notified = 0;
+
+  /* L1 alone switches the screen mode, and never reaches pico-8 */
+  release_all();
+  fake.buttons[BUTTON_L1] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_L1) == 0, "a button bound alone is hidden from pico-8");
+  SDL_RenderPresent(&renderer_b);
+  check(file_is(screen_mode_path, "stretched"), "and pressing it does its shortcut");
+  SDL_RenderPresent(&renderer_b);
+  check(file_is(screen_mode_path, "stretched"), "once a press");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.buttons[BUTTON_L1] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_L1);
+  SDL_RenderPresent(&renderer_b);
+  check(file_is(screen_mode_path, "standard"), "and again the next");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  /* X alone reaches pico-8, and MENU+X takes a screenshot */
+  fake.buttons[BUTTON_X] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_X) == 1,
+        "a button bound with Menu still reaches pico-8 on its own");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  reads = fake.reads;
+  fake.buttons[BUTTON_GUIDE] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.buttons[BUTTON_X] = 1;
+  check(SDL_GameControllerGetButton(pad, BUTTON_X) == 0, "but not with Menu held");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  copies = fake.copies;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.reads == reads + 1, "MENU+X reads the screen for a screenshot, and opens no menu");
+  check(find_screenshot(found, sizeof found) && strstr(found, "/Celeste.") != NULL,
+        "the screenshot is saved to the screenshots folder, named for the game");
+  file = fopen(found, "rb");
+  check(file != NULL && fread(png, 1, sizeof png, file) == sizeof png &&
+            memcmp(png, "\x89PNG", 4) == 0 && png[18] == (1024 >> 8) && png[22] == (768 >> 8),
+        "as a PNG of the whole screen");
+  if (file != NULL) {
+    fclose(file);
+  }
+  for (i = copies; i < fake.copies; i++) {
+    notified |= fake.copy[i].has_dst && fake.copy[i].dst.h == 90 &&
+                fake.copy[i].dst.x + fake.copy[i].dst.w == 1024 - 15 && fake.copy[i].dst.y == 15;
+  }
+  check(notified, "with a notice at the top right that it was saved");
+
+  /* MENU+R1 steps through the overlays */
+  fake.buttons[BUTTON_GUIDE] = 1;
+  fake.buttons[BUTTON_R1] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  SDL_RenderPresent(&renderer_b);
+  check(file_is(choice_path, "b.png"), "MENU+R1 moves to the next overlay and saves it");
+
+  /* MENU+Y presses Ctrl+R for pico-8 */
+  pushed = fake.pushed;
+  fake.buttons[BUTTON_GUIDE] = 1;
+  fake.buttons[BUTTON_Y] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == pushed + 4 && fake.pushed_events[pushed][0] == SDL_KEYDOWN &&
+            fake.pushed_events[pushed][4] == 224 && fake.pushed_events[pushed + 1][4] == 21 &&
+            fake.pushed_events[pushed + 2][0] == SDL_KEYUP &&
+            fake.pushed_events[pushed + 3][0] == SDL_KEYUP && fake.pushed_events[pushed + 3][4] == 224,
+        "MENU+Y presses Ctrl, then R, and lets both go");
+  check((fake.pushed_events[pushed + 1][6] & 0xffff) == KMOD_LCTRL,
+        "with Ctrl held on the R");
+  check(SDL_GetModState() == KMOD_LCTRL, "and Ctrl reported held to SDL_GetModState");
+
+  memset(fake.queue, 0, sizeof fake.queue);
+  fake.queue[0][0] = SDL_KEYUP;
+  fake.queue[0][4] = 224;
+  fake.queued = 1;
+  fake.queue_head = 0;
+  {
+    uint32_t event[14];
+    SDL_PollEvent(event);
+  }
+  check(SDL_GetModState() == 0, "until pico-8 reads Ctrl being let go");
+  fake.queued = fake.queue_head = 0;
+}
+
+/*
+ * Binding in the menu: Options, up to its last row, Shortcuts, down to Quit,
+ * A, then Menu held with B pressed. B backs out of each page after.
+ */
+static void test_binding(void *pad)
+{
+  static const uint32_t states[] = {
+      BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_DPAD_UP), 0, BIT(BUTTON_A), 0,
+      BIT(BUTTON_DPAD_DOWN), 0, BIT(BUTTON_A), 0, BIT(BUTTON_GUIDE),
+      BIT(BUTTON_GUIDE) | BIT(BUTTON_B), BIT(BUTTON_GUIDE), 0, BIT(BUTTON_B), 0, BIT(BUTTON_B), 0,
+      BIT(BUTTON_B)};
+  char line[256] = "";
+  FILE *file;
+  int found = 0;
+
+  release_all();
+  tap_menu(pad);
+  set_script(states, (int)(sizeof states / sizeof *states));
+  SDL_RenderPresent(&renderer_b);
+  check(fake.delays == (int)(sizeof states / sizeof *states),
+        "binding with Menu held neither closes the menu nor opens one");
+
+  file = fopen(shortcuts_path, "r");
+  while (file != NULL && fgets(line, sizeof line, file) != NULL) {
+    found |= strcmp(line, "quit menu+b\n") == 0;
+  }
+  if (file != NULL) {
+    fclose(file);
+  }
+  check(found, "Quit is bound to MENU+B in the shortcuts file");
+  release_all();
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+}
+
 /* whether the file holds text anywhere */
 static int file_has(const char *path, const char *text)
 {
@@ -927,6 +1123,11 @@ int main(int argc, char **argv)
     printf("1..%d\n", tests);
     return failures == 0 ? 0 : 1;
   }
+  if (argc > 1 && strcmp(argv[1], "quit-shortcut") == 0) {
+    test_quit_shortcut(pad);
+    printf("1..%d\n", tests);
+    return failures == 0 ? 0 : 1;
+  }
 
   test_select_combos(pad);
   test_overlays(pad);
@@ -936,6 +1137,8 @@ int main(int argc, char **argv)
   test_events(pad);
   test_screen_mode(pad);
   test_settings(pad);
+  test_shortcuts(pad);
+  test_binding(pad);
   test_indicator();
   test_quit(pad);
   test_crash();

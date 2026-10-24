@@ -478,6 +478,27 @@ teardown() {
   [ "$output" = "0xFFFFFFFF,0x9B2257FF,,,,,0x000000FF" ]
 }
 
+@test "get_notify_screenshot follows NextUI's notifyScreenshot setting" {
+  printf 'notifyScreenshot=0\r\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot nextui
+  [ "$output" = "0" ]
+
+  printf 'notifyScreenshot=1\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot nextui
+  [ "$output" = "1" ]
+
+  # NextUI's default is on
+  printf 'font=1\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot nextui
+  [ "$output" = "1" ]
+}
+
+@test "get_notify_screenshot always shows the notice under MinUI" {
+  printf 'notifyScreenshot=0\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot minui
+  [ "$output" = "1" ]
+}
+
 @test "get_menu_colors names none under MinUI" {
   run get_menu_colors "$(get_menu_style)"
   [ "$status" -eq 0 ]
@@ -535,6 +556,9 @@ teardown() {
   [ "$PICO_PAK_TAG" = "PICO" ]
   [ "$PICO_PAK_SPLORE_COVERS" = "$PAK_DIR/splore" ]
   [ "$PICO_PAK_CART_PATH" = "$cart" ]
+  [ "$PICO_PAK_SHORTCUTS" = "$USERDATA_PATH/Pico-8-native/shortcuts" ]
+  [ "$PICO_PAK_SCREENSHOTS_DIR" = "$SDCARD_PATH/Screenshots" ]
+  [ "$PICO_PAK_NOTIFY_SCREENSHOT" = "1" ]
   [ "$PICO_PAK_SWITCHER_DIR" = "$SHARED_USERDATA_PATH/.minui/PICO" ]
   [ -z "${PICO_PAK_CART_NAME+set}" ]
   [ "$PICO_PAK_MENU_STYLE" = "nextui" ]
