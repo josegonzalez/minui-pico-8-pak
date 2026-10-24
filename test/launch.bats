@@ -44,18 +44,31 @@ teardown() {
 }
 
 @test "verify_cart accepts the splore cart" {
-  run verify_cart "$(make_cart Splore.p8)"
+  cart="$(make_cart Splore.p8)"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
   [ "$status" -eq 0 ]
 }
 
 @test "verify_cart accepts a sorted splore cart" {
-  run verify_cart "$(make_cart "1) Splore.p8.png")"
+  cart="$(make_cart "1) Splore.p8.png")"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
   [ "$status" -eq 0 ]
 }
 
 @test "verify_cart accepts a splore cart with no extension" {
-  run verify_cart "$(make_cart splore)"
+  cart="$(make_cart splore)"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
   [ "$status" -eq 0 ]
+}
+
+@test "verify_cart holds an ordinary cart to the cart extensions" {
+  cart="$(make_cart README)"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
+  [ "$status" -eq 1 ]
 }
 
 @test "verify_cart rejects a txt file" {
@@ -173,6 +186,31 @@ teardown() {
   [ -f "$rom_folder/.media/Splore.png" ]
   [ -f "$rom_folder/.res/Splore.p8.png" ]
   cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/.res/Splore.p8.png"
+}
+
+@test "install_splore_cart seeds the cover chosen in the in-game menu" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  echo "fancy" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+
+  run install_splore_cart
+  [ "$status" -eq 0 ]
+
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$rom_folder/.media/Splore.png"
+  cmp -s "$REPO_ROOT/splore/Splore-fancy.p8.png" "$rom_folder/.res/Splore.p8.png"
+  cmp -s "$REPO_ROOT/splore/Splore.p8.png" "$rom_folder/Splore.p8"
+}
+
+@test "get_splore_artwork is the standard cover unless fancy was chosen" {
+  run get_splore_artwork
+  [ "$output" = "$PAK_DIR/splore/Splore.p8.png" ]
+
+  printf 'fancy\r\n' >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+  run get_splore_artwork
+  [ "$output" = "$PAK_DIR/splore/Splore-fancy.p8.png" ]
+
+  echo "standard" >"$USERDATA_PATH/Pico-8-native/splore-artwork"
+  run get_splore_artwork
+  [ "$output" = "$PAK_DIR/splore/Splore.p8.png" ]
 }
 
 @test "install_splore_cart seeds every tagged roms folder" {
@@ -367,20 +405,103 @@ teardown() {
   [ "$output" = "arm" ]
 }
 
-@test "get_menu_button names the button each mapping reports for Menu" {
-  for platform in tg5040 tg5050; do
-    PLATFORM="$platform" run get_menu_button
-    [ "$output" = "start" ]
-  done
-  for platform in h700 my355; do
-    PLATFORM="$platform" run get_menu_button
-    [ "$output" = "guide" ]
-  done
+@test "get_menu_style is minui without NextUI's settings and fonts" {
+  run get_menu_style
+  [ "$output" = "minui" ]
+
+  : >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_style
+  [ "$output" = "minui" ]
 }
 
-# MinUI's pads map no Menu button, and Start is the real Start there
-@test "get_menu_button names nothing on rg35xxplus" {
-  PLATFORM=rg35xxplus run get_menu_button
+@test "get_menu_style is nextui with NextUI's settings and fonts" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  : >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  run get_menu_style
+  [ "$output" = "nextui" ]
+}
+
+@test "get_menu_font uses MinUI's font under MinUI" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/BPreplayBold-unhinted.otf"
+
+  run get_menu_font "$(get_menu_style)"
+  [ "$output" = "$SDCARD_PATH/.system/res/BPreplayBold-unhinted.otf" ]
+}
+
+@test "get_menu_font names nothing on a card with no font" {
+  run get_menu_font "$(get_menu_style)"
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "get_menu_font follows NextUI's font setting" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  : >"$SDCARD_PATH/.system/res/font2.ttf"
+
+  : >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font "$(get_menu_style)"
+  [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+
+  printf 'font=1\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font "$(get_menu_style)"
+  [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+
+  printf 'font=0\r\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font "$(get_menu_style)"
+  [ "$output" = "$SDCARD_PATH/.system/res/font2.ttf" ]
+
+  printf 'font=font2.ttf\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_menu_font "$(get_menu_style)"
+  [ "$output" = "$SDCARD_PATH/.system/res/font2.ttf" ]
+}
+
+@test "get_menu_font falls back to font1 when NextUI names a font that is gone" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  printf 'font=mine.ttf\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  run get_menu_font "$(get_menu_style)"
+  [ "$output" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+}
+
+@test "get_menu_colors names NextUI's seven colours in order" {
+  mkdir -p "$SDCARD_PATH/.system/res"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  printf 'color1=0xFFFFFFFF\r\ncolor2=0x9B2257FF\r\ncolor7=0x000000FF\r\nfont=1\r\n' \
+    >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  run get_menu_colors "$(get_menu_style)"
+  [ "$output" = "0xFFFFFFFF,0x9B2257FF,,,,,0x000000FF" ]
+}
+
+@test "get_notify_screenshot follows NextUI's notifyScreenshot setting" {
+  printf 'notifyScreenshot=0\r\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot nextui
+  [ "$output" = "0" ]
+
+  printf 'notifyScreenshot=1\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot nextui
+  [ "$output" = "1" ]
+
+  # NextUI's default is on
+  printf 'font=1\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot nextui
+  [ "$output" = "1" ]
+}
+
+@test "get_notify_screenshot always shows the notice under MinUI" {
+  printf 'notifyScreenshot=0\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+  run get_notify_screenshot minui
+  [ "$output" = "1" ]
+}
+
+@test "get_menu_colors names none under MinUI" {
+  run get_menu_colors "$(get_menu_style)"
+  [ "$status" -eq 0 ]
   [ "$output" = "" ]
 }
 
@@ -394,13 +515,56 @@ teardown() {
   PLATFORM=tg5040
   architecture=arm64
   LD_PRELOAD=
-  setup_display_preload
+  setup_display_preload "$(make_rom_folder "Pico-8 (PICO)")/Celeste.p8"
 
   [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm64/sdl-display.so" ]
   [ "$PICO_PAK_OVERLAY_DIR" = "$SDCARD_PATH/Overlays/PICO" ]
   [ "$PICO_PAK_OVERLAY_CHOICE" = "$USERDATA_PATH/Pico-8-native/overlay" ]
   [ "$PICO_PAK_SCREEN_MODE" = "$USERDATA_PATH/Pico-8-native/screen-mode" ]
-  [ "$PICO_PAK_MENU_BUTTON" = "start" ]
+}
+
+# MinUI reads the same files to offer a resume, which a cart cannot do
+@test "get_switcher_dir names NextUI's game switcher folder and nothing under MinUI" {
+  IS_NEXT=yes run get_switcher_dir
+  [ "$output" = "$SHARED_USERDATA_PATH/.minui/PICO" ]
+
+  IS_NEXT= run get_switcher_dir
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "setup_display_preload names every file the menu reads and writes" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm64" "$SDCARD_PATH/.system/res"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+  : >"$SDCARD_PATH/.system/res/font1.ttf"
+  printf 'color2=0x112233FF\n' >"$SHARED_USERDATA_PATH/minuisettings.txt"
+
+  PLATFORM=tg5040
+  architecture=arm64
+  LD_PRELOAD=
+  IS_NEXT=yes
+  cart="$(make_rom_folder "Pico-8 (PICO)")/1) Splore.p8"
+  setup_display_preload "$cart"
+
+  [ "$PICO_PAK_COPY_CARTS_DIR" = "$USERDATA_PATH/Pico-8-native" ]
+  [ "$PICO_PAK_SHARED_COPY_CARTS_DIR" = "$SHARED_USERDATA_PATH/Pico-8-native" ]
+  [ "$PICO_PAK_PICO8_CONFIG" = "$USERDATA_PATH/Pico-8-native/pico8-config" ]
+  [ "$PICO_PAK_SPLORE_ARTWORK" = "$USERDATA_PATH/Pico-8-native/splore-artwork" ]
+  [ "$PICO_PAK_INSTALLED_CONFIG" = "$HOME/config.txt" ]
+  [ "$PICO_PAK_ROMS_DIR" = "$SDCARD_PATH/Roms" ]
+  [ "$PICO_PAK_TAG" = "PICO" ]
+  [ "$PICO_PAK_SPLORE_COVERS" = "$PAK_DIR/splore" ]
+  [ "$PICO_PAK_CART_PATH" = "$cart" ]
+  [ "$PICO_PAK_SHORTCUTS" = "$USERDATA_PATH/Pico-8-native/shortcuts" ]
+  [ "$PICO_PAK_SCREENSHOTS_DIR" = "$SDCARD_PATH/Screenshots" ]
+  [ "$PICO_PAK_NOTIFY_SCREENSHOT" = "1" ]
+  [ "$PICO_PAK_SWITCHER_DIR" = "$SHARED_USERDATA_PATH/.minui/PICO" ]
+  [ -z "${PICO_PAK_CART_NAME+set}" ]
+  [ "$PICO_PAK_MENU_STYLE" = "nextui" ]
+  [ "$PICO_PAK_MENU_FONT" = "$SDCARD_PATH/.system/res/font1.ttf" ]
+  [ "$PICO_PAK_MENU_COLORS" = ",0x112233FF,,,,," ]
+  [ -z "${PICO_PAK_MENU_BUTTON+set}" ]
 }
 
 # the shim also switches the screen mode in game, which needs no overlay
@@ -458,20 +622,6 @@ teardown() {
   setup_display_preload
 
   [ "$LD_PRELOAD" = "$PAK_DIR/lib/arm/sdl-display.so" ]
-  [ "$PICO_PAK_MENU_BUTTON" = "" ]
-}
-
-@test "setup_display_preload passes the guide button as Menu on h700" {
-  PAK_DIR="$BATS_TEST_TMPDIR/pak"
-  mkdir -p "$PAK_DIR/lib/arm64"
-  : >"$PAK_DIR/lib/arm64/sdl-display.so"
-
-  PLATFORM=h700
-  architecture=arm64
-  LD_PRELOAD=
-  setup_display_preload
-
-  [ "$PICO_PAK_MENU_BUTTON" = "guide" ]
 }
 
 # NextUI's skeleton creates Overlays/<TAG> for its own cores but not for paks
@@ -588,6 +738,30 @@ teardown() {
   for field in a:b1 b:b0 x:b3 y:b2 back:b6 start:b7 leftshoulder:b4 \
     rightshoulder:b5 leftx:a0 lefty:a1; do
     [[ ",$line," == *",$field,"* ]]
+  done
+}
+
+# MinUI and NextUI both number Start 7 and Menu 8 on the TrimUI pads, and Start
+# used to sit on Menu's button, which left the real Start doing nothing
+@test "the TrimUI mappings put Start and Menu on their own buttons" {
+  for platform in tg5040 tg5050; do
+    line="$(grep "^030003f05e0400008e02000014010000," "$REPO_ROOT/controllers/$platform.txt")"
+    [ -n "$line" ]
+    [[ ",$line," == *",start:b7,"* ]]
+    [[ ",$line," == *",guide:b8,"* ]]
+  done
+}
+
+# the shim reads Menu as the guide button, so a pad that maps none has no Menu
+@test "every pad a supported platform maps reports Menu as guide" {
+  for platform in $SUPPORTED_PLATFORMS; do
+    PLATFORM="$platform"
+    while IFS= read -r line; do
+      case "$line" in
+      //* | "") continue ;;
+      esac
+      [[ ",$line," == *",guide:b8,"* ]]
+    done <"$REPO_ROOT/controllers/$(get_controller_file)"
   done
 }
 
@@ -749,6 +923,59 @@ teardown() {
   [ -z "$output" ]
 }
 
+# every write to the SD card waits for the card, so a file already in place
+# with the same content is left alone
+@test "install_if_changed copies only a file that differs" {
+  copies="$BATS_TEST_TMPDIR/copies"
+  cp() {
+    echo "$*" >>"$copies"
+    command cp "$@"
+  }
+  printf 'same\n' >"$BATS_TEST_TMPDIR/from"
+
+  install_if_changed "$BATS_TEST_TMPDIR/from" "$BATS_TEST_TMPDIR/to"
+  [ "$(cat "$BATS_TEST_TMPDIR/to")" = "same" ]
+  [ "$(grep -c '' "$copies")" -eq 1 ]
+
+  install_if_changed "$BATS_TEST_TMPDIR/from" "$BATS_TEST_TMPDIR/to"
+  [ "$(grep -c '' "$copies")" -eq 1 ]
+
+  printf 'changed\n' >"$BATS_TEST_TMPDIR/from"
+  install_if_changed "$BATS_TEST_TMPDIR/from" "$BATS_TEST_TMPDIR/to"
+  [ "$(cat "$BATS_TEST_TMPDIR/to")" = "changed" ]
+  [ "$(grep -c '' "$copies")" -eq 2 ]
+}
+
+@test "install_config leaves an unchanged config.txt alone" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  PLATFORM=tg5040 install_config "$rom_folder"
+  touch -t 200001010000 "$HOME/config.txt"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+  [ -z "$(find "$HOME/config.txt" -newer "$REPO_ROOT/launch.sh")" ]
+
+  printf 'show_fps 1\n' >"$USERDATA_PATH/Pico-8-native/pico8-config"
+  PLATFORM=tg5040 install_config "$rom_folder"
+  grep -qx "show_fps 1" "$HOME/config.txt"
+}
+
+@test "install_pico_files dismisses the presenter only after copying" {
+  killed="$BATS_TEST_TMPDIR/killed"
+  printf '#!/bin/sh\necho "$*" >>"%s"\n' "$killed" >"$STUB_BIN/killall"
+  chmod +x "$STUB_BIN/killall"
+  make_bios
+  EMU_DIR="$BATS_TEST_TMPDIR/emu"
+  PLATFORM=tg5040
+  architecture=arm64
+
+  install_pico_files
+  [ "$(grep -c "minui-presenter" "$killed")" -ge 1 ]
+
+  : >"$killed"
+  install_pico_files
+  [ ! -s "$killed" ]
+}
+
 @test "install_config points cart saves at this device's sd card" {
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
 
@@ -757,6 +984,21 @@ teardown() {
   grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" "$HOME/config.txt"
   grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
   ! grep -q "/mnt/" "$HOME/config.txt"
+}
+
+@test "install_config saves pico-8's GIFs to the screenshots folder" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  grep -qx "desktop_path $SDCARD_PATH/Screenshots/" "$HOME/config.txt"
+  [ "$(grep -c "^desktop_path" "$HOME/config.txt")" -eq 1 ]
+}
+
+@test "every config names pico-8's GIFs for when they were saved" {
+  for config in "$REPO_ROOT"/config/*.txt; do
+    grep -qx "capture_timestamps 1" "$config"
+  done
 }
 
 @test "install_config keeps every other key from the template" {
@@ -769,6 +1011,37 @@ teardown() {
   grep -q "^transform_screen 0$" "$HOME/config.txt"
 }
 
+@test "install_config applies the settings changed in the in-game menu" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'show_fps 1\nvolume 128\nforeground_sleep_ms 10\nsplore_filter 1\ncheck_for_cart_updates 0\n' \
+    >"$USERDATA_PATH/Pico-8-native/pico8-config"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  grep -qx "show_fps 1" "$HOME/config.txt"
+  grep -qx "volume 128" "$HOME/config.txt"
+  grep -qx "foreground_sleep_ms 10" "$HOME/config.txt"
+  grep -qx "splore_filter 1" "$HOME/config.txt"
+  grep -qx "check_for_cart_updates 0" "$HOME/config.txt"
+  [ "$(grep -c "^volume " "$HOME/config.txt")" -eq 1 ]
+  [ "$(wc -l <"$HOME/config.txt")" -eq "$(wc -l <"$REPO_ROOT/config/tg5040.txt")" ]
+}
+
+# the file is the menu's, but it sits on the SD card for anyone to edit
+@test "install_config takes only the menu's settings, and only as numbers" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  printf 'cdata_path /elsewhere/\nroot_path /elsewhere/\nshow_fps yes\nuse_wget 1\nvolume 64\n' \
+    >"$USERDATA_PATH/Pico-8-native/pico8-config"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+
+  grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" "$HOME/config.txt"
+  grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
+  grep -q "^show_fps 0 " "$HOME/config.txt"
+  grep -q "^use_wget 0 " "$HOME/config.txt"
+  grep -qx "volume 64" "$HOME/config.txt"
+}
+
 @test "install_config rewrites the same keys on every supported platform" {
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
 
@@ -776,7 +1049,14 @@ teardown() {
     PLATFORM="$platform" install_config "$rom_folder"
     grep -q "^cdata_path $SDCARD_PATH/Saves/PICO/$" "$HOME/config.txt"
     grep -q "^root_path $rom_folder/$" "$HOME/config.txt"
+    grep -qx "desktop_path $SDCARD_PATH/Screenshots/" "$HOME/config.txt"
   done
+}
+
+@test "get_screenshots_dir names the folder nextui keeps screenshots in" {
+  run get_screenshots_dir
+  [ "$status" -eq 0 ]
+  [ "$output" = "$SDCARD_PATH/Screenshots" ]
 }
 
 @test "get_saves_dir names the folder minui and nextui keep saves in" {
@@ -849,6 +1129,9 @@ teardown() {
 }
 
 @test "start_power_control runs on the platforms power control supports" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  stub_power_control "$PAK_DIR" "exit 0"
+
   for platform in h700 my355 rg35xxplus tg5040 tg5050; do
     PLATFORM="$platform" run start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
     [ "$status" -eq 0 ]
@@ -856,12 +1139,24 @@ teardown() {
   done
 }
 
-@test "start_power_control hands power control the pico-8 binary and the cart" {
-  stub_power_control
+# make build unpacks power control from its release archive, so it starts at
+# once rather than checking and unpacking itself into /tmp first
+@test "start_power_control runs the unpacked power control the pak ships" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  stub_power_control "$PAK_DIR"
 
   PLATFORM=h700 start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
   wait_for_power_control
   [ "$(cat "$POWER_CONTROL_LOG")" = "pico8_64 $SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8" ]
+}
+
+@test "start_power_control says so when the pak ships no power control" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR"
+
+  PLATFORM=tg5040 run start_power_control "$SDCARD_PATH/Roms/Pico-8 (PICO)/Freecell.p8"
+  [ "$status" -eq 0 ]
+  [ "$output" = "No power control at $PAK_DIR/bin/power-control/launch, deep sleep is unavailable" ]
 }
 
 @test "get_screen_mode defaults to the documented standard mode" {
@@ -1628,129 +1923,6 @@ teardown() {
   [ "$cart_name" = "freecell.p8.png" ]
 }
 
-# MinUI reads the same slot files to offer a resume pico-8 cannot do.
-@test "write_switcher_preview does nothing outside NextUI" {
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  printf 'cart' >"$rom_folder/freecell.p8.png"
-
-  run write_switcher_preview "$rom_folder/freecell.p8.png"
-  [ "$status" -eq 0 ]
-
-  [ ! -e "$SHARED_USERDATA_PATH/.minui" ]
-}
-
-# The case in issue #126: NextUI only draws a preview for a game with a save
-# slot, so every pico-8 cart in the game switcher was blank.
-@test "write_switcher_preview gives NextUI a slot and the cart's artwork" {
-  export IS_NEXT=yes
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  : >"$rom_folder/Freecell.p8"
-  mkdir -p "$rom_folder/.media"
-  printf 'art' >"$rom_folder/.media/Freecell.png"
-
-  run write_switcher_preview "$rom_folder/Freecell.p8"
-  [ "$status" -eq 0 ]
-
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt")" = "0" ]
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.0.bmp")" = "art" ]
-}
-
-@test "write_switcher_preview uses the artwork copy_carts writes" {
-  export IS_NEXT=yes
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  printf 'cart' >"$rom_folder/freecell-3.p8.png"
-  mkdir -p "$rom_folder/.media"
-  printf 'art' >"$rom_folder/.media/freecell-3.p8.png"
-
-  run write_switcher_preview "$rom_folder/freecell-3.p8.png"
-  [ "$status" -eq 0 ]
-
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/freecell-3.p8.png.0.bmp")" = "art" ]
-}
-
-@test "write_switcher_preview falls back to a png cart itself" {
-  export IS_NEXT=yes
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  make_png_cart "$rom_folder/freecell.p8.png"
-
-  run write_switcher_preview "$rom_folder/freecell.p8.png"
-  [ "$status" -eq 0 ]
-
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/freecell.p8.png.txt")" = "0" ]
-  cmp -s "$rom_folder/freecell.p8.png" "$SHARED_USERDATA_PATH/.minui/PICO/freecell.p8.png.0.bmp"
-}
-
-# Splore.p8 and most carts named .p8 are png images under another name
-@test "write_switcher_preview falls back to a p8 cart that is a png" {
-  export IS_NEXT=yes
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  make_png_cart "$rom_folder/Freecell.p8"
-
-  run write_switcher_preview "$rom_folder/Freecell.p8"
-  [ "$status" -eq 0 ]
-
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt")" = "0" ]
-  cmp -s "$rom_folder/Freecell.p8" "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.0.bmp"
-}
-
-# a slot whose image NextUI cannot load would only turn the blank preview into
-# a resume prompt
-@test "write_switcher_preview writes no slot for a text cart without artwork" {
-  export IS_NEXT=yes
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  printf 'pico-8 cartridge // http://www.pico-8.com\nversion 41\n' >"$rom_folder/Freecell.p8"
-
-  run write_switcher_preview "$rom_folder/Freecell.p8"
-  [ "$status" -eq 0 ]
-
-  [ ! -e "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt" ]
-  [[ "$output" == *"No artwork for Freecell.p8"* ]]
-}
-
-@test "is_png_file tells a png from a text cart and an empty file" {
-  make_png_cart "$CARTS/image.p8"
-  printf 'pico-8 cartridge // http://www.pico-8.com\n' >"$CARTS/text.p8"
-  : >"$CARTS/empty.p8"
-
-  run is_png_file "$CARTS/image.p8"
-  [ "$status" -eq 0 ]
-
-  run is_png_file "$CARTS/text.p8"
-  [ "$status" -ne 0 ]
-
-  run is_png_file "$CARTS/empty.p8"
-  [ "$status" -ne 0 ]
-}
-
-@test "write_switcher_preview names a multi-cart game after its m3u" {
-  export IS_NEXT=yes
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  mkdir -p "$rom_folder/Poom" "$rom_folder/.media"
-  : >"$rom_folder/Poom/poom_0.p8"
-  printf 'poom_0.p8\n' >"$rom_folder/Poom/Poom.m3u"
-  printf 'art' >"$rom_folder/.media/Poom.png"
-
-  run write_switcher_preview "$rom_folder/Poom/poom_0.p8"
-  [ "$status" -eq 0 ]
-
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Poom.m3u.txt")" = "0" ]
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Poom.m3u.0.bmp")" = "art" ]
-  [ ! -e "$SHARED_USERDATA_PATH/.minui/PICO/poom_0.p8.txt" ]
-}
-
-@test "write_switcher_preview refreshes artwork that changed" {
-  export IS_NEXT=yes
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  make_png_cart "$rom_folder/freecell.p8.png" old
-  write_switcher_preview "$rom_folder/freecell.p8.png"
-  make_png_cart "$rom_folder/freecell.p8.png" new
-
-  run write_switcher_preview "$rom_folder/freecell.p8.png"
-  [ "$status" -eq 0 ]
-
-  cmp -s "$rom_folder/freecell.p8.png" "$SHARED_USERDATA_PATH/.minui/PICO/freecell.p8.png.0.bmp"
-}
-
 @test "is_network_link_up detects an interface that is up" {
   stub_network up
 
@@ -1926,23 +2098,54 @@ teardown() {
   grep -q -- "--cancel-text NO" "$PRESENTER_CONFIRM_LOG"
 }
 
-@test "verify_splore_connection ignores an ordinary cart" {
-  stub_presenter 0
-  stub_wget reachable
-
-  run verify_splore_connection "$(make_cart Game.p8)"
-  [ "$status" -eq 0 ]
-  [ ! -f "$WGET_LOG" ]
-  [ ! -f "$PRESENTER_CONFIRM_LOG" ]
+@test "set_splore_session is false for an ordinary cart" {
+  set_splore_session "$(make_cart Game.p8)"
+  [ "$SPLORE_SESSION" = false ]
 }
 
-@test "verify_splore_connection ignores a cart inside a splore named folder" {
-  stub_presenter 0
-  stub_wget reachable
+# the folder's name is not the cart's
+@test "set_splore_session is false for a cart inside a splore named folder" {
+  set_splore_session "$SDCARD_PATH/Roms/Splore Carts (PICO)/Game.p8"
+  [ "$SPLORE_SESSION" = false ]
+}
 
-  run verify_splore_connection "$SDCARD_PATH/Roms/Splore Carts (PICO)/Game.p8"
+@test "set_splore_session is true for the splore cart, renamed or not" {
+  for cart in Splore.p8 "1) Splore.p8.png" splore; do
+    set_splore_session "$SDCARD_PATH/Roms/Pico-8 (PICO)/$cart"
+    [ "$SPLORE_SESSION" = true ]
+  done
+}
+
+@test "the Splore session is decided once and read everywhere else" {
+  [ "$(grep -c '^ *set_splore_session "' "$REPO_ROOT/launch.sh")" -eq 1 ]
+  [ "$(grep -c 'is_splore_cart "${1##\*/}"' "$REPO_ROOT/launch.sh")" -eq 1 ]
+  run grep -n 'is_splore_session' "$REPO_ROOT/launch.sh"
+  [ "$status" -eq 1 ]
+}
+
+# the connection check runs for Splore alone, so an ordinary cart never waits
+# on the network
+@test "launch.sh checks no connection for an ordinary cart" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  stub_presenter 0
+  stub_network up
+  stub_wget reachable
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
   [ "$status" -eq 0 ]
-  [ ! -f "$PRESENTER_CONFIRM_LOG" ]
+  [ ! -f "$WGET_LOG" ]
+  ! grep -q "checking the Splore connection" "$LOGS_PATH/PICO.txt"
 }
 
 @test "verify_splore_connection allows splore when the servers respond" {
@@ -2013,11 +2216,22 @@ teardown() {
   [ "$status" -eq 1 ]
 }
 
-@test "verify_splore_connection matches a renamed splore cart" {
-  stub_presenter 0
-  stub_wget reachable
+@test "launch.sh checks the connection for a renamed splore cart" {
+  pak_dir="$(make_pak)"
 
-  run verify_splore_connection "$(make_cart "1) Splore.p8.png")"
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/1) Splore.p8.png"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
   [ "$status" -eq 0 ]
   grep -q "No network connection was detected" "$PRESENTER_CONFIRM_LOG"
 }
@@ -2049,6 +2263,7 @@ teardown() {
   mkdir -p "$pak_dir"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
   ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
+  stub_power_control "$pak_dir"
 
   make_bios
   stub_presenter 2
@@ -2063,7 +2278,7 @@ teardown() {
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 1 ]
-  ! grep -q "minui-power-control" "$LOGS_PATH/PICO.txt"
+  [ ! -e "$POWER_CONTROL_LOG" ]
 }
 
 @test "launch.sh starts splore when the user continues past the warning" {
@@ -2104,6 +2319,7 @@ teardown() {
   printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
   chmod +x "$pak_dir/pico8/pico8_64"
   : >"$pak_dir/pico8/pico8.dat"
+  stub_power_control "$pak_dir"
 
   make_bios
   stub_presenter 0
@@ -2123,7 +2339,8 @@ teardown() {
   grep -q -- "-run" "$LOGS_PATH/PICO.txt"
   grep -q "Freecell.p8" "$LOGS_PATH/PICO.txt"
   ! grep -q "does not support h700" "$LOGS_PATH/PICO.txt"
-  grep -q "minui-power-control pico8_64 .*Freecell.p8" "$LOGS_PATH/PICO.txt"
+  wait_for_power_control
+  [ "$(cat "$POWER_CONTROL_LOG")" = "pico8_64 $cart" ]
 
   # the h700 mapping and a config naming this device's card both land in $HOME
   cmp -s "$REPO_ROOT/controllers/h700.txt" "$SHARED_USERDATA_PATH/Pico-8-native/sdl_controllers.txt"
@@ -2154,11 +2371,7 @@ teardown() {
   mkdir -p "$pak_dir/bin/my355"
   cp "$STUB_BIN/minui-presenter" "$pak_dir/bin/my355/minui-presenter"
   presenter_log="$BATS_TEST_TMPDIR/power-control-presenter"
-  cat >"$STUB_BIN/minui-power-control" <<STUB
-#!/bin/sh
-command -v minui-presenter >"$presenter_log"
-STUB
-  chmod +x "$STUB_BIN/minui-power-control"
+  stub_power_control "$pak_dir" "printf '%s\n' \"\$*\" >>\"\$POWER_CONTROL_LOG\"; command -v minui-presenter >'$presenter_log'"
 
   run env PATH="$STUB_BIN:$PATH" PLATFORM=my355 DEVICE=my355 IS_NEXT=yes \
     PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
@@ -2170,7 +2383,8 @@ STUB
   [ "$status" -eq 0 ]
   grep -q "Freecell.p8" "$LOGS_PATH/PICO.txt"
   ! grep -q "does not support my355" "$LOGS_PATH/PICO.txt"
-  grep -q "minui-power-control pico8_64 .*Freecell.p8" "$LOGS_PATH/PICO.txt"
+  wait_for_power_control
+  [ "$(cat "$POWER_CONTROL_LOG")" = "pico8_64 $cart" ]
 
   for _ in $(seq 1 100); do
     [ -s "$presenter_log" ] && break
@@ -2332,6 +2546,148 @@ STUB
   grep -qx "sync LD_LIBRARY_PATH=/inherited" "$LOGS_PATH/PICO.txt"
 }
 
+@test "untraced runs a command with tracing off and puts it back" {
+  traced_inside() {
+    case $- in *x*) echo traced ;; *) echo untraced ;; esac
+    return 3
+  }
+
+  set -x
+  run untraced traced_inside
+  set +x
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"untraced"* ]]
+
+  set -x
+  untraced true
+  case $- in *x*) still_traced=true ;; *) still_traced=false ;; esac
+  set +x
+  [ "$still_traced" = "true" ]
+
+  untraced true
+  case $- in *x*) [ "untraced turned tracing on" = "" ] ;; esac
+}
+
+# saves move in the background while the cart is checked, but pico-8 writes to
+# the folder they move to, so they have to be there before it starts
+@test "launch.sh finishes moving saves before pico-8 starts" {
+  pak_dir="$(make_pak 'ls "$SAVES_DIR"')"
+  mkdir -p "$SHARED_USERDATA_PATH/Pico-8-native/cdata"
+  : >"$SHARED_USERDATA_PATH/Pico-8-native/cdata/celeste.p8d.txt"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" SAVES_DIR="$SDCARD_PATH/Saves/PICO" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "celeste.p8d.txt" "$LOGS_PATH/PICO.txt"
+}
+
+# every traced line is its own write to the log on the SD card, which added
+# seconds to starting and exiting, so the slow steps log only what they say
+@test "launch.sh leaves the slow steps out of its trace" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  # an assignment each of the slow steps makes first, which a trace would show
+  for assignment in saves_dir marker_file cart_path overrides menu_res_dir; do
+    ! grep -q "^+ $assignment=" "$LOGS_PATH/PICO.txt"
+  done
+  # the launch itself is still traced, and what it starts pico-8 with logged
+  grep -q "^Starting pico-8 with LD_LIBRARY_PATH=.* LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
+  grep -q "^+ .*pico8_64 .*-run" "$LOGS_PATH/PICO.txt"
+}
+
+# the log is written to /tmp, as each write to the SD card is synchronous, and
+# copied there before pico-8 starts and once everything is done
+@test "launch.sh copies its log to the SD card before pico-8 starts and at the end" {
+  pak_dir="$(make_pak 'grep -q "starting pico-8" "$LOGS_PATH/PICO.txt" && echo "the start was on the card"')"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -qx "the start was on the card" "$LOGS_PATH/PICO.txt"
+  grep -q "\] done, returning to the launcher$" "$LOGS_PATH/PICO.txt"
+  cmp -s "/tmp/PICO-log.txt" "$LOGS_PATH/PICO.txt"
+}
+
+@test "log_step stamps a line with the seconds since boot" {
+  printf '1234.56 7890.12\n' >"$BATS_TEST_TMPDIR/uptime"
+
+  PICO_PAK_UPTIME_FILE="$BATS_TEST_TMPDIR/uptime" run log_step "syncing the SD card"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[1234.56] syncing the SD card" ]
+}
+
+@test "log_step still logs when the time cannot be read" {
+  PICO_PAK_UPTIME_FILE="$BATS_TEST_TMPDIR/absent" run log_step "starting"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[?] starting" ]
+}
+
+# the stamps are what show where the seconds go between pressing Quit and the
+# launcher coming back, so every step of the way has one, in order
+@test "launch.sh stamps every step of starting and tearing down" {
+  pak_dir="$(make_pak)"
+  printf '1234.56 7890.12\n' >"$BATS_TEST_TMPDIR/uptime"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    PICO_PAK_UPTIME_FILE="$BATS_TEST_TMPDIR/uptime" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep '^\[1234\.56\] ' "$LOGS_PATH/PICO.txt" | sed 's/^\[1234\.56\] //' >"$BATS_TEST_TMPDIR/steps"
+  printf '%s\n' "starting" "migrating saves and seeding the Splore cart" "checking the cart" \
+    "installing the PICO-8 files" \
+    "waiting for the saves and the Splore cart" "starting power control" \
+    "setting up pico-8" "starting pico-8" "pico-8 exited with status 0" "syncing the SD card" \
+    "cleaning up" "done, returning to the launcher" >"$BATS_TEST_TMPDIR/expected"
+  diff "$BATS_TEST_TMPDIR/expected" "$BATS_TEST_TMPDIR/steps"
+}
+
 @test "launch.sh stretches pico-8 itself without the display shim" {
   pak_dir="$(make_pak)"
   echo "stretched" >"$USERDATA_PATH/Pico-8-native/screen-mode"
@@ -2431,7 +2787,7 @@ STUB
   : >"$USERDATA_PATH/Pico-8-native/copy-carts"
   make_bbs_cart "bbs/carts/freecell.p8.png"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  cart="$rom_folder/Freecell.p8"
+  cart="$rom_folder/Splore.p8"
   : >"$cart"
 
   run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
@@ -2444,41 +2800,29 @@ STUB
   [ -f "$rom_folder/freecell.p8.png" ]
 }
 
-@test "launch.sh gives NextUI's game switcher a preview once pico-8 exits" {
+# only Splore downloads carts, so after any other there is nothing to copy and
+# the scan of its cache is skipped
+@test "launch.sh copies no carts after a cart other than Splore" {
   pak_dir="$(make_pak)"
 
   make_bios
+  stub_presenter 0
+  stub_extractor "Freecell"
+  : >"$USERDATA_PATH/Pico-8-native/copy-carts"
+  make_bbs_cart "bbs/carts/freecell.p8.png"
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  cart="$rom_folder/Freecell.p8"
-  make_png_cart "$cart"
+  cart="$rom_folder/Celeste.p8"
+  : >"$cart"
 
-  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= IS_NEXT=yes \
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
     PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
     SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
     SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 0 ]
-  [ "$(cat "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.txt")" = "0" ]
-  cmp -s "$cart" "$SHARED_USERDATA_PATH/.minui/PICO/Freecell.p8.0.bmp"
-}
-
-@test "launch.sh writes no game switcher preview under MinUI" {
-  pak_dir="$(make_pak)"
-
-  make_bios
-  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
-  cart="$rom_folder/freecell.p8.png"
-  printf 'cart' >"$cart"
-
-  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
-    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
-    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
-    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
-    sh "$pak_dir/launch.sh" "$cart"
-
-  [ "$status" -eq 0 ]
-  [ ! -e "$SHARED_USERDATA_PATH/.minui/PICO" ]
+  [ ! -e "$rom_folder/freecell.p8.png" ]
+  grep -q "Not a Splore session, so no carts to copy" "$LOGS_PATH/PICO.txt"
 }
 
 # minui-power-control ends a session by signalling pico-8, so a status above 128
@@ -2500,6 +2844,42 @@ STUB
 
   [ "$status" -eq 0 ]
   ! grep -q "PICO-8 exited with an error" "$PRESENTER_LOG"
+  ! grep -q "PICO-8 crashed" "$PRESENTER_LOG"
+}
+
+# a bus error used to look like power control ending the session, and drop
+# back to the game list with nothing on screen
+# SIGSEGV is signal 11 on Linux and macOS alike, where SIGBUS is 7 on the
+# devices but 10 on a Mac running the tests
+@test "launch.sh says so when pico-8 crashes" {
+  pak_dir="$(make_pak 'kill -SEGV $$')"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 139 ]
+  grep -q "PICO-8 crashed with SIGSEGV. See $LOGS_PATH/PICO.txt for details." "$PRESENTER_LOG"
+}
+
+@test "get_crash_signal names the crashes and nothing else" {
+  [ "$(get_crash_signal 132)" = "SIGILL" ]
+  [ "$(get_crash_signal 134)" = "SIGABRT" ]
+  [ "$(get_crash_signal 135)" = "SIGBUS" ]
+  [ "$(get_crash_signal 136)" = "SIGFPE" ]
+  [ "$(get_crash_signal 139)" = "SIGSEGV" ]
+  # power control's SIGKILL and SIGTERM, and a hangup
+  [ -z "$(get_crash_signal 137)" ]
+  [ -z "$(get_crash_signal 143)" ]
+  [ -z "$(get_crash_signal 129)" ]
 }
 
 # minui-power-control powers the device off itself, on MinUI and NextUI alike,

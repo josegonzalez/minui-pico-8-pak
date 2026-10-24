@@ -17,7 +17,7 @@ MINUI_POWER_CONTROL_REPO := josegonzalez/minui-power-control
 MINUI_POWER_CONTROL_VERSION := 3.2.0
 PICO8_DATA_EXTRACTOR_VERSION := 0.1.1
 
-# the overlay and screen mode shim is the same on every platform of an
+# the overlay, screen mode and menu shim is the same on every platform of an
 # architecture, so it ships once per architecture rather than per platform
 DISPLAY_SHIMS := $(foreach architecture,$(ARCHITECTURES),lib/$(architecture)/sdl-display.so)
 
@@ -33,23 +33,24 @@ MINUI_PRESENTER_ASSET_h700 := h700-nextui
 MINUI_PRESENTER_ASSET_my355 := my355-nextui
 MINUI_PRESENTER_ASSET_tg5050 := tg5050-nextui
 
-SHELL_FILES := launch.sh bin/h700/wget bin/my355/wget bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
+SHELL_FILES := launch.sh scripts/unpack-makeself.sh bin/h700/wget bin/my355/wget bin/rg35xxplus/wget bin/tg5040/wget bin/tg5050/wget test/test_helper.bash
 
 .PHONY: clean build release bump-version push lint format test print-%
 
 clean:
 	rm -f bin/*/minui-presenter || true
 	rm -f bin/*/pico8-data-extractor || true
-	rm -f bin/minui-power-control || true
+	rm -rf bin/power-control bin/minui-power-control.run || true
 	rm -f lib/h700/sdl-nosensor.so || true
 	rm -f $(DISPLAY_SHIMS) || true
 
-build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/minui-power-control lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS)
+build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreach architecture,$(ARCHITECTURES),bin/$(architecture)/pico8-data-extractor) bin/power-control/launch lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS)
 
 # unlike the downloads above this is built from source in this repo, so it has
 # to name its prerequisites or a stale object survives every edit to them
 lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS): shim/sdl-nosensor.c shim/sdl-display.c shim/Dockerfile \
-	shim/test/fake-sdl.h shim/test/fake-sdl.c shim/test/display-test.c
+	shim/menu.c shim/menu.h shim/gfx.c shim/gfx.h shim/cart.c shim/cart.h shim/crash.c shim/crash.h \
+	shim/test/fake-sdl.h shim/test/fake-sdl.c shim/test/display-test.c shim/test/menu-test.c
 	docker buildx build --build-arg BASE_IMAGE=$(SHIM_IMAGE) \
 		--target export --file shim/Dockerfile --output "type=local,dest=lib" shim
 
@@ -63,10 +64,13 @@ bin/%/minui-presenter:
 	curl -f -o bin/$*/minui-presenter -sSL https://github.com/josegonzalez/minui-presenter/releases/download/$(MINUI_PRESENTER_VERSION)/minui-presenter-$(or $(MINUI_PRESENTER_ASSET_$*),$*)
 	chmod +x bin/$*/minui-presenter
 
-bin/minui-power-control:
+# released as a self-extracting archive, which would check and unpack itself on
+# every launch, so it is unpacked here once and shipped as plain files
+bin/power-control/launch: scripts/unpack-makeself.sh
 	mkdir -p bin
-	curl -f -o bin/minui-power-control -sSL https://github.com/$(MINUI_POWER_CONTROL_REPO)/releases/download/$(MINUI_POWER_CONTROL_VERSION)/minui-power-control
-	chmod +x bin/minui-power-control
+	curl -f -o bin/minui-power-control.run -sSL https://github.com/$(MINUI_POWER_CONTROL_REPO)/releases/download/$(MINUI_POWER_CONTROL_VERSION)/minui-power-control
+	sh scripts/unpack-makeself.sh bin/minui-power-control.run bin/power-control
+	rm -f bin/minui-power-control.run
 
 release: build
 	mkdir -p dist

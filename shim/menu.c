@@ -1,0 +1,1336 @@
+/*
+ * The in-game menu. See menu.h.
+ */
+
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "cart.h"
+#include "menu.h"
+
+#define LOG(...) gfx_log(__VA_ARGS__)
+
+/* how long a held direction waits before repeating, and then between repeats */
+#define REPEAT_DELAY 400
+#define REPEAT_RATE 55
+
+/* what an unselected root row is dimmed to when it cannot be chosen yet */
+#define DISABLED_TEXT GFX_GRAY
+
+const char *const menu_screen_modes[] = {"standard", "stretched"};
+const char *const menu_splore_artworks[] = {"standard", "fancy"};
+
+static const char *const screen_mode_names[] = {"Standard", "Stretched"};
+static const char *const splore_artwork_names[] = {"Standard", "Fancy"};
+static const char *const copy_carts_names[] = {"Off", "All", "Favourites"};
+static const char *const copy_carts_markers[] = {"copy-carts", "copy-carts-favourites",
+                                                 "copy-carts-favorites"};
+static const char *const off_on[] = {"Off", "On"};
+static const char *const zero_one[] = {"0", "1"};
+static const char *const volume_names[] = {"0%", "25%", "50%", "75%", "100%"};
+static const char *const volume_values[] = {"0", "64", "128", "192", "256"};
+static const char *const sleep_values[] = {"4", "10"};
+
+static const char *const root_labels[] = {"Continue", "Save", "Load", "Options", "Quit"};
+
+/* a description's note on when it applies goes on a line of its own */
+#define NEXT_LAUNCH "\nApplies the next time PICO-8 starts."
+
+/*
+ * The config.txt keys the menu offers, the names it shows for each value and
+ * the value written for each, and which value counts when neither the menu's
+ * file nor config.txt names one, which matches every template in config/.
+ */
+static const struct config_option {
+  const char *label;
+  const char *key;
+  const char *description;
+  int count;
+  const char *const *names;
+  const char *const *values;
+  int fallback;
+} config_options[MENU_CONFIG_COUNT] = {
+    {"Show FPS", "show_fps", "Draws the frame rate in the corner." NEXT_LAUNCH, 2, off_on,
+     zero_one, 0},
+    {"Volume", "volume", "PICO-8's own volume, under the device's." NEXT_LAUNCH, 5, volume_names,
+     volume_values, 4},
+    {"Battery Saver", "foreground_sleep_ms",
+     "Sleeps longer between frames to save power." NEXT_LAUNCH, 2, off_on, sleep_values, 0},
+    {"Hide Mature Carts", "splore_filter",
+     "Hides carts the community tagged as mature in Splore." NEXT_LAUNCH, 2, off_on, zero_one, 0},
+    {"Check Cart Updates", "check_for_cart_updates",
+     "Checks for a newer version of a BBS cart each time it runs." NEXT_LAUNCH, 2, off_on,
+     zero_one, 1},
+};
+
+static const char *const option_labels[MENU_CONFIG_FIRST] = {"Screen Mode", "Overlay",
+                                                             "Copy Splore Carts", "Splore Artwork"};
+
+static const char *const option_descriptions[MENU_CONFIG_FIRST] = {
+    "Standard keeps the game square, Stretched fills the screen.",
+    "A PNG from /Overlays/PICO drawn over the game in Standard mode.",
+    "Copies the carts Splore downloaded into the roms folder.\nApplies when Splore exits.",
+    "The cover the Splore cart shows in the game list.\nApplies straight away.",
+};
+
+static const int frontend_settings[] = {MENU_SCREEN_MODE, MENU_OVERLAY, MENU_SHOW_FPS};
+static const int emulator_settings[] = {MENU_VOLUME, MENU_BATTERY_SAVER};
+static const int splore_settings[] = {MENU_COPY_CARTS, MENU_SPLORE_ARTWORK, MENU_HIDE_MATURE,
+                                      MENU_CHECK_UPDATES};
+
+/* the Options page's rows, each the title of the page of settings it opens */
+static const struct group {
+  const char *label;
+  const char *description;
+  int count;
+  const int *settings;
+} groups[MENU_GROUP_COUNT] = {
+    {"Frontend", "The screen mode, the overlay and the frame rate.", 3, frontend_settings},
+    {"Emulator", "PICO-8's own volume and battery saver.", 2, emulator_settings},
+    {"Splore", "Copying Splore's carts, its cover and what it shows.", 4, splore_settings},
+    {"Shortcuts", "Buttons for a screenshot, quitting, resetting the game and more.", 0, NULL},
+};
+
+int menu_group_size(int group)
+{
+  return groups[group].count;
+}
+
+int menu_group_setting(int group, int row)
+{
+  return groups[group].settings[row];
+}
+
+void menu_read_line(const char *path, char *line, size_t size)
+{
+  FILE *file = path != NULL ? fopen(path, "r") : NULL;
+
+  line[0] = '\0';
+  if (file != NULL) {
+    if (fgets(line, (int)size, file) == NULL) {
+      line[0] = '\0';
+    }
+    fclose(file);
+  }
+  line[strcspn(line, "\r\n")] = '\0';
+}
+
+void menu_write_line(const char *path, const char *line)
+{
+  FILE *file;
+
+  if (path == NULL || *path == '\0') {
+    return;
+  }
+
+  file = fopen(path, "w");
+  if (file == NULL) {
+    LOG("cannot save %s to %s\n", line, path);
+    return;
+  }
+
+  fprintf(file, "%s\n", line);
+  fclose(file);
+}
+
+int menu_read_screen_mode(const char *path)
+{
+  char line[64];
+  int i;
+
+  menu_read_line(path, line, sizeof line);
+  for (i = 0; i < MENU_SCREEN_MODE_COUNT; i++) {
+    if (strcmp(menu_screen_modes[i], line) == 0) {
+      return i;
+    }
+  }
+
+  return 0;
+}
+
+/* Nothing is drawn until an overlay has been chosen, or after its file is gone. */
+int menu_read_overlay(const char *path, char *const *names, int count)
+{
+  char line[256];
+  int i;
+
+  menu_read_line(path, line, sizeof line);
+  for (i = 0; i < count; i++) {
+    if (strcmp(names[i], line) == 0) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+int menu_read_splore_artwork(const char *path)
+{
+  char line[64];
+  int i;
+
+  menu_read_line(path, line, sizeof line);
+  for (i = 0; i < MENU_SPLORE_ARTWORK_COUNT; i++) {
+    if (strcmp(menu_splore_artworks[i], line) == 0) {
+      return i;
+    }
+  }
+
+  return 0;
+}
+
+static int marker_exists(const char *dir, const char *name)
+{
+  char path[4096];
+
+  if (dir == NULL || *dir == '\0') {
+    return 0;
+  }
+
+  snprintf(path, sizeof path, "%s/%s", dir, name);
+  return access(path, F_OK) == 0;
+}
+
+/* read as launch.sh's copy_carts reads them: a favourites marker anywhere wins */
+static int read_copy_carts(const struct menu_settings *settings)
+{
+  const char *dirs[] = {settings->copy_carts_dir, settings->shared_copy_carts_dir};
+  int mode = MENU_COPY_OFF;
+  size_t d;
+
+  for (d = 0; d < sizeof dirs / sizeof *dirs; d++) {
+    if (marker_exists(dirs[d], copy_carts_markers[1]) ||
+        marker_exists(dirs[d], copy_carts_markers[2])) {
+      return MENU_COPY_FAVOURITES;
+    }
+    if (marker_exists(dirs[d], copy_carts_markers[0])) {
+      mode = MENU_COPY_ALL;
+    }
+  }
+
+  return mode;
+}
+
+/* every marker goes from both folders, so the one written is the one that counts */
+static void write_copy_carts(const struct menu_settings *settings, int mode)
+{
+  const char *dirs[] = {settings->copy_carts_dir, settings->shared_copy_carts_dir};
+  char path[4096];
+  size_t d, m;
+  FILE *file;
+
+  for (d = 0; d < sizeof dirs / sizeof *dirs; d++) {
+    for (m = 0; m < sizeof copy_carts_markers / sizeof *copy_carts_markers; m++) {
+      if (marker_exists(dirs[d], copy_carts_markers[m])) {
+        snprintf(path, sizeof path, "%s/%s", dirs[d], copy_carts_markers[m]);
+        if (unlink(path) != 0) {
+          LOG("cannot remove %s\n", path);
+        }
+      }
+    }
+  }
+
+  if (mode == MENU_COPY_OFF || settings->copy_carts_dir == NULL ||
+      *settings->copy_carts_dir == '\0') {
+    return;
+  }
+
+  snprintf(path, sizeof path, "%s/%s", settings->copy_carts_dir,
+           copy_carts_markers[mode == MENU_COPY_ALL ? 0 : 1]);
+  file = fopen(path, "w");
+  if (file == NULL) {
+    LOG("cannot create %s\n", path);
+    return;
+  }
+  fclose(file);
+}
+
+/*
+ * Finds key in a config.txt style file, where each setting is a line of the
+ * key, a space and its value, maybe followed by a comment.
+ */
+static int read_config_value(const char *path, const char *key, char *value, size_t size)
+{
+  FILE *file = path != NULL ? fopen(path, "r") : NULL;
+  size_t key_length = strlen(key);
+  char line[512];
+  int found = 0;
+
+  if (file == NULL) {
+    return 0;
+  }
+
+  while (fgets(line, sizeof line, file) != NULL) {
+    if (strncmp(line, key, key_length) == 0 && line[key_length] == ' ') {
+      const char *at = line + key_length;
+      at += strspn(at, " ");
+      snprintf(value, size, "%.*s", (int)strcspn(at, " \t\r\n"), at);
+      found = 1;
+    }
+  }
+
+  fclose(file);
+  return found;
+}
+
+static int read_config(const struct menu_settings *settings, int index)
+{
+  const struct config_option *option = &config_options[index];
+  char value[64];
+  int i;
+
+  if (!read_config_value(settings->pico8_config_path, option->key, value, sizeof value) &&
+      !read_config_value(settings->installed_config_path, option->key, value, sizeof value)) {
+    return option->fallback;
+  }
+
+  for (i = 0; i < option->count; i++) {
+    if (strcmp(option->values[i], value) == 0) {
+      return i;
+    }
+  }
+
+  return option->fallback;
+}
+
+/* rewrites the file with key set to value, keeping the other keys it holds */
+static void write_config(const struct menu_settings *settings, int index, int choice)
+{
+  const struct config_option *option = &config_options[index];
+  const char *path = settings->pico8_config_path;
+  size_t key_length = strlen(option->key);
+  char lines[32][128];
+  int count = 0, i, replaced = 0;
+  FILE *file;
+
+  if (path == NULL || *path == '\0') {
+    return;
+  }
+
+  file = fopen(path, "r");
+  if (file != NULL) {
+    while (count < 32 && fgets(lines[count], sizeof lines[count], file) != NULL) {
+      lines[count][strcspn(lines[count], "\r\n")] = '\0';
+      if (lines[count][0] != '\0') {
+        count++;
+      }
+    }
+    fclose(file);
+  }
+
+  for (i = 0; i < count; i++) {
+    if (strncmp(lines[i], option->key, key_length) == 0 && lines[i][key_length] == ' ') {
+      snprintf(lines[i], sizeof lines[i], "%s %s", option->key, option->values[choice]);
+      replaced = 1;
+    }
+  }
+  if (!replaced && count < 32) {
+    snprintf(lines[count++], sizeof lines[0], "%s %s", option->key, option->values[choice]);
+  }
+
+  file = fopen(path, "w");
+  if (file == NULL) {
+    LOG("cannot save %s to %s\n", option->key, path);
+    return;
+  }
+  for (i = 0; i < count; i++) {
+    fprintf(file, "%s\n", lines[i]);
+  }
+  fclose(file);
+}
+
+void menu_open(struct menu *menu, struct menu_settings *settings, const char *title)
+{
+  int i;
+
+  memset(menu, 0, sizeof *menu);
+  menu->settings = settings;
+  menu->title = title != NULL && *title != '\0' ? title : "PICO-8";
+  menu->page = MENU_PAGE_ROOT;
+  menu->root_row = MENU_CONTINUE;
+  menu->copy_carts = read_copy_carts(settings);
+  menu->splore_artwork = menu_read_splore_artwork(settings->splore_artwork_path);
+  for (i = 0; i < MENU_CONFIG_COUNT; i++) {
+    menu->config[i] = read_config(settings, i);
+  }
+  menu->binding = -1;
+  menu->dirty = 1;
+}
+
+static int choice_count(const struct menu *menu, int row)
+{
+  switch (row) {
+  case MENU_SCREEN_MODE:
+    return MENU_SCREEN_MODE_COUNT;
+  case MENU_OVERLAY:
+    return menu->settings->overlay_count + 1;
+  case MENU_COPY_CARTS:
+    return MENU_COPY_COUNT;
+  case MENU_SPLORE_ARTWORK:
+    return MENU_SPLORE_ARTWORK_COUNT;
+  default:
+    return config_options[row - MENU_CONFIG_FIRST].count;
+  }
+}
+
+/* None is the first overlay choice and each PNG follows, named without .png */
+static void choice_name(const struct menu *menu, int row, int choice, char *out, size_t size)
+{
+  const char *name;
+  size_t length;
+
+  switch (row) {
+  case MENU_SCREEN_MODE:
+    snprintf(out, size, "%s", screen_mode_names[choice]);
+    break;
+  case MENU_OVERLAY:
+    if (choice == 0) {
+      snprintf(out, size, "None");
+      break;
+    }
+    name = menu->settings->overlay_names[choice - 1];
+    length = strlen(name);
+    snprintf(out, size, "%.*s", (int)(length > 4 ? length - 4 : length), name);
+    break;
+  case MENU_COPY_CARTS:
+    snprintf(out, size, "%s", copy_carts_names[choice]);
+    break;
+  case MENU_SPLORE_ARTWORK:
+    snprintf(out, size, "%s", splore_artwork_names[choice]);
+    break;
+  default:
+    snprintf(out, size, "%s", config_options[row - MENU_CONFIG_FIRST].names[choice]);
+    break;
+  }
+}
+
+static int current_choice(const struct menu *menu, int row)
+{
+  switch (row) {
+  case MENU_SCREEN_MODE:
+    return menu->settings->screen_mode;
+  case MENU_OVERLAY:
+    return menu->settings->overlay + 1;
+  case MENU_COPY_CARTS:
+    return menu->copy_carts;
+  case MENU_SPLORE_ARTWORK:
+    return menu->splore_artwork;
+  default:
+    return menu->config[row - MENU_CONFIG_FIRST];
+  }
+}
+
+void menu_option_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  choice_name(menu, row, current_choice(menu, row), out, size);
+}
+
+static void set_screen_mode(struct menu_settings *settings, int mode)
+{
+  settings->screen_mode = mode;
+  LOG("switched to %s screen mode\n", menu_screen_modes[mode]);
+  menu_write_line(settings->screen_mode_path, menu_screen_modes[mode]);
+}
+
+/* -1 is no overlay, saved as disabled */
+static void set_overlay(struct menu_settings *settings, int overlay)
+{
+  const char *name = overlay < 0 ? "disabled" : settings->overlay_names[overlay];
+
+  settings->overlay = overlay;
+  LOG("switched to %s\n", name);
+  menu_write_line(settings->overlay_path, name);
+}
+
+void menu_cycle_screen_mode(struct menu_settings *settings)
+{
+  set_screen_mode(settings, (settings->screen_mode + 1) % MENU_SCREEN_MODE_COUNT);
+}
+
+/* None comes after the last overlay, so the cycle passes through it */
+void menu_cycle_overlay(struct menu_settings *settings)
+{
+  int next = settings->overlay + 1;
+
+  set_overlay(settings, next >= settings->overlay_count ? -1 : next);
+}
+
+/*
+ * The names a controller button is saved and shown by, indexed as SDL numbers
+ * them. The buttons after Right that no device here has are left out.
+ */
+static const char *const button_keys[MENU_BINDABLE_BUTTONS] = {
+    "a",  "b",  "x",  "y",  "select", "menu", "start", "l3",
+    "r3", "l1", "r1", "up", "down",   "left", "right",
+    [MENU_BUTTON_L2] = "l2", [MENU_BUTTON_R2] = "r2"};
+static const char *const button_labels[MENU_BINDABLE_BUTTONS] = {
+    "A",  "B",  "X",  "Y",  "SELECT", "MENU", "START", "L3",
+    "R3", "L1", "R1", "UP", "DOWN",   "LEFT", "RIGHT",
+    [MENU_BUTTON_L2] = "L2", [MENU_BUTTON_R2] = "R2"};
+
+/* the button numbered as SDL's guide, which every mapping uses for Menu */
+#define MENU_BUTTON 5
+
+static const char *const shortcut_keys[MENU_SHORTCUT_COUNT] = {
+    "screenshot", "save-gif", "quit", "reset", "screen-mode", "overlay", "cpu-meter"};
+static const char *const shortcut_labels[MENU_SHORTCUT_COUNT] = {
+    "Screenshot",        "Save GIF",      "Quit",           "Reset Game",
+    "Cycle Screen Mode", "Cycle Overlay", "Toggle CPU Meter"};
+
+int menu_is_bindable(int button)
+{
+  return button >= 0 && button < MENU_BINDABLE_BUTTONS && button != MENU_BUTTON &&
+         button_keys[button] != NULL;
+}
+
+const char *menu_shortcut_label(int shortcut)
+{
+  return shortcut_labels[shortcut];
+}
+
+void menu_binding_name(const struct menu_binding *binding, char *out, size_t size)
+{
+  if (!menu_is_bindable(binding->button)) {
+    snprintf(out, size, "None");
+    return;
+  }
+  snprintf(out, size, "%s%s", binding->with_menu ? "MENU+" : "", button_labels[binding->button]);
+}
+
+/* each line is a shortcut's name and its button, such as "screenshot menu+x" */
+void menu_read_shortcuts(const char *path, struct menu_binding *shortcuts)
+{
+  FILE *file = path != NULL ? fopen(path, "r") : NULL;
+  char line[256], key[64], value[64];
+  int i, button;
+
+  for (i = 0; i < MENU_SHORTCUT_COUNT; i++) {
+    shortcuts[i].button = -1;
+    shortcuts[i].with_menu = 0;
+  }
+  if (file == NULL) {
+    return;
+  }
+
+  while (fgets(line, sizeof line, file) != NULL) {
+    const char *name = value;
+    int with_menu = 0;
+
+    if (sscanf(line, "%63s %63s", key, value) != 2) {
+      continue;
+    }
+    if (strncmp(value, "menu+", 5) == 0) {
+      with_menu = 1;
+      name = value + 5;
+    }
+    for (i = 0; i < MENU_SHORTCUT_COUNT; i++) {
+      if (strcmp(key, shortcut_keys[i]) != 0) {
+        continue;
+      }
+      for (button = 0; button < MENU_BINDABLE_BUTTONS; button++) {
+        if (menu_is_bindable(button) && strcmp(name, button_keys[button]) == 0) {
+          shortcuts[i].button = button;
+          shortcuts[i].with_menu = with_menu;
+        }
+      }
+    }
+  }
+
+  fclose(file);
+}
+
+static void write_shortcuts(const struct menu_settings *settings)
+{
+  FILE *file;
+  int i;
+
+  if (settings->shortcuts_path == NULL || *settings->shortcuts_path == '\0') {
+    return;
+  }
+  file = fopen(settings->shortcuts_path, "w");
+  if (file == NULL) {
+    LOG("cannot save the shortcuts to %s\n", settings->shortcuts_path);
+    return;
+  }
+
+  for (i = 0; i < MENU_SHORTCUT_COUNT; i++) {
+    const struct menu_binding *binding = &settings->shortcuts[i];
+    if (menu_is_bindable(binding->button)) {
+      fprintf(file, "%s %s%s\n", shortcut_keys[i], binding->with_menu ? "menu+" : "",
+              button_keys[binding->button]);
+    }
+  }
+  fclose(file);
+}
+
+int menu_is_binding(const struct menu *menu)
+{
+  return menu->binding >= 0;
+}
+
+void menu_bind(struct menu *menu, int button, int with_menu)
+{
+  struct menu_binding *shortcuts = menu->settings->shortcuts;
+  char name[64];
+  int i;
+
+  if (menu->binding < 0 || !menu_is_bindable(button)) {
+    return;
+  }
+
+  /* one button does one thing, so a shortcut that had this one loses it */
+  for (i = 0; i < MENU_SHORTCUT_COUNT; i++) {
+    if (i != menu->binding && shortcuts[i].button == button &&
+        shortcuts[i].with_menu == with_menu) {
+      shortcuts[i].button = -1;
+    }
+  }
+  shortcuts[menu->binding].button = button;
+  shortcuts[menu->binding].with_menu = with_menu;
+
+  menu_binding_name(&shortcuts[menu->binding], name, sizeof name);
+  LOG("bound %s to %s\n", shortcut_keys[menu->binding], name);
+  write_shortcuts(menu->settings);
+  menu->binding = -1;
+  menu->dirty = 1;
+}
+
+static void step_option(struct menu *menu, int row, int step)
+{
+  struct menu_settings *settings = menu->settings;
+  int count = choice_count(menu, row);
+  int choice = (current_choice(menu, row) + step + count) % count;
+
+  switch (row) {
+  case MENU_SCREEN_MODE:
+    set_screen_mode(settings, choice);
+    break;
+  case MENU_OVERLAY:
+    set_overlay(settings, choice - 1);
+    break;
+  case MENU_COPY_CARTS:
+    menu->copy_carts = choice;
+    LOG("set Copy Splore Carts to %s\n", copy_carts_names[choice]);
+    write_copy_carts(settings, choice);
+    break;
+  case MENU_SPLORE_ARTWORK:
+    menu->splore_artwork = choice;
+    LOG("set Splore Artwork to %s\n", menu_splore_artworks[choice]);
+    menu_write_line(settings->splore_artwork_path, menu_splore_artworks[choice]);
+    cart_apply_splore_artwork(settings->roms_dir, settings->tag, settings->splore_covers_dir,
+                              choice == 1);
+    break;
+  default:
+    menu->config[row - MENU_CONFIG_FIRST] = choice;
+    LOG("set %s to %s\n", config_options[row - MENU_CONFIG_FIRST].key,
+        config_options[row - MENU_CONFIG_FIRST].values[choice]);
+    write_config(settings, row - MENU_CONFIG_FIRST, choice);
+    break;
+  }
+}
+
+static int root_row_enabled(int row)
+{
+  return row != MENU_SAVE && row != MENU_LOAD;
+}
+
+/* Up and Down wrap, and on the root page pass over the rows that cannot be chosen */
+static void move_row(struct menu *menu, int step)
+{
+  if (menu->page == MENU_PAGE_ROOT) {
+    do {
+      menu->root_row = (menu->root_row + step + MENU_ROOT_COUNT) % MENU_ROOT_COUNT;
+    } while (!root_row_enabled(menu->root_row));
+  } else if (menu->page == MENU_PAGE_SHORTCUTS) {
+    menu->shortcut_row = (menu->shortcut_row + step + MENU_SHORTCUT_COUNT) % MENU_SHORTCUT_COUNT;
+  } else if (menu->page == MENU_PAGE_GROUP) {
+    int count = menu_group_size(menu->option_row);
+
+    menu->setting_row = (menu->setting_row + step + count) % count;
+  } else {
+    menu->option_row = (menu->option_row + step + MENU_GROUP_COUNT) % MENU_GROUP_COUNT;
+  }
+}
+
+/* a direction held past the delay counts as pressed again at every repeat */
+static unsigned add_repeats(struct menu *menu, unsigned pressed, unsigned held, uint32_t now)
+{
+  unsigned directions = MENU_UP | MENU_DOWN | MENU_LEFT | MENU_RIGHT;
+  unsigned fresh = pressed & directions;
+
+  if (fresh) {
+    menu->repeat_button = fresh & -fresh;
+    menu->repeat_at = now + REPEAT_DELAY;
+    return pressed;
+  }
+
+  if (menu->repeat_button == 0 || !(held & menu->repeat_button)) {
+    menu->repeat_button = 0;
+    return pressed;
+  }
+
+  if ((int32_t)(now - menu->repeat_at) < 0) {
+    return pressed;
+  }
+
+  menu->repeat_at = now + REPEAT_RATE;
+  return pressed | menu->repeat_button;
+}
+
+enum menu_result menu_update(struct menu *menu, unsigned pressed, unsigned held, uint32_t now)
+{
+  /* the button pressed goes to menu_bind, and a tap of Menu alone gives up */
+  if (menu->binding >= 0) {
+    if (pressed & MENU_MENU) {
+      menu->binding = -1;
+      menu->dirty = 1;
+    }
+    return MENU_STAY;
+  }
+
+  pressed = add_repeats(menu, pressed, held, now);
+
+  if (pressed & MENU_MENU) {
+    return MENU_CLOSE;
+  }
+
+  if (pressed & (MENU_UP | MENU_DOWN)) {
+    move_row(menu, pressed & MENU_UP ? -1 : 1);
+    menu->dirty = 1;
+  }
+
+  if (menu->page == MENU_PAGE_ROOT) {
+    if (pressed & MENU_B) {
+      return MENU_CLOSE;
+    }
+    if (!(pressed & MENU_A)) {
+      return MENU_STAY;
+    }
+
+    switch (menu->root_row) {
+    case MENU_CONTINUE:
+      return MENU_CLOSE;
+    case MENU_OPTIONS:
+      menu->page = MENU_PAGE_OPTIONS;
+      menu->option_row = 0;
+      menu->option_top = 0;
+      menu->dirty = 1;
+      return MENU_STAY;
+    case MENU_EXIT:
+      return MENU_QUIT;
+    default:
+      return MENU_STAY;
+    }
+  }
+
+  if (menu->page == MENU_PAGE_SHORTCUTS) {
+    if (pressed & MENU_B) {
+      menu->page = MENU_PAGE_OPTIONS;
+      menu->dirty = 1;
+    } else if (pressed & MENU_A) {
+      menu->binding = menu->shortcut_row;
+      menu->dirty = 1;
+    } else if ((pressed & MENU_X) && menu_is_bindable(menu->settings->shortcuts[menu->shortcut_row].button)) {
+      menu->settings->shortcuts[menu->shortcut_row].button = -1;
+      LOG("unbound %s\n", shortcut_keys[menu->shortcut_row]);
+      write_shortcuts(menu->settings);
+      menu->dirty = 1;
+    }
+    return MENU_STAY;
+  }
+
+  if (menu->page == MENU_PAGE_GROUP) {
+    if (pressed & MENU_B) {
+      menu->page = MENU_PAGE_OPTIONS;
+      menu->dirty = 1;
+    } else if (pressed & (MENU_LEFT | MENU_RIGHT | MENU_A)) {
+      step_option(menu, menu_group_setting(menu->option_row, menu->setting_row),
+                  pressed & MENU_LEFT ? -1 : 1);
+      menu->dirty = 1;
+    }
+    return MENU_STAY;
+  }
+
+  if (pressed & MENU_B) {
+    menu->page = MENU_PAGE_ROOT;
+    menu->dirty = 1;
+    return MENU_STAY;
+  }
+
+  /* B on a group's page comes back to it here, as it does from Shortcuts */
+  if (pressed & (MENU_RIGHT | MENU_A)) {
+    if (menu->option_row == MENU_GROUP_SHORTCUTS) {
+      menu->page = MENU_PAGE_SHORTCUTS;
+      menu->shortcut_row = 0;
+      menu->shortcut_top = 0;
+    } else {
+      menu->page = MENU_PAGE_GROUP;
+      menu->setting_row = 0;
+      menu->setting_top = 0;
+    }
+    menu->dirty = 1;
+  }
+
+  return MENU_STAY;
+}
+
+/* minarch's title: the name in a pill at the top left, cut to fit */
+static int draw_title(gfx_canvas *canvas, const gfx_metrics *m, const gfx_font *font,
+                      const gfx_theme *theme, const char *text, int max_w)
+{
+  int px = gfx_u(m, GFX_FONT_LARGE), padding = gfx_u(m, GFX_BUTTON_PADDING);
+  int x = gfx_u(m, m->padding), y = gfx_u(m, m->padding), h = gfx_u(m, GFX_PILL_SIZE);
+  char shown[256];
+  int w;
+
+  if (max_w <= 2 * padding) {
+    return x;
+  }
+
+  gfx_text_fit(font, px, text, max_w - 2 * padding, shown, sizeof shown);
+  w = gfx_text_width(font, px, shown) + 2 * padding;
+  w = w > max_w ? max_w : w;
+  gfx_pill(canvas, x, y, w, h, gfx_title_pill(theme));
+  gfx_text_draw(canvas, font, x + padding, y + (h - gfx_line_height(font, px)) / 2, px,
+                gfx_title_text(theme), shown);
+  return x + w;
+}
+
+/*
+ * minarch's battery at the top right, a pill holding the outline of a battery
+ * filled from the right. It turns red when low and shows a bolt on charge.
+ * Returns the width it took, which is none without a battery.
+ */
+static int draw_battery(gfx_canvas *canvas, const gfx_metrics *m, const gfx_theme *theme,
+                        const gfx_battery *battery)
+{
+  int size = gfx_u(m, GFX_PILL_SIZE);
+  int x = canvas->w - gfx_u(m, m->padding) - size, y = gfx_u(m, m->padding);
+  int bx = x + (size - gfx_u(m, 17)) / 2, by = y + (size - gfx_u(m, 10)) / 2;
+  int fx = bx + gfx_u(m, 2), fy = by + gfx_u(m, 2), fw = gfx_u(m, 11), fh = gfx_u(m, 6);
+  uint32_t background = gfx_group_pill(theme);
+  uint32_t edge;
+  int filled;
+
+  if (battery == NULL || battery->percent < 0) {
+    return 0;
+  }
+
+  edge = !battery->charging && battery->percent <= 10 ? GFX_RED : GFX_WHITE;
+  gfx_pill(canvas, x, y, size, size, background);
+  gfx_rounded(canvas, bx, by, gfx_u(m, 15), gfx_u(m, 10), gfx_u(m, 2), edge);
+  gfx_rounded(canvas, bx + gfx_u(m, 1), by + gfx_u(m, 1), gfx_u(m, 13), gfx_u(m, 8), gfx_u(m, 1),
+              background);
+  gfx_fill(canvas, bx + gfx_u(m, 15), by + gfx_u(m, 3), gfx_u(m, 2), gfx_u(m, 4), edge);
+
+  if (battery->charging) {
+    /* a bolt cut out of a full battery, as two overlapping triangles */
+    gfx_fill(canvas, fx, fy, fw, fh, GFX_WHITE);
+    gfx_triangle(canvas, fx + fw * 13 / 20, fy, fx + fw * 5 / 20, fy + fh * 12 / 20,
+                 fx + fw * 11 / 20, fy + fh * 11 / 20, background);
+    gfx_triangle(canvas, fx + fw * 9 / 20, fy + fh * 9 / 20, fx + fw * 15 / 20, fy + fh * 8 / 20,
+                 fx + fw * 7 / 20, fy + fh, background);
+    return size;
+  }
+
+  filled = fw * battery->percent / 100;
+  if (filled > 0) {
+    gfx_fill(canvas, fx + fw - filled, fy, filled, fh, battery->percent <= 20 ? GFX_RED : GFX_WHITE);
+  }
+  return size;
+}
+
+/* minarch's speaker, 18x16 units, or only its cone when muted */
+static void draw_speaker(gfx_canvas *canvas, const gfx_metrics *m, int x, int y, int muted,
+                         uint32_t colour)
+{
+  gfx_fill(canvas, x, y + gfx_u(m, 5), gfx_u(m, 4), gfx_u(m, 6), colour);
+  gfx_triangle(canvas, x + gfx_u(m, 3), y + gfx_u(m, 5), x + gfx_u(m, 10), y, x + gfx_u(m, 10),
+               y + gfx_u(m, 16), colour);
+  gfx_triangle(canvas, x + gfx_u(m, 3), y + gfx_u(m, 5), x + gfx_u(m, 10), y + gfx_u(m, 16),
+               x + gfx_u(m, 3), y + gfx_u(m, 11), colour);
+  if (!muted) {
+    gfx_arc(canvas, x + gfx_u(m, 10), y + gfx_u(m, 8), gfx_u(m, 4), gfx_u(m, 2), colour);
+    gfx_arc(canvas, x + gfx_u(m, 10), y + gfx_u(m, 8), gfx_u(m, 8), gfx_u(m, 2), colour);
+  }
+}
+
+/* minarch's sun, 19x19 units: a disc and eight dots around it */
+static void draw_sun(gfx_canvas *canvas, const gfx_metrics *m, int x, int y, uint32_t colour)
+{
+  /* the eight directions, in tenths of a unit vector */
+  static const int directions[8][2] = {{10, 0}, {7, 7}, {0, 10}, {-7, 7},
+                                       {-10, 0}, {-7, -7}, {0, -10}, {7, -7}};
+  int cx = x + gfx_u(m, 9.5), cy = y + gfx_u(m, 9.5);
+  int i;
+
+  gfx_circle(canvas, cx, cy, gfx_u(m, 4.5), colour);
+  for (i = 0; i < 8; i++) {
+    gfx_circle(canvas, cx + gfx_u(m, 8) * directions[i][0] / 10,
+               cy + gfx_u(m, 8) * directions[i][1] / 10, gfx_u(m, 1.5), colour);
+  }
+}
+
+void menu_indicator_size(int canvas_w, int canvas_h, int *w, int *h)
+{
+  gfx_metrics m = gfx_metrics_for(canvas_w, canvas_h);
+
+  *w = gfx_u(&m, GFX_PILL_SIZE + GFX_SETTINGS_WIDTH + 14);
+  *h = gfx_u(&m, GFX_PILL_SIZE);
+}
+
+/*
+ * minarch's indicator: a pill holding the setting's icon and a bar filled to
+ * its value. Volume at zero shows the muted speaker and no bar.
+ */
+void menu_draw_indicator(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
+                         int x, int y, enum menu_indicator indicator, int value)
+{
+  gfx_metrics m = gfx_metrics_for(screen_w, screen_h);
+  int max = indicator == MENU_INDICATOR_BRIGHTNESS ? MENU_BRIGHTNESS_MAX : MENU_VOLUME_MAX;
+  int pill = gfx_u(&m, GFX_PILL_SIZE), w, h, bar_x, bar_y, bar_w, bar_h;
+
+  menu_indicator_size(screen_w, screen_h, &w, &h);
+  value = value < 0 ? 0 : value > max ? max : value;
+  gfx_pill(canvas, x, y, w, h, gfx_indicator_pill(theme));
+
+  if (indicator == MENU_INDICATOR_BRIGHTNESS) {
+    draw_sun(canvas, &m, x + (pill - gfx_u(&m, 19)) / 2, y + (pill - gfx_u(&m, 19)) / 2,
+             gfx_indicator_icon(theme));
+  } else {
+    draw_speaker(canvas, &m, x + (pill - gfx_u(&m, value > 0 ? 18 : 10)) / 2,
+                 y + (pill - gfx_u(&m, 16)) / 2, value == 0, gfx_indicator_icon(theme));
+  }
+
+  bar_x = x + pill;
+  bar_y = y + gfx_u(&m, (GFX_PILL_SIZE - GFX_SETTINGS_SIZE) / 2.0);
+  bar_w = gfx_u(&m, GFX_SETTINGS_WIDTH);
+  bar_h = gfx_u(&m, GFX_SETTINGS_SIZE);
+  gfx_pill(canvas, bar_x, bar_y, bar_w, bar_h, gfx_indicator_track(theme));
+  if (value > 0) {
+    gfx_pill(canvas, bar_x, bar_y, bar_w * value / max, bar_h, gfx_indicator_bar(theme));
+  }
+}
+
+/* the battery at the top right, or the indicator while a setting changes */
+static int draw_hardware(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                         const gfx_theme *theme, const gfx_battery *battery)
+{
+  int w, h;
+
+  if (menu->indicator == MENU_INDICATOR_NONE) {
+    return draw_battery(canvas, m, theme, battery);
+  }
+
+  menu_indicator_size(canvas->w, canvas->h, &w, &h);
+  menu_draw_indicator(canvas, canvas->w, canvas->h, theme, canvas->w - gfx_u(m, m->padding) - w,
+                      gfx_u(m, m->padding), menu->indicator, menu->indicator_value);
+  return w;
+}
+
+struct button_hint {
+  const char *button;
+  const char *hint;
+};
+
+static int button_width(const gfx_metrics *m, const gfx_font *font, const char *button)
+{
+  int size = gfx_u(m, GFX_BUTTON_SIZE);
+
+  return strlen(button) == 1 ? size : size / 2 + gfx_text_width(font, gfx_u(m, GFX_FONT_TINY), button);
+}
+
+/*
+ * minarch's button hints along the bottom edge: a pill holding each button,
+ * a circle for a single letter and a pill for a longer name, and its hint.
+ */
+static void draw_buttons(gfx_canvas *canvas, const gfx_metrics *m, const gfx_font *font,
+                         const gfx_theme *theme, const struct button_hint *hints, int count,
+                         int right)
+{
+  int size = gfx_u(m, GFX_BUTTON_SIZE), margin = gfx_u(m, GFX_BUTTON_MARGIN);
+  int tiny = gfx_u(m, GFX_FONT_TINY), small = gfx_u(m, GFX_FONT_SMALL);
+  int medium = gfx_u(m, GFX_FONT_MEDIUM);
+  int total = margin, x, y, i;
+
+  for (i = 0; i < count; i++) {
+    total += button_width(m, font, hints[i].button) + margin +
+             gfx_text_width(font, small, hints[i].hint) + 2 * margin;
+  }
+
+  x = right ? canvas->w - gfx_u(m, m->padding) - total : gfx_u(m, m->padding);
+  y = canvas->h - gfx_u(m, m->padding + GFX_PILL_SIZE);
+  gfx_pill(canvas, x, y, total, gfx_u(m, GFX_PILL_SIZE), gfx_group_pill(theme));
+
+  x += margin;
+  y += margin;
+  for (i = 0; i < count; i++) {
+    const char *button = hints[i].button;
+    int w = button_width(m, font, button);
+
+    if (strlen(button) == 1) {
+      gfx_circle(canvas, x + size / 2, y + size / 2, size / 2, GFX_WHITE);
+      gfx_text_draw(canvas, font, x + (size - gfx_text_width(font, medium, button)) / 2,
+                    y + (size - gfx_line_height(font, medium)) / 2, medium, GFX_GRAY, button);
+    } else {
+      gfx_pill(canvas, x, y, w, size, GFX_WHITE);
+      gfx_text_draw(canvas, font, x + size / 4, y + (size - gfx_line_height(font, tiny)) / 2, tiny,
+                    GFX_GRAY, button);
+    }
+    x = gfx_text_draw(canvas, font, x + w + margin, y + (size - gfx_line_height(font, small)) / 2,
+                      small, gfx_hint_text(theme), hints[i].hint);
+    x += 2 * margin;
+  }
+}
+
+static void draw_root(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                      const uint32_t *frame, const gfx_font *font, const gfx_theme *theme,
+                      const gfx_battery *battery)
+{
+  static const struct button_hint sleep[] = {{"POWER", "SLEEP"}};
+  static const struct button_hint actions[] = {{"B", "BACK"}, {"A", "OKAY"}};
+  int pill = gfx_u(m, GFX_PILL_SIZE), padding = gfx_u(m, GFX_BUTTON_PADDING);
+  int px = gfx_u(m, GFX_FONT_LARGE), line = gfx_line_height(font, px);
+  int x = gfx_u(m, m->padding);
+  int top = (canvas->h - gfx_u(m, m->padding * 2) - MENU_ROOT_COUNT * pill) / 2 +
+            gfx_u(m, m->padding);
+  int battery_w, row;
+
+  if (frame != NULL) {
+    gfx_dim(canvas, frame, 0x80);
+  } else {
+    gfx_clear(canvas, GFX_BLACK);
+  }
+
+  battery_w = draw_hardware(menu, canvas, m, theme, battery);
+  draw_title(canvas, m, font, theme, menu->title,
+             canvas->w - gfx_u(m, m->padding * 2) - (battery_w ? battery_w + gfx_u(m, m->padding) : 0));
+  draw_buttons(canvas, m, font, theme, sleep, 1, 0);
+  draw_buttons(canvas, m, font, theme, actions, 2, 1);
+
+  for (row = 0; row < MENU_ROOT_COUNT; row++) {
+    const char *label = root_labels[row];
+    int y = top + row * pill, text_y = y + (pill - line) / 2;
+
+    if (row == menu->root_row) {
+      gfx_pill(canvas, x, y, gfx_text_width(font, px, label) + 2 * padding, pill,
+               gfx_selected_pill(theme));
+      gfx_text_draw(canvas, font, x + padding, text_y, px, gfx_selected_text(theme), label);
+      continue;
+    }
+
+    if (gfx_shadow(theme)) {
+      gfx_text_draw(canvas, font, x + padding + gfx_u(m, 2), text_y + gfx_u(m, 1), px, GFX_BLACK,
+                    label);
+    }
+    gfx_text_draw(canvas, font, x + padding, text_y, px,
+                  root_row_enabled(row) ? gfx_text(theme) : DISABLED_TEXT, label);
+  }
+}
+
+/*
+ * Splits text into up to two lines of at most max_w, at its line break when it
+ * has one and otherwise at a space, cutting whatever still does not fit.
+ */
+static int wrap_description(const gfx_font *font, int px, const char *text, int max_w,
+                            char lines[2][256])
+{
+  const char *newline = strchr(text, '\n');
+  size_t cut = strlen(text), space;
+  char first[256];
+
+  if (newline != NULL) {
+    snprintf(first, sizeof first, "%.*s", (int)(newline - text), text);
+    gfx_text_fit(font, px, first, max_w, lines[0], sizeof lines[0]);
+    gfx_text_fit(font, px, newline + 1, max_w, lines[1], sizeof lines[1]);
+    return 2;
+  }
+
+  snprintf(lines[0], sizeof lines[0], "%s", text);
+  lines[1][0] = '\0';
+  while (gfx_text_width(font, px, lines[0]) > max_w) {
+    space = cut;
+    while (space > 0 && text[space - 1] != ' ') {
+      space--;
+    }
+    if (space <= 1) {
+      gfx_text_fit(font, px, text, max_w, lines[0], sizeof lines[0]);
+      return 1;
+    }
+    cut = space - 1;
+    snprintf(lines[0], sizeof lines[0], "%.*s", (int)cut, text);
+  }
+
+  if (text[cut] == '\0') {
+    return 1;
+  }
+  gfx_text_fit(font, px, text + cut + 1, max_w, lines[1], sizeof lines[1]);
+  return 2;
+}
+
+static const char *option_label(int row)
+{
+  return row < MENU_CONFIG_FIRST ? option_labels[row] : config_options[row - MENU_CONFIG_FIRST].label;
+}
+
+static const char *option_description(int row)
+{
+  return row < MENU_CONFIG_FIRST ? option_descriptions[row]
+                                 : config_options[row - MENU_CONFIG_FIRST].description;
+}
+
+/* what a page of rows shows, for draw_list */
+struct list_page {
+  const char *title;
+  int count;
+  int selected;
+  int *top;
+  /* the width the widest row can need, so changing a value never resizes the list */
+  int widest;
+  const char *description;
+  const char *(*label)(const struct menu *menu, int row);
+  void (*value)(const struct menu *menu, int row, char *out, size_t size);
+};
+
+static const char *groups_label(const struct menu *menu, int row)
+{
+  (void)menu;
+  return groups[row].label;
+}
+
+/* a group opens a page rather than holding a value */
+static void groups_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  (void)menu;
+  (void)row;
+  snprintf(out, size, "%s", "");
+}
+
+static const char *group_label(const struct menu *menu, int row)
+{
+  return option_label(menu_group_setting(menu->option_row, row));
+}
+
+static void group_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  menu_option_value(menu, menu_group_setting(menu->option_row, row), out, size);
+}
+
+static const char *shortcuts_label(const struct menu *menu, int row)
+{
+  (void)menu;
+  return shortcut_labels[row];
+}
+
+static void shortcuts_value(const struct menu *menu, int row, char *out, size_t size)
+{
+  if (menu->binding == row) {
+    snprintf(out, size, "Press a button");
+    return;
+  }
+  menu_binding_name(&menu->settings->shortcuts[row], out, size);
+}
+
+/*
+ * minarch's option list: rows a button tall under the title, centred and as
+ * wide as the widest label and value need, so stepping a value never resizes
+ * the list. The selected row is a dark pill with a light one around its name,
+ * values sit at the right in the tiny font, arrows show more rows above or
+ * below, and the selected row's description is at the foot.
+ */
+static void draw_list(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                      const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery,
+                      const struct list_page *page)
+{
+  int row_h = gfx_u(m, GFX_BUTTON_SIZE), op = gfx_u(m, GFX_OPTION_PADDING);
+  int head = gfx_u(m, m->padding + GFX_PILL_SIZE) + gfx_u(m, GFX_BUTTON_MARGIN);
+  int small = gfx_u(m, GFX_FONT_SMALL), tiny = gfx_u(m, GFX_FONT_TINY);
+  int leading = gfx_u(m, 12), margin = gfx_u(m, m->padding);
+  int desc_top = canvas->h - margin - 2 * leading;
+  int visible = (desc_top - row_h - head) / row_h;
+  int widest = page->widest, battery_w, i, count, arrow_w, arrow_h, x;
+  int *top = page->top;
+  char full[256], value[256], label[256], lines[2][256];
+
+  if (visible < 1) {
+    visible = 1;
+  }
+  if (page->selected < *top) {
+    *top = page->selected;
+  }
+  if (page->selected >= *top + visible) {
+    *top = page->selected - visible + 1;
+  }
+  if (*top > page->count - visible) {
+    *top = page->count - visible > 0 ? page->count - visible : 0;
+  }
+
+  gfx_clear(canvas, gfx_background(theme));
+  battery_w = draw_hardware(menu, canvas, m, theme, battery);
+  draw_title(canvas, m, font, theme, page->title,
+             canvas->w - margin * 2 - (battery_w ? battery_w + margin : 0));
+
+  if (widest > canvas->w - margin * 2) {
+    widest = canvas->w - margin * 2;
+  }
+  x = (canvas->w - widest) / 2;
+
+  for (i = 0; i < visible && *top + i < page->count; i++) {
+    int at = *top + i;
+    int y = head + i * row_h;
+    int selected = at == page->selected;
+    int value_w;
+
+    page->value(menu, at, full, sizeof full);
+    gfx_text_fit(font, tiny, full, widest / 2, value, sizeof value);
+    value_w = gfx_text_width(font, tiny, value);
+    gfx_text_fit(font, small, page->label(menu, at), widest - value_w - 3 * op, label, sizeof label);
+
+    if (selected) {
+      gfx_pill(canvas, x, y, widest, row_h, gfx_option_row(theme));
+      gfx_pill(canvas, x, y, gfx_text_width(font, small, label) + 2 * op, row_h,
+               gfx_selected_pill(theme));
+    }
+    gfx_text_draw(canvas, font, x + op, y + (row_h - gfx_line_height(font, small)) / 2, small,
+                  selected ? gfx_selected_text(theme) : gfx_text(theme), label);
+    gfx_text_draw(canvas, font, x + widest - value_w - op,
+                  y + (row_h - gfx_line_height(font, tiny)) / 2, tiny,
+                  selected ? GFX_WHITE : gfx_text(theme), value);
+  }
+
+  arrow_w = gfx_u(m, 24);
+  arrow_h = gfx_u(m, GFX_SCROLL_HEIGHT) > 2 ? gfx_u(m, GFX_SCROLL_HEIGHT) : 2;
+  if (*top > 0) {
+    gfx_arrow(canvas, (canvas->w - arrow_w) / 2, head - gfx_u(m, GFX_BUTTON_MARGIN) - arrow_h, arrow_w,
+              arrow_h, 0, GFX_GRAY);
+  }
+  if (*top + visible < page->count) {
+    gfx_arrow(canvas, (canvas->w - arrow_w) / 2, head + visible * row_h + (row_h - arrow_h) / 2,
+              arrow_w, arrow_h, 1, GFX_GRAY);
+  }
+
+  count = wrap_description(font, tiny, page->description, canvas->w - margin * 2, lines);
+  for (i = 0; i < count; i++) {
+    gfx_text_draw(canvas, font, (canvas->w - gfx_text_width(font, tiny, lines[i])) / 2,
+                  desc_top + i * leading, tiny, gfx_hint_text(theme), lines[i]);
+  }
+}
+
+static void draw_options(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                         const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
+{
+  int small = gfx_u(m, GFX_FONT_SMALL), op = gfx_u(m, GFX_OPTION_PADDING);
+  struct list_page page = {"Options", MENU_GROUP_COUNT, menu->option_row, &menu->option_top, 0,
+                           groups[menu->option_row].description, groups_label, groups_value};
+  int row;
+
+  for (row = 0; row < MENU_GROUP_COUNT; row++) {
+    int w = gfx_text_width(font, small, groups[row].label) + 4 * op;
+    page.widest = w > page.widest ? w : page.widest;
+  }
+
+  draw_list(menu, canvas, m, font, theme, battery, &page);
+}
+
+/* a group's settings, as wide as any of their values needs */
+static void draw_group(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                       const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
+{
+  const struct group *group = &groups[menu->option_row];
+  int small = gfx_u(m, GFX_FONT_SMALL), tiny = gfx_u(m, GFX_FONT_TINY);
+  int op = gfx_u(m, GFX_OPTION_PADDING);
+  struct list_page page = {group->label, group->count, menu->setting_row, &menu->setting_top, 0,
+                           option_description(group->settings[menu->setting_row]), group_label,
+                           group_value};
+  char value[256];
+  int row, choice;
+
+  for (row = 0; row < group->count; row++) {
+    int setting = group->settings[row];
+
+    for (choice = 0; choice < choice_count(menu, setting); choice++) {
+      int w;
+
+      choice_name(menu, setting, choice, value, sizeof value);
+      w = gfx_text_width(font, small, option_label(setting)) + gfx_text_width(font, tiny, value) +
+          4 * op;
+      page.widest = w > page.widest ? w : page.widest;
+    }
+  }
+
+  draw_list(menu, canvas, m, font, theme, battery, &page);
+}
+
+static void draw_shortcuts(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                           const gfx_font *font, const gfx_theme *theme, const gfx_battery *battery)
+{
+  int small = gfx_u(m, GFX_FONT_SMALL), tiny = gfx_u(m, GFX_FONT_TINY);
+  int op = gfx_u(m, GFX_OPTION_PADDING);
+  /* the longest any value can be, whatever is bound */
+  int value_w = gfx_text_width(font, tiny, "MENU+SELECT");
+  struct list_page page = {"Shortcuts", MENU_SHORTCUT_COUNT, menu->shortcut_row,
+                           &menu->shortcut_top, 0, NULL, shortcuts_label, shortcuts_value};
+  char description[256];
+  int row;
+
+  if (gfx_text_width(font, tiny, "Press a button") > value_w) {
+    value_w = gfx_text_width(font, tiny, "Press a button");
+  }
+  for (row = 0; row < MENU_SHORTCUT_COUNT; row++) {
+    int w = gfx_text_width(font, small, shortcut_labels[row]) + value_w + 4 * op;
+    page.widest = w > page.widest ? w : page.widest;
+  }
+
+  if (menu->binding >= 0) {
+    snprintf(description, sizeof description,
+             "Press a button for %s, holding MENU for MENU+button.\nTap MENU to cancel.",
+             shortcut_labels[menu->binding]);
+  } else {
+    snprintf(description, sizeof description,
+             "A to set a button, holding MENU for MENU+button.\nX to clear it.");
+  }
+  page.description = description;
+
+  draw_list(menu, canvas, m, font, theme, battery, &page);
+}
+
+void menu_notification_size(int screen_w, int screen_h, const gfx_font *font, const char *text,
+                            int *w, int *h)
+{
+  gfx_metrics m = gfx_metrics_for(screen_w, screen_h);
+
+  *w = gfx_text_width(font, gfx_u(&m, GFX_FONT_SMALL), text) + 2 * gfx_u(&m, GFX_BUTTON_PADDING);
+  *h = gfx_u(&m, GFX_PILL_SIZE);
+}
+
+void menu_draw_notification(gfx_canvas *canvas, int screen_w, int screen_h, const gfx_theme *theme,
+                            const gfx_font *font, int x, int y, const char *text)
+{
+  gfx_metrics m = gfx_metrics_for(screen_w, screen_h);
+  int px = gfx_u(&m, GFX_FONT_SMALL), w, h;
+
+  menu_notification_size(screen_w, screen_h, font, text, &w, &h);
+  gfx_pill(canvas, x, y, w, h, gfx_indicator_pill(theme));
+  gfx_text_draw(canvas, font, x + gfx_u(&m, GFX_BUTTON_PADDING),
+                y + (h - gfx_line_height(font, px)) / 2, px, gfx_indicator_icon(theme), text);
+}
+
+void menu_draw(struct menu *menu, gfx_canvas *canvas, const uint32_t *frame, const gfx_font *font,
+               const gfx_theme *theme, const gfx_battery *battery)
+{
+  gfx_metrics metrics = gfx_metrics_for(canvas->w, canvas->h);
+
+  if (menu->page == MENU_PAGE_ROOT) {
+    draw_root(menu, canvas, &metrics, frame, font, theme, battery);
+  } else if (menu->page == MENU_PAGE_SHORTCUTS) {
+    draw_shortcuts(menu, canvas, &metrics, font, theme, battery);
+  } else if (menu->page == MENU_PAGE_GROUP) {
+    draw_group(menu, canvas, &metrics, font, theme, battery);
+  } else {
+    draw_options(menu, canvas, &metrics, font, theme, battery);
+  }
+  menu->dirty = 0;
+}

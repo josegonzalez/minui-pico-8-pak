@@ -126,6 +126,13 @@ jobs:
             fi
           done
 
+      - name: Validate power control is bundled unpacked
+        run: |
+          if ! unzip -l "dist/${{ steps.pak-name.outputs.PAK_NAME }}.pak.zip" | grep -q "bin/power-control/launch"; then
+            echo "the unpacked minui-power-control is missing from the artifact"
+            exit 1
+          fi
+
       - name: Validate cart title extractor is bundled
         run: |
           for architecture in arm arm64; do

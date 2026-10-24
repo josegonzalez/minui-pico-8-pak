@@ -78,19 +78,96 @@ Choosing a file with any other extension, or one that is missing from the SD car
 
 On `h700`, NextUI v6.14.0-rc11 or newer is needed for the buttons to map correctly. From that release, the buttons match the TrimUI devices on every Anbernic model.
 
+`Start` opens PICO-8's own pause menu on every platform, and `Menu` opens the pak's [in-game menu](#in-game-menu). On `tg5040` and `tg5050` the `Menu` button used to open PICO-8's pause menu, while `Start` did nothing.
+
+### In-game menu
+
+Press and release `Menu` to pause the game and open the same menu MinUI and NextUI show over their own emulators. It works from a game, Splore, or PICO-8's command prompt. The game and its sound stay paused until the menu closes. On `h700` this needs NextUI v6.14.0-rc11 or newer, the first release whose controller mapping includes the `Menu` button.
+
+`Menu` only opens the menu when it is pressed on its own. Holding it with a volume button, as MinUI and NextUI do to change the brightness, or with any other button, leaves the menu closed.
+
+The menu has these entries:
+
+- `Continue` closes the menu and carries on with the game. `B` and a tap of `Menu` close it too.
+- `Save` and `Load` are shown but cannot be chosen yet, as the pak has no save states.
+- `Options` opens the settings below.
+- `Quit` fades the screen to black, closes PICO-8 and returns to the game list. The screen stays black, and the game stays silent, until the launcher has drawn its menu again.
+
+The menu takes its look from the launcher, using NextUI's theme colours and font, or MinUI's font. If neither font is on the SD card, it draws with a small built-in font instead.
+
+#### Shortcuts
+
+The last group of the options, `Shortcuts`, sets buttons that do something straight away while a game is running, as NextUI's own shortcuts do. Every shortcut starts unbound.
+
+| Shortcut          | What it does                                                          |
+| ----------------- | --------------------------------------------------------------------- |
+| Screenshot        | Saves the screen as a PNG, as NextUI does                             |
+| Save GIF          | Saves the last 16 seconds as a GIF, by pressing PICO-8's `Ctrl` + `9` |
+| Quit              | Quits, as `Quit` in the menu does                                     |
+| Reset Game        | Restarts the cart, by pressing PICO-8's own `Ctrl` + `R` for it       |
+| Cycle Screen Mode | Switches between `Standard` and `Stretched`                           |
+| Cycle Overlay     | Steps through `None` and then each overlay                            |
+| Toggle CPU Meter  | Shows or hides PICO-8's CPU meter, by pressing its `Ctrl` + `P`       |
+
+Screenshots and GIFs are saved to the `/Screenshots` folder on your SD card. PICO-8 names its GIFs for the cart and when they were saved, such as `celeste_20260124_120823.gif`, and shows its own message when one is saved.
+
+To bind one, choose it and press `A`, then press the button to use. Hold `Menu` while pressing it to make the shortcut `Menu` + that button. Tap `Menu` alone to give up, and press `X` on a shortcut to clear it. A button can only do one thing, so binding it to one shortcut takes it from any other.
+
+A button bound on its own never reaches the game, and one bound with `Menu` does not reach it while `Menu` is held. `Menu` cannot be bound itself.
+
+The shortcuts are saved to a file named `shortcuts` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card.
+
+A screenshot is the screen as you see it, overlay included. It is saved to the `/Screenshots` folder on your SD card, named for the game and the time it was taken, such as `Celeste.2026-10-24-13-05-09.png`, the same way NextUI names its own. A "Screenshot saved" notice shows at the top right of the screen, unless NextUI's own setting for screenshot notifications is turned off.
+
+### Volume and brightness
+
+Changing the volume or brightness while a game is running, or in the menu, shows the same bar MinUI and NextUI show over their own emulators, in the top right of the screen. It goes away half a second after the last change. In the menu it takes the battery's place until then.
+
+The pak reads the volume and brightness from the launcher's own settings library, `libmsettings.so`, so the bar only appears while the launcher's settings are running, as they always are under MinUI and NextUI.
+
+#### Options
+
+`Options` lists four groups, as the options in MinUI and NextUI's own emulators are grouped: `Frontend`, `Emulator`, `Splore` and `Shortcuts`. Press `A` or `Right` to open one and `B` to go back. In a group, use `Up` and `Down` to pick a setting, and `Left`, `Right` or `A` to change it. Each change is saved to the SD card straight away.
+
+| Group    | Setting            | Values                  | Takes effect                |
+| -------- | ------------------ | ----------------------- | --------------------------- |
+| Frontend | Screen Mode        | Standard, Stretched     | When the menu closes        |
+| Frontend | Overlay            | None, or any overlay    | When the menu closes        |
+| Frontend | Show FPS           | Off, On                 | The next time a game starts |
+| Emulator | Volume             | 0%, 25%, 50%, 75%, 100% | The next time a game starts |
+| Emulator | Battery Saver      | Off, On                 | The next time a game starts |
+| Splore   | Copy Splore Carts  | Off, All, Favourites    | When you exit Splore        |
+| Splore   | Splore Artwork     | Standard, Fancy         | Straight away               |
+| Splore   | Hide Mature Carts  | Off, On                 | The next time a game starts |
+| Splore   | Check Cart Updates | Off, On                 | The next time a game starts |
+
+`Shortcuts` opens its own page, described [below](#shortcuts). See [Screen Mode](#screen-mode), [Overlay](#overlay), [Copying Splore carts into your roms folder](#copying-splore-carts-into-your-roms-folder) and [Splore](#splore) for the pak's own settings. The rest are PICO-8's own settings:
+
+- `Show FPS` draws the frame rate in the corner of the screen.
+- `Volume` is PICO-8's own volume, which applies under the device's volume.
+- `Battery Saver` has PICO-8 rest for 10 milliseconds between frames rather than 4, to save power.
+- `Hide Mature Carts` hides carts the community has tagged as mature from Splore.
+- `Check Cart Updates` checks for a newer version of a cart from the BBS each time it runs.
+
+These are saved to a file named `pico8-config` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card, and written into PICO-8's configuration when a game starts. Delete the file to go back to the defaults.
+
 ### Exiting a game
 
-To exit a game:
+To exit a game, press `Menu` and choose `Quit`.
+
+You can also exit from PICO-8's own pause menu:
 
 - press the `Start` button
 - select `Options`
 - select `shutdown Pico-8`
 
-On `tg5040`, `tg5050`, `my355` and `h700`, you can also hold `Select` and press `Menu` to quit straight away, from a game, Splore, or PICO-8's command prompt. On `h700` this needs NextUI v6.14.0-rc11 or newer, the first release whose controller mapping includes the `Menu` button. `rg35xxplus` has no such shortcut, as MinUI's controller mapping does not include the `Menu` button.
-
 ### Game switcher
 
-NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so when you exit a cart on NextUI, the pak gives the switcher the cart's artwork instead. It uses the cart's image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The image and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card, and refreshed each time you exit the cart.
+NextUI's game switcher lists every game you have played recently, but only shows a picture for games with a save state. PICO-8 has no save states, so on NextUI the pak gives the switcher a picture of its own.
+
+When you choose `Quit` in the [in-game menu](#in-game-menu), the picture is the game as it was when you opened the menu, without any overlay. Until then, and when a game ends any other way, it is the cart's artwork: its image in the `.media` folder if there is one, and otherwise the cart itself, since most carts are PNG images whether they are named `.p8.png` or `.p8`. The artwork is written as soon as PICO-8 starts.
+
+The picture and a file naming its slot are written to `/.userdata/shared/.minui/PICO` on your SD card.
 
 Because NextUI treats that as a save state, the switcher labels the `A` button `RESUME` and the game list offers `X` to resume the cart. Both start the cart from the beginning. Press `Y` in the switcher to remove a cart from it.
 
@@ -106,6 +183,8 @@ On devices without deep sleep, which includes every device running MinUI, clicki
 
 The power button is handled by [MinUI Power Control](https://github.com/ben16w/minui-power-control). The pak uses [a fork](https://github.com/josegonzalez/minui-power-control) that adds `h700` support, turns the Miyoo Flip's screen off during deep sleep under NextUI, and sleeps when the Flip's lid closes, until those changes are part of the original. Its messages, such as "Powering off", are shown with the pak's own copy of minui-presenter. See either for more information and known issues.
 
+Power control is released as a single file that checks and unpacks itself every time it starts, which took seconds on a device while the game was starting. The pak ships it already unpacked, in its `bin/power-control` folder, so it starts at once.
+
 ### CPU speed
 
 On `rg35xxplus` and `tg5040`, the pak raises the CPU clock to 1.6 GHz while PICO-8 runs, but only when the OS uses the `userspace` CPU governor, as MinUI does. NextUI already switches to its `performance` governor before starting any pak, which runs the CPU at full speed, so the pak leaves the clock alone there and notes the governor in its log.
@@ -120,11 +199,11 @@ SDL Error: SDL not built with sensor support
 ** FATAL ERROR: Unable to initialize SDL
 ```
 
-The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead of SDL2. It drops that one request on its way past and hands everything else to the device's own SDL2 unchanged, which matters because NextUI's SDL2 is the build that sees the built-in controller and no replacement would. PICO-8 never reads a sensor, so nothing is lost. The source is in `shim/sdl-nosensor.c` in this pak.
+The pak ships a small library at `lib/h700/sdl-nosensor.so` and loads it ahead of SDL2. It drops that one request on its way past and hands everything else to the device's own SDL2 unchanged, which matters because NextUI's SDL2 is the build that sees the built-in controller and no replacement would. PICO-8 never reads a sensor, so nothing is lost. The source is in `shim/sdl-nosensor.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
 
 The library is only loaded on `h700`, and only when it is present. A copy the device cannot load is skipped with a line in the log rather than stopping the launch.
 
-Overlays, switching the screen mode in game and the `Select` + `Menu` shortcut come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c` in this pak.
+Overlays, switching the screen mode in game, the in-game menu and NextUI's game switcher preview come from a second library, loaded on every platform in the same way: `lib/arm64/sdl-display.so` for PICO-8's 64-bit binary, and `lib/arm/sdl-display.so` for the 32-bit one `rg35xxplus` uses. Its source is in `shim/sdl-display.c`, `shim/menu.c`, `shim/gfx.c`, `shim/cart.c` and `shim/crash.c` in [this pak's repository](https://github.com/josegonzalez/minui-pico-8-pak).
 
 ### In-Game saves
 
@@ -162,15 +241,19 @@ A roms folder that already contains a cart with `Splore` or `splore` in its name
 
 To exit Splore, choose a game and follow the normal process of exiting a game.
 
-You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png` and `.res/1) Splore.p8.png`. The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover you can copy over the generated artwork.
+You may wish to rename the cart to `1) Splore.p8` to move it to the top of the game list. Renaming it will not cause a new one to be created. Rename the artwork to match if you do, so `.media/1) Splore.png` and `.res/1) Splore.p8.png`.
+
+The `splore` folder of this pak also contains `Splore-fancy.p8.png`, an alternative cover. To use it, set `Splore Artwork` in the `Splore` options of the [in-game menu](#in-game-menu) to `Fancy`, and set it back to `Standard` to return to the usual one. The choice is saved to a file named `splore-artwork` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. As soon as you change it, the cover of every Splore cart in a roms folder tagged `(PICO)` is changed to match, renamed carts included. Only covers that are still one of the pak's two are changed, so artwork of your own, or a cart with no artwork, is left alone. A Splore cart the pak creates later gets the chosen cover from the start.
 
 ### Copying Splore carts into your roms folder
 
-Carts downloaded via Splore are only available via Splore. To copy them into your roms folder as well, create a file named `copy-carts` in either the `/.userdata/$PLATFORM/Pico-8-native` or the `/.userdata/shared/Pico-8-native` folder on your SD card. The file can be empty, and it needs no extension - if your computer hides extensions, check on a terminal that it is not really named `copy-carts.txt`.
+Carts downloaded via Splore are only available via Splore. To copy them into your roms folder as well, set `Copy Splore Carts` in the `Splore` options of the [in-game menu](#in-game-menu) to `All` or `Favourites`. The menu does this by writing the files described below, and removes any of them it finds when you change the setting.
+
+You can also create a file named `copy-carts` yourself, in either the `/.userdata/$PLATFORM/Pico-8-native` or the `/.userdata/shared/Pico-8-native` folder on your SD card. The file can be empty, and it needs no extension - if your computer hides extensions, check on a terminal that it is not really named `copy-carts.txt`.
 
 Every cart Splore has downloaded is copied, whether or not you favourited it. To copy only your favourites, name the file `copy-carts-favourites` instead, or `copy-carts-favorites` if you prefer that spelling. Either file on its own turns the copying on. Favourites are read from the `favourites.txt` PICO-8 writes in `/.userdata/shared/Pico-8-native`, and from `.lexaloffle/pico-8/favourites.txt` under that folder if it exists. If no cart is favourited, nothing is copied.
 
-The copy runs when you exit a cart, into the roms folder that cart was launched from. A message is shown while carts are being copied - do not turn the device off until it goes away. Like the Splore cart itself, the new games will not appear until you leave the folder and enter it again.
+The copy runs when you exit Splore, into the roms folder it was launched from. Exiting any other cart copies nothing, as only Splore downloads carts. A message is shown while carts are being copied - do not turn the device off until it goes away. Like the Splore cart itself, the new games will not appear until you leave the folder and enter it again.
 
 Carts keep the filename Splore gave them, which is usually an id or a slug. Their names in the game list come from a `map.txt` file the pak writes in the roms folder. A favourited cart is named with the title Splore shows for it, from `favourites.txt`. Otherwise the name is the title comment on the first line of the cart's code - the same title PICO-8 shows on the cart's label - unless that comment is a code label such as `main` or `global variables`. A cart with neither is named after its filename, without the revision number Splore adds to the end, so `kalikan_menu-6.p8.png` is listed as `Kalikan Menu`. A version number or dashes at the end of a title are dropped, so `pico world race 1.1` is listed as `Pico World Race`. Rows in `map.txt` for your own games are left alone, and so is any name you edit yourself - the pak reuses what is already there rather than overwriting it. That also means a cart keeps the name it was first given, so to have the pak name a cart again, delete its row from `map.txt`, or the whole file, and exit a cart again. Cover art is written for both NextUI and MinUI, in the `.media` and `.res` folders.
 
@@ -268,13 +351,13 @@ Please note that using `stretched` mode may look unnatural for games with circul
 
 `stretched` mode needs to know the size of your screen. It reads that from `fbset` where the device provides one, and otherwise falls back to the panel size for your model, which is known for every `h700` device. On the RG28XX, NextUI rotates the display for applications, so both screen modes look the same there as they do on the other models.
 
-You can also switch between the two while a game is running: hold `Select` and press `Up` or `Down`. The mode you switch to is saved to the `screen-mode` file, so the next game starts in it too.
+You can also switch between the two while a game is running, with `Screen Mode` in the `Frontend` options of the [in-game menu](#in-game-menu). The mode you switch to is saved to the `screen-mode` file, so the next game starts in it too.
 
 ### Overlay
 
 A PNG in the `/Overlays/PICO` folder on your SD card is drawn over the game, for a bezel or border. This follows the layout NextUI uses for its own emulators' overlays, a folder under `/Overlays` named for the tag at the end of the roms folder, which is `(PICO)` for this pak. The pak creates the folder the first time you launch a game.
 
-While a game is running, hold `Select` and press `Left` or `Right` to step through every PNG in the folder, in name order, and an option with no overlay at all. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
+While a game is running, choose one with `Overlay` in the `Frontend` options of the [in-game menu](#in-game-menu), which steps through `None` and then every PNG in the folder, in name order. Your choice is remembered for the next game, in a file named `overlay` in the `/.userdata/$PLATFORM/Pico-8-native` folder on your SD card. Until you choose one, no overlay is drawn.
 
 The PNG is decoded by the pak itself, so overlays work the same on every platform. The image is scaled to fit the screen without changing its shape and centred, leaving any space around it uncovered, and it needs a transparent window where the game shows through. On the Trimui Brick's 1024x768 screen, `standard` mode draws the game as a 768x768 square starting 128 pixels from the left, so a 4:3 image fills the screen. The Trimui Smart Pro also uses the `tg5040` build, and its 1280x720 screen is 16:9, so a 4:3 image there has bars at the sides and a 16:9 image fills it. No overlay is drawn in `stretched` mode, where the game fills the screen.
 
@@ -282,7 +365,15 @@ The PNG is decoded by the pak itself, so overlays work the same on every platfor
 
 Logs will be written to the`/.userdata/$PLATFORM/logs/` folder on your SD card.
 
+If PICO-8 crashes, a message says so with the signal it crashed with, such as `SIGBUS` or `SIGSEGV`, and the log says where: the address, the file it belongs to, the instruction that crashed and a backtrace. Power control ending PICO-8 when you press the power button is not a crash, and shows nothing.
+
+While a game runs, the log is kept in `/tmp/PICO-log.txt` in the device's memory, as writing to the SD card line by line added seconds to starting and exiting a game. It is copied to the SD card just before PICO-8 starts and again once the pak has finished. If the device loses power during a game, the log on the SD card ends where PICO-8 started.
+
 The log records the library search path PICO-8 is started with and the `ldd` output for your PICO-8 binary, so a library it cannot find or resolves to the wrong copy is visible. A PICO-8 that fails to start also says so on screen rather than only in the log.
+
+Each step of starting and exiting a game is marked in the log with the number of seconds since the device was turned on, such as `[1234.56] syncing the SD card`. The lines from the in-game menu and the rest of the display library, such as `[1240.03] sdl-display: Quit chosen in the menu, quitting pico-8`, are marked the same way. Comparing the marks shows how long each step took, from PICO-8 starting until it drew its first frame, to the time between choosing `Quit` and returning to the launcher.
+
+The log lists every command the pak runs, except inside the steps that would otherwise make starting and exiting slow, such as checking the cart, preparing the menu and copying carts, as each listed command is written to the SD card on its own. Those steps log what they find instead. Moving older saves and creating the Splore cart run alongside checking the cart, so their lines can be interleaved in the log.
 
 ## Development
 
@@ -294,8 +385,10 @@ make format
 make test
 ```
 
-`make build` and `make release` additionally need Docker, which is what the SDL sensor shim and the display shim are cross-compiled in, the display shim once for `arm` and once for `arm64`. The display shim decodes overlays with [stb_image](https://github.com/nothings/stb), which the build fetches at a pinned commit and checks against a checksum. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
+`make build` and `make release` additionally need Docker, which is what the SDL sensor shim and the display shim are cross-compiled in, the display shim once for `arm` and once for `arm64`. The display shim decodes overlays with [stb_image](https://github.com/nothings/stb) and draws the menu's text with stb_truetype from the same project, both of which the build fetches at a pinned commit and checks against a checksum. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
 
-The build also tests the display shim on both architectures, by loading it into a small program in `shim/test` that stands in for PICO-8, linked against a fake `libSDL2` that records what the shim does to each frame, the controller and the event queue. A shim that fails these tests is not written to `lib/`.
+`make build` also unpacks the pinned minui-power-control release into `bin/power-control` with `scripts/unpack-makeself.sh`. That script checks the archive against the MD5 it records for itself, and never runs any part of it.
 
-Three environment variables exist for the test suite only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to.
+The build also tests the display shim on both architectures, by loading it into a small program in `shim/test` that stands in for PICO-8, linked against a fake `libSDL2` that records what the shim does to each frame, the controller, the audio and the event queue. The menu's pages, the files its settings write and its drawing are tested on their own by `shim/test/menu-test.c`, with the fonts MinUI and NextUI ship, which the build fetches at a pinned commit for the tests alone. A shim that fails these tests is not written to `lib/`.
+
+Eight environment variables exist for the test suites only. `PICO_PAK_SOURCE_ONLY` sources `launch.sh` without running `main`, `PICO_PAK_NET_DIR` overrides the `/sys/class/net` directory the network check reads, and `PICO_PAK_CPUFREQ_DIR` overrides the cpufreq directory the clock speed is written to. `PICO_PAK_UPTIME_FILE` overrides the `/proc/uptime` file the log's time marks are read from, in both `launch.sh` and the display shim. In the display shim, `PICO_PAK_INPUT_DIR` overrides the `/dev/input` directory watched for the volume buttons, `PICO_PAK_POWER_SUPPLY_DIR` overrides the `/sys/class/power_supply` directory the menu reads the battery from, `PICO_PAK_MSETTINGS` names the settings library to open in place of `libmsettings.so`, and `PICO_PAK_SHARED_SETTINGS` overrides the `/dev/shm/SharedSettings` file that has to exist before it is opened.
