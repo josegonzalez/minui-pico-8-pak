@@ -97,6 +97,14 @@ uint8_t SDL_GameControllerGetButton(void *controller, int button)
   return fake.buttons[button];
 }
 
+int16_t SDL_GameControllerGetAxis(void *controller, int axis)
+{
+  if (controller != &pad || axis < 0 || axis >= (int)(sizeof fake.axes / sizeof *fake.axes)) {
+    return 0;
+  }
+  return fake.axes[axis];
+}
+
 void *SDL_CreateRGBSurfaceFrom(void *pixels, int width, int height, int depth, int pitch,
                                uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask)
 {

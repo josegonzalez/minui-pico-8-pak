@@ -64,6 +64,7 @@ RUN readelf -V /display.so | grep -q 'GLIBC_2.17' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_RenderCopy$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_PollEvent$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetButton$' \
+  && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetAxis$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_DestroyRenderer$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_OpenAudioDevice$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_OpenAudio$' \
@@ -100,6 +101,7 @@ RUN readelf -h /display.so | grep -q 'ARM$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_RenderCopy$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_PollEvent$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetButton$' \
+  && readelf -W --dyn-syms /display.so | grep -q ' SDL_GameControllerGetAxis$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_DestroyRenderer$' \
   && readelf -W --dyn-syms /display.so | grep -q ' SDL_OpenAudioDevice$' \
   && readelf --dyn-syms /display.so | grep -q ' SDL_OpenAudio$' \

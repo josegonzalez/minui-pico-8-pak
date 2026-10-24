@@ -37,6 +37,8 @@ struct fake_copy {
 struct fake_state {
   /* indexed by SDL_GameControllerButton */
   uint8_t buttons[32];
+  /* indexed by SDL_GameControllerAxis, where the triggers are 4 and 5 */
+  int16_t axes[6];
   /* joystick buttons no mapping names, such as rg35xxplus's volume keys */
   uint8_t raw_buttons[20];
 

@@ -931,6 +931,25 @@ static void test_shortcuts_page(void)
   check(read_back[MENU_SHORTCUT_QUIT].button == -1 && read_back[MENU_SHORTCUT_RESET].button == -1,
         "a binding to Menu, or to no button, reads as unbound");
 
+  /* L2 and R2 are the triggers, numbered after SDL's buttons, and none in between can be bound */
+  write_file(path, "quit l2\nreset menu+r2\n");
+  menu_read_shortcuts(path, read_back);
+  check(read_back[MENU_SHORTCUT_QUIT].button == MENU_BUTTON_L2 &&
+            !read_back[MENU_SHORTCUT_QUIT].with_menu &&
+            read_back[MENU_SHORTCUT_RESET].button == MENU_BUTTON_R2 &&
+            read_back[MENU_SHORTCUT_RESET].with_menu,
+        "L2 and R2 read back as the triggers");
+  menu_binding_name(&read_back[MENU_SHORTCUT_RESET], name, sizeof name);
+  check(strcmp(name, "MENU+R2") == 0, "and show by their names");
+  check(!menu_is_bindable(15) && !menu_is_bindable(20) && menu_is_bindable(MENU_BUTTON_L2),
+        "SDL's buttons after Right cannot be bound");
+  press(&menu, MENU_DOWN);
+  press(&menu, MENU_A);
+  menu_bind(&menu, MENU_BUTTON_L2, 0);
+  check(file_is(path, "quit menu+x\nscreen-mode l2\n"), "and L2 saves as l2");
+  press(&menu, MENU_X);
+  press(&menu, MENU_UP);
+
   check(press(&menu, MENU_B) == MENU_STAY && menu.page == MENU_PAGE_OPTIONS &&
             menu.option_row == MENU_SHORTCUTS_ROW,
         "B goes back to Options on the Shortcuts row");

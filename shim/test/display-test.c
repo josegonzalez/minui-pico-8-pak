@@ -32,7 +32,11 @@
 /* From SDL_events.h, SDL_pixels.h and SDL_gamecontroller.h. */
 #define SDL_QUIT 0x100
 #define SDL_KEYDOWN 0x300
-#define SDL_CONTROLLERBUTTONDOWN 0x650
+#define SDL_CONTROLLERAXISMOTION 0x650
+#define SDL_CONTROLLERBUTTONDOWN 0x651
+#define SDL_CONTROLLERBUTTONUP 0x652
+#define AXIS_TRIGGERLEFT 4
+#define AXIS_TRIGGERRIGHT 5
 #define SDL_PIXELFORMAT_ARGB8888 0x16362004
 #define BUTTON_A 0
 #define BUTTON_B 1
@@ -57,6 +61,7 @@ int SDL_RenderCopy(void *renderer, void *texture, const fake_rect *src, const fa
 void *SDL_GameControllerOpen(int index);
 void SDL_GameControllerClose(void *controller);
 uint8_t SDL_GameControllerGetButton(void *controller, int button);
+int16_t SDL_GameControllerGetAxis(void *controller, int axis);
 uint32_t SDL_OpenAudioDevice(const char *device, int iscapture, const void *desired,
                              void *obtained, int allowed_changes);
 int SDL_GetModState(void);
@@ -224,7 +229,7 @@ static unsigned char square_pixels[2 * 2 * 4];
 static void make_fixtures(void)
 {
   static const char shortcuts[] =
-      "screenshot menu+x\nreset menu+y\nscreen-mode l1\noverlay menu+r1\n";
+      "screenshot menu+x\nreset menu+y\nscreen-mode l1\noverlay menu+r2\n";
   char path[8192];
   size_t i;
 
@@ -315,7 +320,7 @@ static void make_fixtures(void)
   snprintf(switcher_dir, sizeof switcher_dir, "%s/.minui/PICO", dir);
   setenv("PICO_PAK_SWITCHER_DIR", switcher_dir, 1);
 
-  /* MENU+X screenshot, MENU+Y reset, L1 alone screen mode, MENU+R1 overlay */
+  /* MENU+X screenshot, MENU+Y reset, L1 alone screen mode, MENU+R2 overlay */
   snprintf(shortcuts_path, sizeof shortcuts_path, "%s/shortcuts", dir);
   write_file(shortcuts_path, shortcuts, strlen(shortcuts));
   setenv("PICO_PAK_SHORTCUTS", shortcuts_path, 1);
@@ -330,6 +335,7 @@ static void release_all(void)
 {
   memset(fake.buttons, 0, sizeof fake.buttons);
   memset(fake.raw_buttons, 0, sizeof fake.raw_buttons);
+  memset(fake.axes, 0, sizeof fake.axes);
 }
 
 /* presses a button with Select held, as pico-8 would see it read that frame */
@@ -810,18 +816,21 @@ static void test_events(void *pad)
   memset(fake.queue, 0, sizeof fake.queue);
   fake.queue[0][0] = SDL_CONTROLLERBUTTONDOWN;
   ((uint8_t *)&fake.queue[0][3])[0] = BUTTON_GUIDE;
-  fake.queue[1][0] = SDL_KEYDOWN;
-  fake.queue[2][0] = SDL_CONTROLLERBUTTONDOWN;
-  ((uint8_t *)&fake.queue[2][3])[0] = BUTTON_DPAD_LEFT;
-  fake.queued = 2;
+  fake.queue[1][0] = SDL_CONTROLLERBUTTONUP;
+  ((uint8_t *)&fake.queue[1][3])[0] = BUTTON_GUIDE;
+  fake.queue[2][0] = SDL_KEYDOWN;
+  fake.queue[3][0] = SDL_CONTROLLERBUTTONDOWN;
+  ((uint8_t *)&fake.queue[3][3])[0] = BUTTON_DPAD_LEFT;
+  fake.queued = 3;
   fake.queue_head = 0;
 
   fake.buttons[BUTTON_BACK] = 1;
-  check(SDL_PollEvent(event) == 1 && event[0] == SDL_KEYDOWN, "a Menu event is swallowed");
+  check(SDL_PollEvent(event) == 1 && event[0] == SDL_KEYDOWN,
+        "Menu's press and release events are swallowed");
   check(SDL_PollEvent(event) == 0, "nothing else is left in the queue");
 
-  fake.queued = 3;
-  fake.queue_head = 2;
+  fake.queued = 4;
+  fake.queue_head = 3;
   check(SDL_PollEvent(event) == 1 && event[0] == SDL_CONTROLLERBUTTONDOWN,
         "a d-pad event with Select held reaches pico-8");
   release_all();
@@ -966,16 +975,41 @@ static void test_shortcuts(void *pad)
   }
   check(notified, "with a notice at the top right that it was saved");
 
-  /* MENU+R1 steps through the overlays */
-  fake.buttons[BUTTON_GUIDE] = 1;
-  fake.buttons[BUTTON_R1] = 1;
+  /* R2 is a trigger's axis, which reaches pico-8 on its own, and MENU+R2 steps through the overlays */
+  fake.axes[AXIS_TRIGGERRIGHT] = 32767;
+  check(SDL_GameControllerGetAxis(pad, AXIS_TRIGGERRIGHT) == 32767,
+        "a trigger bound with Menu still reaches pico-8 on its own");
+  SDL_RenderPresent(&renderer_b);
+  check(file_is(choice_path, "a.png"), "and does nothing then");
+  release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
+
+  fake.buttons[BUTTON_GUIDE] = 1;
+  SDL_GameControllerGetButton(pad, BUTTON_A);
+  fake.axes[AXIS_TRIGGERRIGHT] = 32767;
+  check(SDL_GameControllerGetAxis(pad, AXIS_TRIGGERRIGHT) == 0, "but not with Menu held");
+  fake.axes[AXIS_TRIGGERLEFT] = 20000;
+  check(SDL_GameControllerGetAxis(pad, AXIS_TRIGGERLEFT) == 20000,
+        "while the other trigger, bound to nothing, still reaches it");
+  fake.axes[AXIS_TRIGGERLEFT] = 0;
+  {
+    uint32_t event[14];
+
+    memset(fake.queue, 0, sizeof fake.queue);
+    fake.queue[0][0] = SDL_CONTROLLERAXISMOTION;
+    ((uint8_t *)&fake.queue[0][3])[0] = AXIS_TRIGGERRIGHT;
+    fake.queued = 1;
+    fake.queue_head = 0;
+    check(SDL_PollEvent(event) == 0, "nor as an event");
+    fake.queued = fake.queue_head = 0;
+  }
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
   SDL_RenderPresent(&renderer_b);
-  check(file_is(choice_path, "b.png"), "MENU+R1 moves to the next overlay and saves it");
+  check(file_is(choice_path, "b.png"),
+        "MENU+R2 moves to the next overlay and saves it, without opening the menu");
 
-  /* MENU+Y presses Ctrl+R for pico-8 */
+  /* MENU+Y presses Ctrl+R for pico-8, a step every 100ms */
   pushed = fake.pushed;
   fake.buttons[BUTTON_GUIDE] = 1;
   fake.buttons[BUTTON_Y] = 1;
@@ -983,14 +1017,33 @@ static void test_shortcuts(void *pad)
   release_all();
   SDL_GameControllerGetButton(pad, BUTTON_A);
   SDL_RenderPresent(&renderer_b);
-  check(fake.pushed == pushed + 4 && fake.pushed_events[pushed][0] == SDL_KEYDOWN &&
-            fake.pushed_events[pushed][4] == 224 && fake.pushed_events[pushed + 1][4] == 21 &&
-            fake.pushed_events[pushed + 2][0] == SDL_KEYUP &&
-            fake.pushed_events[pushed + 3][0] == SDL_KEYUP && fake.pushed_events[pushed + 3][4] == 224,
-        "MENU+Y presses Ctrl, then R, and lets both go");
-  check((fake.pushed_events[pushed + 1][6] & 0xffff) == KMOD_LCTRL,
-        "with Ctrl held on the R");
+  check(fake.pushed == pushed + 1 && fake.pushed_events[pushed][0] == SDL_KEYDOWN &&
+            fake.pushed_events[pushed][4] == 224,
+        "MENU+Y presses Ctrl first");
   check(SDL_GetModState() == KMOD_LCTRL, "and Ctrl reported held to SDL_GetModState");
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == pushed + 1, "R waits, as pico-8 ignores an R straight after Ctrl");
+
+  fake.ticks += 100;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == pushed + 2 && fake.pushed_events[pushed + 1][0] == SDL_KEYDOWN &&
+            fake.pushed_events[pushed + 1][4] == 21 &&
+            (fake.pushed_events[pushed + 1][6] & 0xffff) == KMOD_LCTRL,
+        "then R is pressed with Ctrl held");
+  fake.ticks += 100;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == pushed + 3 && fake.pushed_events[pushed + 2][0] == SDL_KEYUP &&
+            fake.pushed_events[pushed + 2][4] == 21,
+        "then let go");
+  fake.ticks += 100;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == pushed + 4 && fake.pushed_events[pushed + 3][0] == SDL_KEYUP &&
+            fake.pushed_events[pushed + 3][4] == 224,
+        "and then Ctrl is let go");
+  fake.ticks += 100;
+  SDL_RenderPresent(&renderer_b);
+  check(fake.pushed == pushed + 4, "and nothing more is pressed");
+  check(SDL_GetModState() == KMOD_LCTRL, "Ctrl is still reported held");
 
   memset(fake.queue, 0, sizeof fake.queue);
   fake.queue[0][0] = SDL_KEYUP;

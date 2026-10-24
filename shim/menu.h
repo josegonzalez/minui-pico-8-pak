@@ -76,8 +76,15 @@ struct menu_binding {
   int with_menu;
 };
 
-/* the controller buttons a shortcut can use: all but Menu itself */
-#define MENU_BINDABLE_BUTTONS 15
+/*
+ * SDL reports L2 and R2 as the triggers' axes rather than as buttons, so
+ * they are numbered after the last of SDL's buttons.
+ */
+#define MENU_BUTTON_L2 21
+#define MENU_BUTTON_R2 22
+
+/* the controller buttons a shortcut can use: A to Right, L2 and R2, all but Menu itself */
+#define MENU_BINDABLE_BUTTONS 23
 int menu_is_bindable(int button);
 
 /* the values the screen-mode file holds, in the order the menu steps through */

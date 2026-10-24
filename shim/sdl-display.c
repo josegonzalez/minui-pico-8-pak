@@ -101,8 +101,11 @@ typedef struct {
 #define SDLK_r 'r'
 #define SDLK_LCTRL 0x400000e0
 #define KMOD_LCTRL 0x0040
-#define SDL_CONTROLLERBUTTONDOWN 0x650
-#define SDL_CONTROLLERBUTTONUP 0x651
+#define SDL_CONTROLLERAXISMOTION 0x650
+#define SDL_CONTROLLERBUTTONDOWN 0x651
+#define SDL_CONTROLLERBUTTONUP 0x652
+#define SDL_CONTROLLER_AXIS_TRIGGERLEFT 4
+#define SDL_CONTROLLER_AXIS_TRIGGERRIGHT 5
 #define SDL_CONTROLLER_BUTTON_A 0
 #define SDL_CONTROLLER_BUTTON_B 1
 #define SDL_CONTROLLER_BUTTON_X 2
@@ -122,6 +125,13 @@ typedef struct {
 /* the steps the menu fades to black in after Quit, and how long each lasts */
 #define FADE_STEPS 8
 #define FADE_STEP_MS 20
+/* how far a trigger, which SDL reads from 0 to 32767, goes in to count as pressed */
+#define TRIGGER_DOWN 16384
+/*
+ * pico-8 ignores an R that comes too soon after Ctrl, so the reset shortcut
+ * waits this long between pressing Ctrl, pressing R, and letting each go
+ */
+#define RESET_STEP_MS 100
 
 /*
  * The functions of the launcher's libmsettings the indicator reads. Every
@@ -142,6 +152,7 @@ static struct {
   void *(*GameControllerOpen)(int);
   void (*GameControllerClose)(void *);
   uint8_t (*GameControllerGetButton)(void *, int);
+  int16_t (*GameControllerGetAxis)(void *, int);
   void *(*GameControllerGetJoystick)(void *);
   int (*JoystickNumButtons)(void *);
   uint8_t (*JoystickGetButton)(void *, int);
@@ -201,8 +212,8 @@ static int menu_requested;
 static int menu_was_down;
 /* another button or a volume key went with this press of Menu */
 static int menu_spoiled;
-/* buttons still held from the menu, hidden from pico-8 until released */
-static uint8_t hidden[SDL_CONTROLLER_BUTTON_MAX];
+/* buttons still held from the menu, hidden from pico-8 until released, numbered as menu.h does */
+static uint8_t hidden[MENU_BINDABLE_BUTTONS];
 static int hidden_count;
 
 static int input_fds[INPUT_DEVICES];
@@ -243,6 +254,9 @@ static void *notification_texture;
 static const char *notification_drawn;
 /* Ctrl is reported held from the reset shortcut until pico-8 reads its release */
 static int reset_ctrl_held;
+/* how far the reset shortcut has got in pressing Ctrl+R, 0 when it is not, and since when */
+static int reset_step;
+static uint32_t reset_step_at;
 
 static void wait_for_screenshot(void);
 
@@ -285,6 +299,8 @@ static int resolve_sdl(void)
   RESOLVE(GameControllerOpen);
   RESOLVE(GameControllerClose);
   RESOLVE(GameControllerGetButton);
+  /* wrapped, and without it L2 and R2 only do nothing as shortcuts */
+  RESOLVE(GameControllerGetAxis);
   RESOLVE(PushEvent);
   /* wrapped for every frame pico-8 draws, so it must resolve even if the overlay cannot */
   RESOLVE(RenderCopy);
@@ -607,15 +623,35 @@ static int menu_available(void)
   return resolve_sdl() && !menu_broken && controller != NULL;
 }
 
+static int trigger_axis(int button)
+{
+  return button == MENU_BUTTON_L2 ? SDL_CONTROLLER_AXIS_TRIGGERLEFT
+                                  : SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+}
+
+/* the button a trigger's axis stands for, or -1 for any other axis */
+static int trigger_button(int axis)
+{
+  return axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT    ? MENU_BUTTON_L2
+         : axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT ? MENU_BUTTON_R2
+                                                    : -1;
+}
+
+/* a button as menu.h numbers them, with L2 and R2 read from the triggers */
 static uint8_t pad_button(int button)
 {
+  if (button == MENU_BUTTON_L2 || button == MENU_BUTTON_R2) {
+    return sdl.GameControllerGetAxis != NULL &&
+           sdl.GameControllerGetAxis(controller, trigger_axis(button)) >= TRIGGER_DOWN;
+  }
   return sdl.GameControllerGetButton(controller, button);
 }
 
 /*
  * A Menu held with any other button is a chord for the OS, such as
  * brightness on rg35xxplus, whose volume keys are pad buttons no mapping
- * names, so the raw buttons are counted rather than the mapped ones.
+ * names, so the raw buttons are counted rather than the mapped ones. The
+ * triggers are mostly axes rather than buttons, so they are counted too.
  */
 static int other_buttons_down(void)
 {
@@ -631,10 +667,10 @@ static int other_buttons_down(void)
     for (i = 0; i < count; i++) {
       down += sdl.JoystickGetButton(joystick, i) != 0;
     }
-    return down > 1;
+    return down > 1 || pad_button(MENU_BUTTON_L2) || pad_button(MENU_BUTTON_R2);
   }
 
-  for (i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++) {
+  for (i = 0; i < MENU_BINDABLE_BUTTONS; i++) {
     if (i != SDL_CONTROLLER_BUTTON_GUIDE && pad_button(i)) {
       return 1;
     }
@@ -699,7 +735,7 @@ static void update_buttons(void)
     shortcut_was_down[shortcut] = pressed;
   }
 
-  for (button = 0; hidden_count > 0 && button < SDL_CONTROLLER_BUTTON_MAX; button++) {
+  for (button = 0; hidden_count > 0 && button < MENU_BINDABLE_BUTTONS; button++) {
     if (hidden[button] && !pad_button(button)) {
       hidden[button] = 0;
       hidden_count--;
@@ -715,7 +751,7 @@ static int is_hidden(int button)
 {
   int shortcut;
 
-  if (!menu_available() || button < 0 || button >= SDL_CONTROLLER_BUTTON_MAX) {
+  if (!menu_available() || button < 0 || button >= MENU_BINDABLE_BUTTONS) {
     return 0;
   }
   if (button == SDL_CONTROLLER_BUTTON_GUIDE || hidden[button]) {
@@ -731,17 +767,25 @@ static int is_hidden(int button)
   return 0;
 }
 
-/* Covers pico-8 reading the pad from events as well as from button state. */
+/*
+ * Covers pico-8 reading the pad from events as well as from its state. An
+ * axis event has its axis where a button event has its button.
+ */
 static int swallow_event(const void *event)
 {
   const SDL_ControllerButtonEvent *button = event;
+  int hidden_button;
 
-  if (button->type != SDL_CONTROLLERBUTTONDOWN && button->type != SDL_CONTROLLERBUTTONUP) {
+  if (button->type == SDL_CONTROLLERAXISMOTION) {
+    hidden_button = trigger_button(button->button);
+  } else if (button->type == SDL_CONTROLLERBUTTONDOWN || button->type == SDL_CONTROLLERBUTTONUP) {
+    hidden_button = button->button;
+  } else {
     return 0;
   }
 
   update_buttons();
-  return is_hidden(button->button);
+  return hidden_button >= 0 && is_hidden(hidden_button);
 }
 
 /*
@@ -1282,7 +1326,7 @@ static void run_menu(void *renderer, int quit_now)
   restore_letterbox(renderer, &saved);
 
   /* the press that closed the menu is not the cart's */
-  for (button = 0; button < SDL_CONTROLLER_BUTTON_MAX; button++) {
+  for (button = 0; button < MENU_BINDABLE_BUTTONS; button++) {
     if (!hidden[button] && pad_button(button)) {
       hidden[button] = 1;
       hidden_count++;
@@ -1460,8 +1504,9 @@ static void push_key(uint32_t type, int32_t scancode, int32_t sym, uint16_t mod)
 
 /*
  * pico-8 restarts the cart on Ctrl+R, so the shortcut presses it: Ctrl down,
- * R down and up, then Ctrl up. Until pico-8 reads that last release, Ctrl is
- * also reported held to SDL_GetModState, for a pico-8 that asks it.
+ * R down and up, then Ctrl up, a step every RESET_STEP_MS as the frames go
+ * by. Until pico-8 reads that last release, Ctrl is also reported held to
+ * SDL_GetModState, which is where pico-8 reads it from.
  */
 static void reset_cart(void)
 {
@@ -1469,13 +1514,36 @@ static void reset_cart(void)
     LOG("this SDL2 has no SDL_PushEvent, cannot reset the cart\n");
     return;
   }
+  if (reset_step != 0) {
+    return;
+  }
 
   LOG("resetting the cart with Ctrl+R\n");
   reset_ctrl_held = 1;
+  reset_step = 1;
+  reset_step_at = sdl.GetTicks();
   push_key(SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL, KMOD_LCTRL);
-  push_key(SDL_KEYDOWN, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
-  push_key(SDL_KEYUP, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
-  push_key(SDL_KEYUP, SDL_SCANCODE_LCTRL, SDLK_LCTRL, 0);
+}
+
+static void continue_reset(void)
+{
+  if (reset_step == 0 || sdl.GetTicks() - reset_step_at < RESET_STEP_MS) {
+    return;
+  }
+
+  reset_step_at = sdl.GetTicks();
+  switch (reset_step++) {
+  case 1:
+    push_key(SDL_KEYDOWN, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
+    break;
+  case 2:
+    push_key(SDL_KEYUP, SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL);
+    break;
+  default:
+    push_key(SDL_KEYUP, SDL_SCANCODE_LCTRL, SDLK_LCTRL, 0);
+    reset_step = 0;
+    break;
+  }
 }
 
 /* the shortcuts that change things before the frame is drawn */
@@ -1517,6 +1585,7 @@ EXPORT void SDL_RenderPresent(void *renderer)
   update_buttons();
   if (sdl.GetTicks != NULL) {
     update_indicator(sdl.GetTicks(), menu_was_down);
+    continue_reset();
   }
   /*
    * The menu reads the frame before the overlay is drawn over it, so the
@@ -1635,6 +1704,25 @@ EXPORT void SDL_GameControllerClose(void *closing)
   if (sdl.GameControllerClose != NULL) {
     sdl.GameControllerClose(closing);
   }
+}
+
+/* a trigger bound to a shortcut is hidden from pico-8 as a button would be */
+EXPORT int16_t SDL_GameControllerGetAxis(void *pad, int axis)
+{
+  resolve_sdl();
+  if (sdl.GameControllerGetAxis == NULL) {
+    return 0;
+  }
+
+  init_display();
+  if (pad == controller && pad != NULL) {
+    update_buttons();
+    if (trigger_button(axis) >= 0 && is_hidden(trigger_button(axis))) {
+      return 0;
+    }
+  }
+
+  return sdl.GameControllerGetAxis(pad, axis);
 }
 
 EXPORT uint8_t SDL_GameControllerGetButton(void *pad, int button)

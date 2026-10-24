@@ -438,13 +438,18 @@ void menu_cycle_overlay(struct menu_settings *settings)
   set_overlay(settings, next >= settings->overlay_count ? -1 : next);
 }
 
-/* the names a controller button is saved and shown by, indexed as SDL numbers them */
+/*
+ * The names a controller button is saved and shown by, indexed as SDL numbers
+ * them. The buttons after Right that no device here has are left out.
+ */
 static const char *const button_keys[MENU_BINDABLE_BUTTONS] = {
     "a",  "b",  "x",  "y",  "select", "menu", "start", "l3",
-    "r3", "l1", "r1", "up", "down",   "left", "right"};
+    "r3", "l1", "r1", "up", "down",   "left", "right",
+    [MENU_BUTTON_L2] = "l2", [MENU_BUTTON_R2] = "r2"};
 static const char *const button_labels[MENU_BINDABLE_BUTTONS] = {
     "A",  "B",  "X",  "Y",  "SELECT", "MENU", "START", "L3",
-    "R3", "L1", "R1", "UP", "DOWN",   "LEFT", "RIGHT"};
+    "R3", "L1", "R1", "UP", "DOWN",   "LEFT", "RIGHT",
+    [MENU_BUTTON_L2] = "L2", [MENU_BUTTON_R2] = "R2"};
 
 /* the button numbered as SDL's guide, which every mapping uses for Menu */
 #define MENU_BUTTON 5
@@ -456,7 +461,8 @@ static const char *const shortcut_labels[MENU_SHORTCUT_COUNT] = {
 
 int menu_is_bindable(int button)
 {
-  return button >= 0 && button < MENU_BINDABLE_BUTTONS && button != MENU_BUTTON;
+  return button >= 0 && button < MENU_BINDABLE_BUTTONS && button != MENU_BUTTON &&
+         button_keys[button] != NULL;
 }
 
 const char *menu_shortcut_label(int shortcut)
