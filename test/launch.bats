@@ -2100,20 +2100,27 @@ teardown() {
 
 @test "set_splore_session is false for an ordinary cart" {
   set_splore_session "$(make_cart Game.p8)"
-  ! is_splore_session
+  [ "$SPLORE_SESSION" = false ]
 }
 
 # the folder's name is not the cart's
 @test "set_splore_session is false for a cart inside a splore named folder" {
   set_splore_session "$SDCARD_PATH/Roms/Splore Carts (PICO)/Game.p8"
-  ! is_splore_session
+  [ "$SPLORE_SESSION" = false ]
 }
 
 @test "set_splore_session is true for the splore cart, renamed or not" {
   for cart in Splore.p8 "1) Splore.p8.png" splore; do
     set_splore_session "$SDCARD_PATH/Roms/Pico-8 (PICO)/$cart"
-    is_splore_session
+    [ "$SPLORE_SESSION" = true ]
   done
+}
+
+@test "the Splore session is decided once and read everywhere else" {
+  [ "$(grep -c '^ *set_splore_session "' "$REPO_ROOT/launch.sh")" -eq 1 ]
+  [ "$(grep -c 'is_splore_cart "${1##\*/}"' "$REPO_ROOT/launch.sh")" -eq 1 ]
+  run grep -n 'is_splore_session' "$REPO_ROOT/launch.sh"
+  [ "$status" -eq 1 ]
 }
 
 # the connection check runs for Splore alone, so an ordinary cart never waits

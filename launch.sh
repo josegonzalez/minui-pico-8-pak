@@ -943,8 +943,9 @@ is_splore_cart() {
 }
 
 # Whether the cart being started is Splore, decided once by main from the
-# cart's file name and read by every step that differs for it: the cart check,
-# the connection check, how pico-8 is started and the carts copied after.
+# cart's file name. Every step that differs for it reads SPLORE_SESSION rather
+# than asking again: the cart check, the connection check, how pico-8 is
+# started and the carts copied after.
 SPLORE_SESSION=false
 
 set_splore_session() {
@@ -952,10 +953,6 @@ set_splore_session() {
   if is_splore_cart "${1##*/}"; then
     SPLORE_SESSION=true
   fi
-}
-
-is_splore_session() {
-  [ "$SPLORE_SESSION" = "true" ]
 }
 
 rom_folder_has_splore_cart() {
@@ -1090,7 +1087,7 @@ launch_cart() {
 
   log_step "starting pico-8"
   save_log
-  if is_splore_session; then
+  if [ "$SPLORE_SESSION" = true ]; then
     # draw_rect is left unquoted so it splits into separate arguments
     # shellcheck disable=SC2086
     "$pico_bin" \
@@ -1132,7 +1129,7 @@ launch_cart() {
   # Splore is what downloads carts, so after any other cart there is nothing
   # new to copy and the scan of its cache is skipped. copy_carts syncs what it
   # copies itself.
-  if is_splore_session; then
+  if [ "$SPLORE_SESSION" = true ]; then
     log_step "copying Splore carts"
     untraced copy_carts "$ROM_FOLDER"
   else
@@ -1208,7 +1205,7 @@ verify_cart() {
     return 1
   fi
 
-  if is_splore_session; then
+  if [ "$SPLORE_SESSION" = true ]; then
     return 0
   fi
 
@@ -1460,7 +1457,7 @@ main() {
     return 1
   fi
 
-  if is_splore_session; then
+  if [ "$SPLORE_SESSION" = true ]; then
     log_step "checking the Splore connection"
     if ! untraced verify_splore_connection; then
       return 1
