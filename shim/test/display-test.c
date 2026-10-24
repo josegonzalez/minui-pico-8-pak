@@ -1284,11 +1284,31 @@ static int slot_named(const char *slot)
 }
 
 /* a save is written in the background, and names its slot last of all */
+/* how many threads this process has, the save's own among them while it writes */
+static int thread_count(void)
+{
+  DIR *tasks = opendir("/proc/self/task");
+  struct dirent *entry;
+  int count = 0;
+
+  while (tasks != NULL && (entry = readdir(tasks)) != NULL) {
+    count += entry->d_name[0] != '.';
+  }
+  if (tasks != NULL) {
+    closedir(tasks);
+  }
+  return count;
+}
+
+/*
+ * The slot is named before the save's thread has finished, so this also waits
+ * for the thread to end, by when the game knows the save is done
+ */
 static int written(const char *slot)
 {
   int tries;
 
-  for (tries = 0; tries < 500 && !slot_named(slot); tries++) {
+  for (tries = 0; tries < 500 && (!slot_named(slot) || thread_count() > 1); tries++) {
     usleep(10000);
   }
   return slot_named(slot);
