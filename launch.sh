@@ -913,6 +913,22 @@ is_splore_cart() {
   return 1
 }
 
+# Whether the cart being started is Splore, decided once by main from the
+# cart's file name and read by every step that differs for it: the cart check,
+# the connection check, how pico-8 is started and the carts copied after.
+SPLORE_SESSION=false
+
+set_splore_session() {
+  SPLORE_SESSION=false
+  if is_splore_cart "${1##*/}"; then
+    SPLORE_SESSION=true
+  fi
+}
+
+is_splore_session() {
+  [ "$SPLORE_SESSION" = "true" ]
+}
+
 rom_folder_has_splore_cart() {
   splore_folder="$1"
 
@@ -1045,7 +1061,7 @@ launch_cart() {
 
   log_step "starting pico-8"
   save_log
-  if is_splore_cart "$ROM_NAME"; then
+  if is_splore_session; then
     # draw_rect is left unquoted so it splits into separate arguments
     # shellcheck disable=SC2086
     "$pico_bin" \
@@ -1087,17 +1103,24 @@ launch_cart() {
   # Splore is what downloads carts, so after any other cart there is nothing
   # new to copy and the scan of its cache is skipped. copy_carts syncs what it
   # copies itself.
-  if is_splore_cart "$ROM_NAME"; then
+  if is_splore_session; then
     log_step "copying Splore carts"
     untraced copy_carts "$ROM_FOLDER"
   else
     echo "Not a Splore session, so no carts to copy" 1>&2
   fi
 
-  # minui-power-control ends a session by signalling pico-8, and a status above
-  # 128 is a signal, so it is not a failure worth putting on screen
+  # A status above 128 is the signal that ended pico-8, plus 128.
+  # minui-power-control ends a session with SIGTERM or SIGKILL, which is the
+  # power button working, not a failure worth putting on screen. A signal pico-8
+  # raised against itself is a crash, which the display shim describes in the log.
   if [ "$pico_status" -gt 128 ]; then
-    return 0
+    crash_signal="$(get_crash_signal "$pico_status")"
+    if [ -z "$crash_signal" ]; then
+      return 0
+    fi
+    show_message "PICO-8 crashed with $crash_signal. See $LOGS_PATH/$PAK_NAME.txt for details." 4
+    return "$pico_status"
   fi
 
   # a pico-8 that could not start at all - an SDL subsystem it could not
@@ -1108,6 +1131,19 @@ launch_cart() {
   fi
 
   return "$pico_status"
+}
+
+# Names the signal in an exit status that is a crash: an illegal instruction, an
+# abort, a floating point error, a bus error or a segmentation fault. Anything
+# else, such as power control's SIGTERM and SIGKILL, prints nothing.
+get_crash_signal() {
+  case "$1" in
+  132) echo "SIGILL" ;;
+  134) echo "SIGABRT" ;;
+  135) echo "SIGBUS" ;;
+  136) echo "SIGFPE" ;;
+  139) echo "SIGSEGV" ;;
+  esac
 }
 
 verify_platform() {
@@ -1143,7 +1179,7 @@ verify_cart() {
     return 1
   fi
 
-  if is_splore_cart "$cart_name"; then
+  if is_splore_session; then
     return 0
   fi
 
@@ -1157,13 +1193,8 @@ verify_cart() {
   return 1
 }
 
+# Only run for Splore, which main decides, as no other cart needs the network.
 verify_splore_connection() {
-  splore_cart_name="${1##*/}"
-
-  if ! is_splore_cart "$splore_cart_name"; then
-    return 0
-  fi
-
   # show_message and show_confirmation both assign to a variable named message,
   # and this shell has no locals, so the prompt text needs its own name
   splore_message=""
@@ -1373,6 +1404,7 @@ main() {
   fi
 
   ROM_PATH="$1"
+  set_splore_session "$ROM_PATH"
 
   if ! verify_platform; then
     return 1
@@ -1399,9 +1431,11 @@ main() {
     return 1
   fi
 
-  log_step "checking the Splore connection"
-  if ! untraced verify_splore_connection "$ROM_PATH"; then
-    return 1
+  if is_splore_session; then
+    log_step "checking the Splore connection"
+    if ! untraced verify_splore_connection; then
+      return 1
+    fi
   fi
 
   log_step "waiting for the saves and the Splore cart"

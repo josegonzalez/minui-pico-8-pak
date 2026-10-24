@@ -341,6 +341,8 @@ The PNG is decoded by the pak itself, so overlays work the same on every platfor
 
 Logs will be written to the`/.userdata/$PLATFORM/logs/` folder on your SD card.
 
+If PICO-8 crashes, a message says so with the signal it crashed with, such as `SIGBUS` or `SIGSEGV`, and the log says where: the address, the file it belongs to, the instruction that crashed and a backtrace. Power control ending PICO-8 when you press the power button is not a crash, and shows nothing.
+
 While a game runs, the log is kept in `/tmp/PICO-log.txt` in the device's memory, as writing to the SD card line by line added seconds to starting and exiting a game. It is copied to the SD card just before PICO-8 starts and again once the pak has finished. If the device loses power during a game, the log on the SD card ends where PICO-8 started.
 
 The log records the library search path PICO-8 is started with and the `ldd` output for your PICO-8 binary, so a library it cannot find or resolves to the wrong copy is visible. A PICO-8 that fails to start also says so on screen rather than only in the log.

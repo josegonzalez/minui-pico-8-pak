@@ -44,18 +44,31 @@ teardown() {
 }
 
 @test "verify_cart accepts the splore cart" {
-  run verify_cart "$(make_cart Splore.p8)"
+  cart="$(make_cart Splore.p8)"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
   [ "$status" -eq 0 ]
 }
 
 @test "verify_cart accepts a sorted splore cart" {
-  run verify_cart "$(make_cart "1) Splore.p8.png")"
+  cart="$(make_cart "1) Splore.p8.png")"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
   [ "$status" -eq 0 ]
 }
 
 @test "verify_cart accepts a splore cart with no extension" {
-  run verify_cart "$(make_cart splore)"
+  cart="$(make_cart splore)"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
   [ "$status" -eq 0 ]
+}
+
+@test "verify_cart holds an ordinary cart to the cart extensions" {
+  cart="$(make_cart README)"
+  set_splore_session "$cart"
+  run verify_cart "$cart"
+  [ "$status" -eq 1 ]
 }
 
 @test "verify_cart rejects a txt file" {
@@ -2039,23 +2052,47 @@ teardown() {
   grep -q -- "--cancel-text NO" "$PRESENTER_CONFIRM_LOG"
 }
 
-@test "verify_splore_connection ignores an ordinary cart" {
-  stub_presenter 0
-  stub_wget reachable
-
-  run verify_splore_connection "$(make_cart Game.p8)"
-  [ "$status" -eq 0 ]
-  [ ! -f "$WGET_LOG" ]
-  [ ! -f "$PRESENTER_CONFIRM_LOG" ]
+@test "set_splore_session is false for an ordinary cart" {
+  set_splore_session "$(make_cart Game.p8)"
+  ! is_splore_session
 }
 
-@test "verify_splore_connection ignores a cart inside a splore named folder" {
-  stub_presenter 0
-  stub_wget reachable
+# the folder's name is not the cart's
+@test "set_splore_session is false for a cart inside a splore named folder" {
+  set_splore_session "$SDCARD_PATH/Roms/Splore Carts (PICO)/Game.p8"
+  ! is_splore_session
+}
 
-  run verify_splore_connection "$SDCARD_PATH/Roms/Splore Carts (PICO)/Game.p8"
+@test "set_splore_session is true for the splore cart, renamed or not" {
+  for cart in Splore.p8 "1) Splore.p8.png" splore; do
+    set_splore_session "$SDCARD_PATH/Roms/Pico-8 (PICO)/$cart"
+    is_splore_session
+  done
+}
+
+# the connection check runs for Splore alone, so an ordinary cart never waits
+# on the network
+@test "launch.sh checks no connection for an ordinary cart" {
+  pak_dir="$(make_pak)"
+
+  make_bios
+  stub_presenter 0
+  stub_network up
+  stub_wget reachable
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
   [ "$status" -eq 0 ]
-  [ ! -f "$PRESENTER_CONFIRM_LOG" ]
+  [ ! -f "$WGET_LOG" ]
+  ! grep -q "checking the Splore connection" "$LOGS_PATH/PICO.txt"
 }
 
 @test "verify_splore_connection allows splore when the servers respond" {
@@ -2126,11 +2163,22 @@ teardown() {
   [ "$status" -eq 1 ]
 }
 
-@test "verify_splore_connection matches a renamed splore cart" {
-  stub_presenter 0
-  stub_wget reachable
+@test "launch.sh checks the connection for a renamed splore cart" {
+  pak_dir="$(make_pak)"
 
-  run verify_splore_connection "$(make_cart "1) Splore.p8.png")"
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/1) Splore.p8.png"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
   [ "$status" -eq 0 ]
   grep -q "No network connection was detected" "$PRESENTER_CONFIRM_LOG"
 }
@@ -2580,7 +2628,7 @@ teardown() {
   [ "$status" -eq 0 ]
   grep '^\[1234\.56\] ' "$LOGS_PATH/PICO.txt" | sed 's/^\[1234\.56\] //' >"$BATS_TEST_TMPDIR/steps"
   printf '%s\n' "starting" "migrating saves and seeding the Splore cart" "checking the cart" \
-    "installing the PICO-8 files" "checking the Splore connection" \
+    "installing the PICO-8 files" \
     "waiting for the saves and the Splore cart" "starting power control" \
     "setting up pico-8" "starting pico-8" "pico-8 exited with status 0" "syncing the SD card" \
     "cleaning up" "done, returning to the launcher" >"$BATS_TEST_TMPDIR/expected"
@@ -2743,6 +2791,42 @@ teardown() {
 
   [ "$status" -eq 0 ]
   ! grep -q "PICO-8 exited with an error" "$PRESENTER_LOG"
+  ! grep -q "PICO-8 crashed" "$PRESENTER_LOG"
+}
+
+# a bus error used to look like power control ending the session, and drop
+# back to the game list with nothing on screen
+# SIGSEGV is signal 11 on Linux and macOS alike, where SIGBUS is 7 on the
+# devices but 10 on a Mac running the tests
+@test "launch.sh says so when pico-8 crashes" {
+  pak_dir="$(make_pak 'kill -SEGV $$')"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5050 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 139 ]
+  grep -q "PICO-8 crashed with SIGSEGV. See $LOGS_PATH/PICO.txt for details." "$PRESENTER_LOG"
+}
+
+@test "get_crash_signal names the crashes and nothing else" {
+  [ "$(get_crash_signal 132)" = "SIGILL" ]
+  [ "$(get_crash_signal 134)" = "SIGABRT" ]
+  [ "$(get_crash_signal 135)" = "SIGBUS" ]
+  [ "$(get_crash_signal 136)" = "SIGFPE" ]
+  [ "$(get_crash_signal 139)" = "SIGSEGV" ]
+  # power control's SIGKILL and SIGTERM, and a hangup
+  [ -z "$(get_crash_signal 137)" ]
+  [ -z "$(get_crash_signal 143)" ]
+  [ -z "$(get_crash_signal 129)" ]
 }
 
 # minui-power-control powers the device off itself, on MinUI and NextUI alike,

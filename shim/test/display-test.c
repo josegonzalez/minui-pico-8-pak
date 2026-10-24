@@ -13,13 +13,17 @@
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <link.h>
 #include <linux/input.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "fake-sdl.h"
@@ -839,6 +843,65 @@ static void test_settings(void *pad)
         "Volume steps down from the installed config.txt's value and saves it");
 }
 
+/* whether the file holds text anywhere */
+static int file_has(const char *path, const char *text)
+{
+  static char contents[65536];
+  FILE *file = fopen(path, "r");
+  size_t got;
+
+  if (file == NULL) {
+    return 0;
+  }
+  got = fread(contents, 1, sizeof contents - 1, file);
+  contents[got] = '\0';
+  fclose(file);
+  return strstr(contents, text) != NULL;
+}
+
+/*
+ * A real bus error, the kind the device showed: reading a mapped file past its
+ * end. A child takes it, so the crash ends that process alone, with its log
+ * sent to a file.
+ */
+static void test_crash(void)
+{
+  char log_path[8192], mapped_path[8192];
+  int status, fd;
+  pid_t child;
+
+  snprintf(log_path, sizeof log_path, "%s/crash.log", dir);
+  snprintf(mapped_path, sizeof mapped_path, "%s/empty-mapping", dir);
+  write_file(mapped_path, "", 0);
+
+  fflush(stdout);
+  child = fork();
+  if (child == 0) {
+    volatile const char *mapped;
+
+    if (freopen(log_path, "w", stderr) == NULL) {
+      _exit(2);
+    }
+    fd = open(mapped_path, O_RDONLY);
+    mapped = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED) {
+      _exit(2);
+    }
+    (void)mapped[0];
+    _exit(0);
+  }
+
+  check(child > 0 && waitpid(child, &status, 0) == child && WIFSIGNALED(status) &&
+            WTERMSIG(status) == SIGBUS,
+        "a bus error still ends pico-8 with SIGBUS, for launch.sh to see");
+  check(file_has(log_path, "] sdl-display: pico-8 crashed with SIGBUS"),
+        "the crash is logged with the signal");
+  check(file_has(log_path, "the address is in ") && file_has(log_path, "/empty-mapping"),
+        "along with the file the address was mapped from");
+  check(file_has(log_path, "the instruction is in ") && file_has(log_path, "backtrace:"),
+        "and where the instruction was, with a backtrace");
+}
+
 static void test_closed_pad(void *pad)
 {
   SDL_GameControllerClose(pad);
@@ -875,6 +938,7 @@ int main(int argc, char **argv)
   test_settings(pad);
   test_indicator();
   test_quit(pad);
+  test_crash();
   test_closed_pad(pad);
 
   printf("1..%d\n", tests);

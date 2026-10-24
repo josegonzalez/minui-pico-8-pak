@@ -54,6 +54,7 @@
 
 #include "gfx.h"
 #include "cart.h"
+#include "crash.h"
 #include "menu.h"
 
 /*
@@ -505,6 +506,9 @@ static void init_display(void)
     return;
   }
   done = 1;
+
+  /* first, so a crash anywhere after this says where it was */
+  crash_report_install();
 
   settings.screen_mode_path = getenv("PICO_PAK_SCREEN_MODE");
   settings.screen_mode = menu_read_screen_mode(settings.screen_mode_path);

@@ -232,6 +232,7 @@ pak_platforms() {
 # skips them
 @test "the display shim sources and tests are prerequisites of the shim build" {
   for prerequisite in shim/menu.c shim/menu.h shim/gfx.c shim/gfx.h shim/cart.c shim/cart.h \
+    shim/crash.c shim/crash.h \
     shim/test/display-test.c \
     shim/test/menu-test.c shim/test/fake-sdl.c; do
     run make --no-print-directory -C "$REPO_ROOT" -n -W "$prerequisite" lib/arm64/sdl-display.so
@@ -256,7 +257,7 @@ pak_platforms() {
 }
 
 @test "the display shim source ships with the pak" {
-  for source in sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h; do
+  for source in sdl-display.c menu.c menu.h gfx.c gfx.h cart.c cart.h crash.c crash.h; do
     run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/$source"
     [ "$status" -eq 0 ]
     [[ "$output" == *"export-ignore: unspecified"* ]]
@@ -267,7 +268,7 @@ pak_platforms() {
 # into pico-8 instead
 @test "the display shim exports only its SDL wrappers" {
   [ "$(grep -c -- '-fvisibility=hidden' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
-  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu|cart)_'" \
+  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu|cart|crash)_'" \
     "$REPO_ROOT/shim/Dockerfile"
 }
 

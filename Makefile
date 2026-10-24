@@ -49,7 +49,7 @@ build: $(foreach platform,$(PLATFORMS),bin/$(platform)/minui-presenter) $(foreac
 # unlike the downloads above this is built from source in this repo, so it has
 # to name its prerequisites or a stale object survives every edit to them
 lib/h700/sdl-nosensor.so $(DISPLAY_SHIMS): shim/sdl-nosensor.c shim/sdl-display.c shim/Dockerfile \
-	shim/menu.c shim/menu.h shim/gfx.c shim/gfx.h shim/cart.c shim/cart.h \
+	shim/menu.c shim/menu.h shim/gfx.c shim/gfx.h shim/cart.c shim/cart.h shim/crash.c shim/crash.h \
 	shim/test/fake-sdl.h shim/test/fake-sdl.c shim/test/display-test.c shim/test/menu-test.c
 	docker buildx build --build-arg BASE_IMAGE=$(SHIM_IMAGE) \
 		--target export --file shim/Dockerfile --output "type=local,dest=lib" shim
