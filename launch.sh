@@ -775,7 +775,26 @@ install_config() {
     /^cdata_path / { print "cdata_path " cdata; next }
     /^root_path / { print "root_path " root; next }
     ($1 in value) { print $1 " " value[$1]; next }
-    { print }' "$overrides" "$PAK_DIR/config/$PLATFORM.txt" >"$HOME/config.txt"
+    { print }' "$overrides" "$PAK_DIR/config/$PLATFORM.txt" >"$(get_working_config)"
+
+  install_if_changed "$(get_working_config)" "$HOME/config.txt"
+}
+
+# config.txt is written here first, in memory, so the copy on the SD card is
+# only rewritten when it has to be
+get_working_config() {
+  echo "/tmp/$PAK_NAME-config.txt"
+}
+
+# Puts $1 in place at $2 only when they differ, as every write to the SD card
+# waits for the card. pico-8 saves its own config.txt on exit, so that one
+# usually differs, but the controller mapping rarely does.
+install_if_changed() {
+  if [ -f "$2" ] && command -v cmp >/dev/null 2>&1 && cmp -s "$1" "$2"; then
+    return 0
+  fi
+
+  cp -f "$1" "$2"
 }
 
 # The PICO-8 settings changed in the in-game menu, which install_config puts in
@@ -973,11 +992,11 @@ install_splore_cart() {
 
 launch_cart() {
   ROM_PATH="$1"
-  ROM_FOLDER="$(dirname "$ROM_PATH")"
-  ROM_NAME="$(basename "$ROM_PATH")"
+  ROM_FOLDER="${ROM_PATH%/*}"
+  ROM_NAME="${ROM_PATH##*/}"
 
   log_step "setting up pico-8"
-  cp -f "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
+  install_if_changed "$PAK_DIR/controllers/$(get_controller_file)" "$HOME/sdl_controllers.txt"
   untraced install_config "$ROM_FOLDER"
   untraced set_cpu_speed
 
@@ -1116,7 +1135,8 @@ verify_cart() {
     return 1
   fi
 
-  cart_name="$(basename "$cart_path")"
+  # the shell's own string handling, as each command started costs time here
+  cart_name="${cart_path##*/}"
 
   if [ ! -f "$cart_path" ]; then
     show_message "Cart file $cart_name does not exist." 4
@@ -1127,9 +1147,8 @@ verify_cart() {
     return 0
   fi
 
-  cart_extension="$(printf "%s" "${cart_name##*.}" | awk '{print tolower($0)}')"
-  case "$cart_extension" in
-  p8 | png)
+  case "$cart_name" in
+  *.[pP]8 | *.[pP][nN][gG])
     return 0
     ;;
   esac
@@ -1139,7 +1158,7 @@ verify_cart() {
 }
 
 verify_splore_connection() {
-  splore_cart_name="$(basename "$1")"
+  splore_cart_name="${1##*/}"
 
   if ! is_splore_cart "$splore_cart_name"; then
     return 0
@@ -1176,15 +1195,20 @@ verify_splore_connection() {
 
 install_pico_files() {
   pico_bin="$(get_pico_bin)"
+  pico_copy_message_shown=false
 
-  mkdir -p "$EMU_DIR"
+  if [ ! -d "$EMU_DIR" ]; then
+    mkdir -p "$EMU_DIR"
+  fi
   if [ ! -f "$EMU_DIR/$pico_bin" ] && [ -f "$SDCARD_PATH/Bios/PICO/$pico_bin" ]; then
     show_message "Copying $pico_bin to $EMU_DIR" forever
+    pico_copy_message_shown=true
     cp -f "$SDCARD_PATH/Bios/PICO/$pico_bin" "$EMU_DIR/$pico_bin"
   fi
 
   if [ ! -f "$EMU_DIR/pico8.dat" ] && [ -f "$SDCARD_PATH/Bios/PICO/pico8.dat" ]; then
     show_message "Copying pico8.dat to $EMU_DIR" forever
+    pico_copy_message_shown=true
     cp -f "$SDCARD_PATH/Bios/PICO/pico8.dat" "$EMU_DIR/pico8.dat"
   fi
 
@@ -1193,7 +1217,10 @@ install_pico_files() {
     return 1
   fi
 
-  killall minui-presenter >/dev/null 2>&1 || true
+  # the copying message is the only one left up, and only when it was shown
+  if [ "$pico_copy_message_shown" = "true" ]; then
+    killall minui-presenter >/dev/null 2>&1 || true
+  fi
 }
 
 show_message() {
@@ -1318,6 +1345,7 @@ cleanup() {
   rm -f /tmp/stay_awake
   rm -f "$(get_network_probe_file)"
   rm -rf "$(get_copy_carts_tmp_dir)"
+  rm -f "$(get_working_config)"
   killall minui-presenter >/dev/null 2>&1 || true
   log_step "done, returning to the launcher"
   save_log

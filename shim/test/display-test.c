@@ -595,7 +595,7 @@ static void test_quit(void *pad)
             fake.updated[fake.updates - 2] != 0xff000000u,
         "Quit fades the menu out to black");
   check(fake.audio_resumes == resumes, "pico-8's audio stays paused after Quit");
-  check(preview_is_frame(1024, 768, 0x00ff8040),
+  check(preview_is_frame(341, 256, 0x00ff8040),
         "Quit gives the switcher the game's last frame as its preview");
 
   copies = fake.copies;

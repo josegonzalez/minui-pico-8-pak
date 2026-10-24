@@ -819,6 +819,52 @@ static void test_switcher_preview(void)
         "nothing is written without a switcher folder, as under MinUI");
 }
 
+static void test_preview_size(void)
+{
+  char roms[8192], switcher[8192], cart[16384], path[16384];
+  static uint32_t brick[1024 * 768];
+  unsigned char header[57];
+  struct stat info;
+  FILE *file;
+  int x, y, ok;
+
+  check(cart_preview_step(1024, 768) == 3,
+        "the Brick's preview is a third of its screen, pico-8's pixels two wide");
+  check(cart_preview_step(1280, 720) == 2 && cart_preview_step(720, 720) == 2,
+        "720 line screens give a half");
+  check(cart_preview_step(640, 480) == 1 && cart_preview_step(2, 3) == 1,
+        "a screen under 512 lines is kept whole");
+
+  /* each pixel names its own row and column, so sampling can be read back */
+  for (y = 0; y < 768; y++) {
+    for (x = 0; x < 1024; x++) {
+      brick[(size_t)y * 1024 + x] = 0xff000000u | (uint32_t)(y & 0xff) << 8 | (uint32_t)(x & 0xff);
+    }
+  }
+
+  snprintf(roms, sizeof roms, "%s/brick/Pico-8 (PICO)", dir);
+  snprintf(switcher, sizeof switcher, "%s/brick/.minui/PICO", dir);
+  put_file(roms, "Celeste.p8", "cart");
+  snprintf(cart, sizeof cart, "%s/Celeste.p8", roms);
+  check(cart_write_preview_frame(switcher, cart, brick, 1024, 768), "a Brick frame is written");
+
+  snprintf(path, sizeof path, "%s/Celeste.p8.0.bmp", switcher);
+  file = fopen(path, "rb");
+  ok = file != NULL && fread(header, 1, sizeof header, file) == sizeof header;
+  if (file != NULL) {
+    fclose(file);
+  }
+  /* 341 pixels of 3 bytes is 1023, padded to 1024 a row */
+  check(ok && stat(path, &info) == 0 && info.st_size == 54 + 1024 * 256 &&
+            (header[18] | header[19] << 8) == 341 && (header[22] | header[23] << 8) == 256,
+        "at 341x256, about 260 KB rather than 2.3 MB");
+  /* the bottom row comes first, and is the screen's row 765, 255 times 3 */
+  check(ok && header[54] == 0 && header[55] == (765 & 0xff), "every third row and column is kept");
+
+  snprintf(path, sizeof path, "%s/Celeste.p8.0.bmp.part", switcher);
+  check(access(path, F_OK) != 0, "nothing is left under the temporary name");
+}
+
 static void test_splore_covers(void)
 {
   char covers[8192], roms[8192], folder[16384], other[16384], path[32768];
@@ -956,6 +1002,7 @@ int main(int argc, char **argv)
   test_log();
   test_cart_title();
   test_switcher_preview();
+  test_preview_size();
   test_splore_covers();
 
   printf("1..%d\n", tests);

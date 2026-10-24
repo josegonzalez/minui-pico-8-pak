@@ -350,64 +350,102 @@ static void put32(unsigned char *at, uint32_t value)
   put16(at + 2, value >> 16);
 }
 
-/* a 24-bit BMP, which every SDL_image loads, written bottom row first */
-static int write_bmp(const char *path, const uint32_t *pixels, int w, int h)
+/*
+ * How much smaller than the screen the preview is: every step-th pixel of
+ * every step-th row, the biggest step that leaves the picture at least
+ * PREVIEW_MIN_HEIGHT tall. On the Brick, whose 768 lines show pico-8's 128 at
+ * six times, that is a third, which keeps each of pico-8's pixels two wide.
+ */
+#define PREVIEW_MIN_HEIGHT 256
+
+int cart_preview_step(int w, int h)
 {
-  unsigned char header[54] = {'B', 'M'};
-  size_t row_size = ((size_t)w * 3 + 3) & ~(size_t)3;
-  unsigned char *row = calloc(1, row_size);
+  int step = h / PREVIEW_MIN_HEIGHT;
+
+  (void)w;
+  return step > 1 ? step : 1;
+}
+
+/*
+ * A 24-bit BMP, which every SDL_image loads, of every step-th pixel. It is put
+ * together in memory and written with one write, as the SD card makes each
+ * write wait for the card, and under a temporary name, so a picture cut short
+ * never replaces the one there.
+ */
+static int write_bmp(const char *path, const uint32_t *pixels, int w, int h, int step)
+{
+  int out_w = w / step, out_h = h / step, x, y;
+  size_t row_size = ((size_t)out_w * 3 + 3) & ~(size_t)3;
+  size_t size = 54 + row_size * out_h;
+  unsigned char *bmp = calloc(1, size);
+  char temporary[8192];
   FILE *file;
-  int x, y, ok = 1;
+  int ok;
 
-  if (row == NULL) {
-    return 0;
-  }
-  file = fopen(path, "wb");
-  if (file == NULL) {
-    free(row);
+  if (bmp == NULL || out_w <= 0 || out_h <= 0) {
+    free(bmp);
     return 0;
   }
 
-  put32(header + 2, (uint32_t)(sizeof header + row_size * h));
-  put32(header + 10, sizeof header);
-  put32(header + 14, 40);
-  put32(header + 18, (uint32_t)w);
-  put32(header + 22, (uint32_t)h);
-  put16(header + 26, 1);
-  put16(header + 28, 24);
-  put32(header + 34, (uint32_t)(row_size * h));
-  ok = fwrite(header, 1, sizeof header, file) == sizeof header;
+  bmp[0] = 'B';
+  bmp[1] = 'M';
+  put32(bmp + 2, (uint32_t)size);
+  put32(bmp + 10, 54);
+  put32(bmp + 14, 40);
+  put32(bmp + 18, (uint32_t)out_w);
+  put32(bmp + 22, (uint32_t)out_h);
+  put16(bmp + 26, 1);
+  put16(bmp + 28, 24);
+  put32(bmp + 34, (uint32_t)(row_size * out_h));
 
-  for (y = h - 1; ok && y >= 0; y--) {
-    for (x = 0; x < w; x++) {
-      uint32_t pixel = pixels[(size_t)y * w + x];
+  /* bottom row first, each pixel blue, green, red */
+  for (y = 0; y < out_h; y++) {
+    const uint32_t *source = pixels + (size_t)(out_h - 1 - y) * step * w;
+    unsigned char *row = bmp + 54 + row_size * y;
+    for (x = 0; x < out_w; x++) {
+      uint32_t pixel = source[(size_t)x * step];
       row[x * 3] = pixel & 0xff;
       row[x * 3 + 1] = (pixel >> 8) & 0xff;
       row[x * 3 + 2] = (pixel >> 16) & 0xff;
     }
-    ok = fwrite(row, 1, row_size, file) == row_size;
   }
 
-  free(row);
-  return fclose(file) == 0 && ok;
+  if (snprintf(temporary, sizeof temporary, "%s.part", path) >= (int)sizeof temporary) {
+    free(bmp);
+    return 0;
+  }
+  file = fopen(temporary, "wb");
+  ok = file != NULL && fwrite(bmp, 1, size, file) == size;
+  if (file != NULL) {
+    ok = fclose(file) == 0 && ok;
+  }
+  free(bmp);
+
+  if (!ok || rename(temporary, path) != 0) {
+    unlink(temporary);
+    return 0;
+  }
+  return 1;
 }
 
 int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
                              const uint32_t *pixels, int w, int h)
 {
   char name[1024], path[8192];
+  int step = cart_preview_step(w, h);
 
   if (!open_switcher(switcher_dir, cart_path, name, sizeof name)) {
     return 0;
   }
 
   snprintf(path, sizeof path, "%s/%s.0.bmp", switcher_dir, name);
-  if (!write_bmp(path, pixels, w, h) || !write_slot(switcher_dir, name)) {
+  if (!write_bmp(path, pixels, w, h, step) || !write_slot(switcher_dir, name)) {
     LOG("cannot write the game switcher preview for %s to %s\n", name, switcher_dir);
     return 0;
   }
 
-  LOG("gave the game switcher the last frame as the preview for %s\n", name);
+  LOG("gave the game switcher the last frame as the preview for %s, at %dx%d\n", name, w / step,
+      h / step);
   return 1;
 }
 

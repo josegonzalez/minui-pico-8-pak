@@ -886,6 +886,59 @@ teardown() {
   [ -z "$output" ]
 }
 
+# every write to the SD card waits for the card, so a file already in place
+# with the same content is left alone
+@test "install_if_changed copies only a file that differs" {
+  copies="$BATS_TEST_TMPDIR/copies"
+  cp() {
+    echo "$*" >>"$copies"
+    command cp "$@"
+  }
+  printf 'same\n' >"$BATS_TEST_TMPDIR/from"
+
+  install_if_changed "$BATS_TEST_TMPDIR/from" "$BATS_TEST_TMPDIR/to"
+  [ "$(cat "$BATS_TEST_TMPDIR/to")" = "same" ]
+  [ "$(grep -c '' "$copies")" -eq 1 ]
+
+  install_if_changed "$BATS_TEST_TMPDIR/from" "$BATS_TEST_TMPDIR/to"
+  [ "$(grep -c '' "$copies")" -eq 1 ]
+
+  printf 'changed\n' >"$BATS_TEST_TMPDIR/from"
+  install_if_changed "$BATS_TEST_TMPDIR/from" "$BATS_TEST_TMPDIR/to"
+  [ "$(cat "$BATS_TEST_TMPDIR/to")" = "changed" ]
+  [ "$(grep -c '' "$copies")" -eq 2 ]
+}
+
+@test "install_config leaves an unchanged config.txt alone" {
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  PLATFORM=tg5040 install_config "$rom_folder"
+  touch -t 200001010000 "$HOME/config.txt"
+
+  PLATFORM=tg5040 install_config "$rom_folder"
+  [ -z "$(find "$HOME/config.txt" -newer "$REPO_ROOT/launch.sh")" ]
+
+  printf 'show_fps 1\n' >"$USERDATA_PATH/Pico-8-native/pico8-config"
+  PLATFORM=tg5040 install_config "$rom_folder"
+  grep -qx "show_fps 1" "$HOME/config.txt"
+}
+
+@test "install_pico_files dismisses the presenter only after copying" {
+  killed="$BATS_TEST_TMPDIR/killed"
+  printf '#!/bin/sh\necho "$*" >>"%s"\n' "$killed" >"$STUB_BIN/killall"
+  chmod +x "$STUB_BIN/killall"
+  make_bios
+  EMU_DIR="$BATS_TEST_TMPDIR/emu"
+  PLATFORM=tg5040
+  architecture=arm64
+
+  install_pico_files
+  [ "$(grep -c "minui-presenter" "$killed")" -ge 1 ]
+
+  : >"$killed"
+  install_pico_files
+  [ ! -s "$killed" ]
+}
+
 @test "install_config points cart saves at this device's sd card" {
   rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
 

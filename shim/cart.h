@@ -36,11 +36,15 @@ int cart_artwork(const char *cart_path, char *out, size_t size);
  * NextUI's game switcher draws a game's preview, and offers to resume it, only
  * when <name>.txt in its folder names a slot and <name>.<slot>.bmp holds the
  * picture. These write slot 0 with the cart's artwork, or with a frame of the
- * game as a BMP, and return 0 when nothing could be written.
+ * game as a BMP a fraction of the screen's size, and return 0 when nothing
+ * could be written.
  */
 int cart_write_preview_artwork(const char *switcher_dir, const char *cart_path);
 int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
                              const uint32_t *pixels, int w, int h);
+
+/* how many of the screen's pixels each of the frame preview's stands for */
+int cart_preview_step(int w, int h);
 
 /*
  * Gives every Splore cart in the roms folders tagged "(<tag>)" the pak's
