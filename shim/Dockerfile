@@ -79,7 +79,37 @@ RUN readelf -h /display.so | grep -q 'ARM$' \
   && ! readelf -W --dyn-syms /display.so | grep -q 'stbi' \
   && ! strings /display.so | grep -q 'libSDL2_image'
 
+# The display shim is run against a fake libSDL2 that records what reaches it,
+# as pico-8 would run it against the device's, once for each Menu button
+# launch.sh can name. Export takes the shim from these stages, so one that
+# fails here never reaches lib/.
+FROM build-arm64 AS test-arm64
+
+COPY test/fake-sdl.h test/fake-sdl.c test/display-test.c /test/
+
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
+  -o /test/libSDL2-2.0.so.0 /test/fake-sdl.c \
+  && gcc -O2 -Wall -Wextra -Werror -o /test/display-test /test/display-test.c \
+  /test/libSDL2-2.0.so.0 -Wl,-rpath,/test
+
+RUN for menu in guide start none; do \
+  LD_PRELOAD=/display.so /test/display-test "$menu" || exit 1; \
+  done
+
+FROM build-arm AS test-arm
+
+COPY test/fake-sdl.h test/fake-sdl.c test/display-test.c /test/
+
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libSDL2-2.0.so.0 \
+  -o /test/libSDL2-2.0.so.0 /test/fake-sdl.c \
+  && gcc -O2 -Wall -Wextra -Werror -o /test/display-test /test/display-test.c \
+  /test/libSDL2-2.0.so.0 -Wl,-rpath,/test
+
+RUN for menu in guide start none; do \
+  LD_PRELOAD=/display.so /test/display-test "$menu" || exit 1; \
+  done
+
 FROM scratch AS export
 COPY --from=build-arm64 /out.so /h700/sdl-nosensor.so
-COPY --from=build-arm64 /display.so /arm64/sdl-display.so
-COPY --from=build-arm /display.so /arm/sdl-display.so
+COPY --from=test-arm64 /display.so /arm64/sdl-display.so
+COPY --from=test-arm /display.so /arm/sdl-display.so

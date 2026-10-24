@@ -168,6 +168,34 @@ pak_platforms() {
   grep -q '#include "stb_image.h"' "$REPO_ROOT/shim/sdl-display.c"
 }
 
+# the shim's own tests run in the build, and export takes each object from its
+# test stage, so a shim that fails them is never written to lib/
+@test "every display shim is exported from a stage that tested it" {
+  mk ARCHITECTURES
+  for architecture in $output; do
+    grep -q "^FROM build-$architecture AS test-$architecture$" "$REPO_ROOT/shim/Dockerfile"
+    grep -qx "COPY --from=test-$architecture /display.so /$architecture/sdl-display.so" \
+      "$REPO_ROOT/shim/Dockerfile"
+  done
+}
+
+@test "the display shim tests run for every Menu button launch.sh can name" {
+  grep -q 'for menu in guide start none; do' "$REPO_ROOT/shim/Dockerfile"
+}
+
+# an edit to the tests has to rebuild the shims, or a stale object skips them
+@test "the display shim tests are prerequisites of the shim build" {
+  run make --no-print-directory -C "$REPO_ROOT" -n -W shim/test/display-test.c lib/arm64/sdl-display.so
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"docker buildx build"* ]]
+}
+
+@test "the display shim tests do not ship with the pak" {
+  run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/test/display-test.c"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"export-ignore: set"* ]]
+}
+
 @test "the png decoder is pinned by commit and checksum" {
   grep -Eq '^ADD --checksum=sha256:[0-9a-f]{64} ' "$REPO_ROOT/shim/Dockerfile"
   grep -Eq 'nothings/stb/[0-9a-f]{40}/stb_image.h' "$REPO_ROOT/shim/Dockerfile"
