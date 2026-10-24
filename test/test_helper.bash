@@ -238,40 +238,53 @@ wait_for_power_control() {
   return 1
 }
 
-# Creates the files install_pico_files requires, so end to end tests reach the
-# checks that run after it.
+# Creates the files verify_pico_files requires, so end to end tests reach the
+# checks that run after it. A file already there, such as the stub make_pak
+# writes, is left as it is.
 make_bios() {
   mkdir -p "$SDCARD_PATH/Bios/PICO"
   for bios in pico8 pico8_64 pico8_dyn pico8.dat; do
-    : >"$SDCARD_PATH/Bios/PICO/$bios"
+    if [ ! -e "$SDCARD_PATH/Bios/PICO/$bios" ]; then
+      : >"$SDCARD_PATH/Bios/PICO/$bios"
+    fi
   done
 }
 
+# Puts a pico8_64 in the BIOS folder that exits 0, and a pico8.dat beside it.
+make_bios_stub() {
+  mkdir -p "$SDCARD_PATH/Bios/PICO"
+  printf '#!/bin/sh\nexit 0\n' >"$SDCARD_PATH/Bios/PICO/pico8_64"
+  chmod +x "$SDCARD_PATH/Bios/PICO/pico8_64"
+  : >"$SDCARD_PATH/Bios/PICO/pico8.dat"
+}
+
 # Builds a pak directory launch.sh can be run out of, symlinking the real pak
-# files in beside a pico8_64 stub, and echoes its path. The stub reports the
-# loader environment it was started with, so a test can assert that a variable
-# reached pico-8 rather than only that the launcher exported it.
+# files in, with a pico8_64 stub in the BIOS folder pico-8 runs from, and
+# echoes its path. The stub reports the loader environment it was started with,
+# so a test can assert that a variable reached pico-8 rather than only that the
+# launcher exported it.
 #
 # Pass a shell body for the stub to run in place of its default `exit 0`.
 make_pak() {
   local body="${1:-exit 0}"
   local pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
+  local bios_dir="$SDCARD_PATH/Bios/PICO"
 
-  mkdir -p "$pak_dir/pico8"
+  mkdir -p "$pak_dir" "$bios_dir"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
   ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
   ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
   ln -s "$REPO_ROOT/config" "$pak_dir/config"
 
-  cat >"$pak_dir/pico8/pico8_64" <<'STUB'
+  cat >"$bios_dir/pico8_64" <<'STUB'
 #!/bin/sh
 echo "pico8 LD_PRELOAD=$LD_PRELOAD"
 echo "pico8 LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 echo "pico8 ARGS=$*"
 STUB
-  printf '%s\n' "$body" >>"$pak_dir/pico8/pico8_64"
-  chmod +x "$pak_dir/pico8/pico8_64"
-  : >"$pak_dir/pico8/pico8.dat"
+  printf '%s\n' "$body" >>"$bios_dir/pico8_64"
+  chmod +x "$bios_dir/pico8_64"
+  : >"$bios_dir/pico8.dat"
 
   printf '%s' "$pak_dir"
 }

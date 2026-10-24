@@ -8,9 +8,11 @@ if uname -m | grep -q '64'; then
   architecture=arm64
 fi
 
-export EMU_DIR="$PAK_DIR/pico8"
+# pico-8 runs from the BIOS folder itself, by its full path rather than from
+# PATH, so nothing else in that folder can be found as a command
+export EMU_DIR="$SDCARD_PATH/Bios/PICO"
 export HOME="$SHARED_USERDATA_PATH/Pico-8-native"
-export PATH="$EMU_DIR:$PAK_DIR/bin/$PLATFORM:$PAK_DIR/bin/$architecture:$PAK_DIR/bin:$PATH"
+export PATH="$PAK_DIR/bin/$PLATFORM:$PAK_DIR/bin/$architecture:$PAK_DIR/bin:$PATH"
 export XDG_CONFIG_HOME="$HOME/config"
 export XDG_DATA_HOME="$HOME/data"
 
@@ -1051,7 +1053,7 @@ launch_cart() {
   # The inherited value is appended conditionally because an empty element means
   # the current directory, which main has already cd'd to $PAK_DIR.
   inherited_library_path="${LD_LIBRARY_PATH:-}"
-  export LD_LIBRARY_PATH="$EMU_DIR/lib:$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export LD_LIBRARY_PATH="$PAK_DIR/lib/$PLATFORM:$PAK_DIR/lib/$architecture${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   inherited_preload="${LD_PRELOAD:-}"
   untraced setup_sdl_preload
   display_shim_loaded=false
@@ -1090,7 +1092,7 @@ launch_cart() {
   if [ "$SPLORE_SESSION" = true ]; then
     # draw_rect is left unquoted so it splits into separate arguments
     # shellcheck disable=SC2086
-    "$pico_bin" \
+    "$EMU_DIR/$pico_bin" \
       -desktop "$SDCARD_PATH/Screenshots" \
       -home "$HOME" \
       -joystick 0 \
@@ -1099,7 +1101,7 @@ launch_cart() {
   else
     # draw_rect is left unquoted so it splits into separate arguments
     # shellcheck disable=SC2086
-    "$pico_bin" \
+    "$EMU_DIR/$pico_bin" \
       -desktop "$SDCARD_PATH/Screenshots" \
       -home "$HOME" \
       -joystick 0 \
@@ -1250,33 +1252,15 @@ verify_splore_connection() {
   return 1
 }
 
-install_pico_files() {
+# pico-8 finds pico8.dat beside its own binary and writes nothing there, so it
+# runs from the BIOS folder as it is. Copying both into the pak made the first
+# start after every install slow, and kept a copy a newer BIOS never replaced.
+verify_pico_files() {
   pico_bin="$(get_pico_bin)"
-  pico_copy_message_shown=false
-
-  if [ ! -d "$EMU_DIR" ]; then
-    mkdir -p "$EMU_DIR"
-  fi
-  if [ ! -f "$EMU_DIR/$pico_bin" ] && [ -f "$SDCARD_PATH/Bios/PICO/$pico_bin" ]; then
-    show_message "Copying $pico_bin to $EMU_DIR" forever
-    pico_copy_message_shown=true
-    cp -f "$SDCARD_PATH/Bios/PICO/$pico_bin" "$EMU_DIR/$pico_bin"
-  fi
-
-  if [ ! -f "$EMU_DIR/pico8.dat" ] && [ -f "$SDCARD_PATH/Bios/PICO/pico8.dat" ]; then
-    show_message "Copying pico8.dat to $EMU_DIR" forever
-    pico_copy_message_shown=true
-    cp -f "$SDCARD_PATH/Bios/PICO/pico8.dat" "$EMU_DIR/pico8.dat"
-  fi
 
   if [ ! -f "$EMU_DIR/$pico_bin" ] || [ ! -f "$EMU_DIR/pico8.dat" ]; then
     show_message "Missing $pico_bin or pico8.dat. Please copy them to the Bios/PICO directory at the root of your SD card." 4
     return 1
-  fi
-
-  # the copying message is the only one left up, and only when it was shown
-  if [ "$pico_copy_message_shown" = "true" ]; then
-    killall minui-presenter >/dev/null 2>&1 || true
   fi
 }
 
@@ -1452,8 +1436,8 @@ main() {
     return 1
   fi
 
-  log_step "installing the PICO-8 files"
-  if ! untraced install_pico_files; then
+  log_step "checking the PICO-8 files"
+  if ! untraced verify_pico_files; then
     return 1
   fi
 

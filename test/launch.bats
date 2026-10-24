@@ -959,21 +959,74 @@ teardown() {
   grep -qx "show_fps 1" "$HOME/config.txt"
 }
 
-@test "install_pico_files dismisses the presenter only after copying" {
-  killed="$BATS_TEST_TMPDIR/killed"
-  printf '#!/bin/sh\necho "$*" >>"%s"\n' "$killed" >"$STUB_BIN/killall"
-  chmod +x "$STUB_BIN/killall"
+# copying the files into the pak made the first start after an install slow,
+# so they are only checked where the user put them
+@test "verify_pico_files accepts the files in the BIOS folder without copying them" {
   make_bios
-  EMU_DIR="$BATS_TEST_TMPDIR/emu"
+  stub_presenter 0
   PLATFORM=tg5040
   architecture=arm64
 
-  install_pico_files
-  [ "$(grep -c "minui-presenter" "$killed")" -ge 1 ]
+  run verify_pico_files
+  [ "$status" -eq 0 ]
+  [ "$EMU_DIR" = "$SDCARD_PATH/Bios/PICO" ]
+  [ ! -e "$PRESENTER_LOG" ]
+}
 
-  : >"$killed"
-  install_pico_files
-  [ ! -s "$killed" ]
+@test "verify_pico_files stops when the binary is missing" {
+  make_bios
+  rm "$SDCARD_PATH/Bios/PICO/pico8_64"
+  stub_presenter 0
+  PLATFORM=tg5040
+  architecture=arm64
+
+  run verify_pico_files
+  [ "$status" -eq 1 ]
+  grep -q "Missing pico8_64 or pico8.dat" "$PRESENTER_LOG"
+  grep -q "Bios/PICO" "$PRESENTER_LOG"
+}
+
+@test "verify_pico_files stops when pico8.dat is missing" {
+  make_bios
+  rm "$SDCARD_PATH/Bios/PICO/pico8.dat"
+  stub_presenter 0
+  PLATFORM=tg5040
+  architecture=arm64
+
+  run verify_pico_files
+  [ "$status" -eq 1 ]
+  grep -q "Missing pico8_64 or pico8.dat" "$PRESENTER_LOG"
+}
+
+# earlier versions copied pico-8 into the pak, and those copies are left on the
+# card, but a newer BIOS must not be shadowed by one
+@test "launch.sh runs pico-8 from the BIOS folder, not an older copy in the pak" {
+  pak_dir="$(make_pak)"
+  mkdir -p "$pak_dir/pico8"
+  printf '#!/bin/sh\necho "stale copy"\n' >"$pak_dir/pico8/pico8_64"
+  chmod +x "$pak_dir/pico8/pico8_64"
+  : >"$pak_dir/pico8/pico8.dat"
+
+  make_bios
+  stub_presenter 0
+  rom_folder="$(make_rom_folder "Pico-8 (PICO)")"
+  cart="$rom_folder/Freecell.p8"
+  : >"$cart"
+
+  run env PATH="$STUB_BIN:$PATH" PLATFORM=tg5040 DEVICE= \
+    PICO_PAK_SOURCE_ONLY= PICO_PAK_NET_DIR="$PICO_PAK_NET_DIR" \
+    PICO_PAK_CPUFREQ_DIR="$BATS_TEST_TMPDIR/absent" \
+    SDCARD_PATH="$SDCARD_PATH" USERDATA_PATH="$USERDATA_PATH" \
+    SHARED_USERDATA_PATH="$SHARED_USERDATA_PATH" LOGS_PATH="$LOGS_PATH" \
+    sh "$pak_dir/launch.sh" "$cart"
+
+  [ "$status" -eq 0 ]
+  grep -q "^pico8 ARGS=.*-run" "$LOGS_PATH/PICO.txt"
+  ! grep -q "stale copy" "$LOGS_PATH/PICO.txt"
+  ! grep -q "Copying" "$LOGS_PATH/PICO.txt"
+  grep -q "^+ .*$SDCARD_PATH/Bios/PICO/pico8_64 .*-run" "$LOGS_PATH/PICO.txt"
+  # the old copy is left where it was
+  grep -q "stale copy" "$pak_dir/pico8/pico8_64"
 }
 
 @test "install_config points cart saves at this device's sd card" {
@@ -2283,14 +2336,12 @@ teardown() {
 
 @test "launch.sh starts splore when the user continues past the warning" {
   pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
-  mkdir -p "$pak_dir/pico8"
+  mkdir -p "$pak_dir"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
   ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
   ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
   ln -s "$REPO_ROOT/config" "$pak_dir/config"
-  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
-  chmod +x "$pak_dir/pico8/pico8_64"
-  : >"$pak_dir/pico8/pico8.dat"
+  make_bios_stub
 
   make_bios
   stub_presenter 0
@@ -2311,14 +2362,12 @@ teardown() {
 
 @test "launch.sh starts power control on h700" {
   pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
-  mkdir -p "$pak_dir/pico8"
+  mkdir -p "$pak_dir"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
   ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
   ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
   ln -s "$REPO_ROOT/config" "$pak_dir/config"
-  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
-  chmod +x "$pak_dir/pico8/pico8_64"
-  : >"$pak_dir/pico8/pico8.dat"
+  make_bios_stub
   stub_power_control "$pak_dir"
 
   make_bios
@@ -2351,14 +2400,12 @@ teardown() {
 
 @test "launch.sh starts power control on my355" {
   pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
-  mkdir -p "$pak_dir/pico8"
+  mkdir -p "$pak_dir"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
   ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
   ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
   ln -s "$REPO_ROOT/config" "$pak_dir/config"
-  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
-  chmod +x "$pak_dir/pico8/pico8_64"
-  : >"$pak_dir/pico8/pico8.dat"
+  make_bios_stub
 
   make_bios
   stub_presenter 0
@@ -2396,14 +2443,12 @@ teardown() {
 
 @test "launch.sh moves an existing save into the saves folder" {
   pak_dir="$BATS_TEST_TMPDIR/PICO.pak"
-  mkdir -p "$pak_dir/pico8"
+  mkdir -p "$pak_dir"
   ln -s "$REPO_ROOT/launch.sh" "$pak_dir/launch.sh"
   ln -s "$REPO_ROOT/splore" "$pak_dir/splore"
   ln -s "$REPO_ROOT/controllers" "$pak_dir/controllers"
   ln -s "$REPO_ROOT/config" "$pak_dir/config"
-  printf '#!/bin/sh\nexit 0\n' >"$pak_dir/pico8/pico8_64"
-  chmod +x "$pak_dir/pico8/pico8_64"
-  : >"$pak_dir/pico8/pico8.dat"
+  make_bios_stub
 
   make_bios
   stub_presenter 0
@@ -2540,7 +2585,7 @@ teardown() {
   grep -qx "pico8 LD_PRELOAD=$pak_dir/lib/arm64/sdl-display.so" "$LOGS_PATH/PICO.txt"
   grep -qx "sync LD_PRELOAD=" "$LOGS_PATH/PICO.txt"
   [ "$(grep -c "^sync LD_PRELOAD=.*sdl-display" "$LOGS_PATH/PICO.txt")" -eq 0 ]
-  grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/pico8/lib:$pak_dir/lib/tg5040:$pak_dir/lib/arm64:/inherited" \
+  grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/lib/tg5040:$pak_dir/lib/arm64:/inherited" \
     "$LOGS_PATH/PICO.txt"
   [ "$(grep -c "^sync LD_LIBRARY_PATH=.*$pak_dir" "$LOGS_PATH/PICO.txt")" -eq 0 ]
   grep -qx "sync LD_LIBRARY_PATH=/inherited" "$LOGS_PATH/PICO.txt"
@@ -2681,7 +2726,7 @@ teardown() {
   [ "$status" -eq 0 ]
   grep '^\[1234\.56\] ' "$LOGS_PATH/PICO.txt" | sed 's/^\[1234\.56\] //' >"$BATS_TEST_TMPDIR/steps"
   printf '%s\n' "starting" "migrating saves and seeding the Splore cart" "checking the cart" \
-    "installing the PICO-8 files" \
+    "checking the PICO-8 files" \
     "waiting for the saves and the Splore cart" "starting power control" \
     "setting up pico-8" "starting pico-8" "pico-8 exited with status 0" "syncing the SD card" \
     "cleaning up" "done, returning to the launcher" >"$BATS_TEST_TMPDIR/expected"
@@ -2727,11 +2772,11 @@ teardown() {
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 0 ]
-  grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/pico8/lib:$pak_dir/lib/tg5050:$pak_dir/lib/arm64" \
+  grep -qx "pico8 LD_LIBRARY_PATH=$pak_dir/lib/tg5050:$pak_dir/lib/arm64" \
     "$LOGS_PATH/PICO.txt"
 }
 
-# the ldd used to run from install_pico_files, before either variable was set,
+# the ldd used to run from the step that checks the PICO-8 files, before either variable was set,
 # so it recorded a resolution pico-8 never saw
 @test "launch.sh records what pico-8 links against with the loader set up" {
   pak_dir="$(make_pak)"
@@ -2752,7 +2797,7 @@ teardown() {
     sh "$pak_dir/launch.sh" "$cart"
 
   [ "$status" -eq 0 ]
-  grep -q "ldd LD_LIBRARY_PATH=$pak_dir/pico8/lib:" "$LOGS_PATH/PICO.txt"
+  grep -q "ldd LD_LIBRARY_PATH=$pak_dir/lib/h700:" "$LOGS_PATH/PICO.txt"
   grep -qx "ldd LD_PRELOAD=$pak_dir/lib/h700/sdl-nosensor.so" "$LOGS_PATH/PICO.txt"
 }
 
