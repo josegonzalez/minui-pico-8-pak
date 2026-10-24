@@ -354,6 +354,20 @@ void SDL_PauseAudioDevice(uint32_t device, int pause_on)
   }
 }
 
+void SDL_LockAudioDevice(uint32_t device)
+{
+  if (device == FAKE_AUDIO_DEVICE) {
+    fake.audio_locks++;
+  }
+}
+
+void SDL_UnlockAudioDevice(uint32_t device)
+{
+  if (device == FAKE_AUDIO_DEVICE) {
+    fake.audio_unlocks++;
+  }
+}
+
 void *SDL_GameControllerGetJoystick(void *controller)
 {
   return controller == &pad ? &joystick : NULL;

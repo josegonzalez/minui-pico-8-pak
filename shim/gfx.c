@@ -301,6 +301,24 @@ void gfx_dim(gfx_canvas *canvas, const uint32_t *frame, int alpha)
   }
 }
 
+void gfx_blit_scaled(gfx_canvas *canvas, int x, int y, int w, int h, const uint32_t *src, int src_w,
+                     int src_h)
+{
+  int row, col;
+
+  if (w <= 0 || h <= 0 || src_w <= 0 || src_h <= 0) {
+    return;
+  }
+  for (row = y < 0 ? 0 : y; row < y + h && row < canvas->h; row++) {
+    const uint32_t *line = src + (size_t)((long)(row - y) * src_h / h) * src_w;
+    uint32_t *out = &canvas->pixels[(size_t)row * canvas->w];
+
+    for (col = x < 0 ? 0 : x; col < x + w && col < canvas->w; col++) {
+      out[col] = line[(long)(col - x) * src_w / w];
+    }
+  }
+}
+
 /* ASCII 32 to 126, five columns each with the top row in the lowest bit */
 static const unsigned char builtin_glyphs[95][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, {0x00, 0x00, 0x5f, 0x00, 0x00}, {0x00, 0x07, 0x00, 0x07, 0x00},

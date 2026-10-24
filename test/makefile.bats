@@ -257,11 +257,12 @@ pak_platforms() {
 }
 
 # a function of the menu's bound to one of the same name in pico-8 would call
-# into pico-8 instead
-@test "the display shim exports only its SDL wrappers" {
+# into pico-8 instead, and malloc's family is exported for the save state arena
+@test "the display shim exports only its SDL wrappers and malloc's family" {
   [ "$(grep -c -- '-fvisibility=hidden' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
-  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt| (gfx|menu|cart|crash)_'" \
+  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace| (gfx|menu|cart|crash|state)_'" \
     "$REPO_ROOT/shim/Dockerfile"
+  [ "$(grep -c -- 'DEFAULT +\[0-9\]+ malloc\$' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
 }
 
 # glibc 2.34 folded libdl into libc, so a newer base records dlsym@GLIBC_2.34

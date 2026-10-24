@@ -69,6 +69,9 @@ void gfx_arc(gfx_canvas *canvas, int cx, int cy, int r, int thickness, uint32_t 
 void gfx_arrow(gfx_canvas *canvas, int x, int y, int w, int h, int down, uint32_t colour);
 /* copies frame onto canvas darkened by alpha (0-255), as minarch dims the game */
 void gfx_dim(gfx_canvas *canvas, const uint32_t *frame, int alpha);
+/* draws a picture of src_w by src_h stretched to w by h at x, y, a pixel of it to each */
+void gfx_blit_scaled(gfx_canvas *canvas, int x, int y, int w, int h, const uint32_t *src, int src_w,
+                     int src_h);
 
 typedef struct gfx_font gfx_font;
 

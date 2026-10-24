@@ -632,9 +632,16 @@ static void step_option(struct menu *menu, int row, int step)
   }
 }
 
-static int root_row_enabled(int row)
+static int root_row_enabled(const struct menu *menu, int row)
 {
-  return row != MENU_SAVE && row != MENU_LOAD;
+  return menu->states.available || (row != MENU_SAVE && row != MENU_LOAD);
+}
+
+/* Load can be chosen on any slot, as minarch's can, but shows when it has nothing to load */
+static int root_row_dimmed(const struct menu *menu, int row)
+{
+  return !root_row_enabled(menu, row) ||
+         (row == MENU_LOAD && !menu->states.exists[menu->states.slot]);
 }
 
 /* Up and Down wrap, and on the root page pass over the rows that cannot be chosen */
@@ -643,7 +650,7 @@ static void move_row(struct menu *menu, int step)
   if (menu->page == MENU_PAGE_ROOT) {
     do {
       menu->root_row = (menu->root_row + step + MENU_ROOT_COUNT) % MENU_ROOT_COUNT;
-    } while (!root_row_enabled(menu->root_row));
+    } while (!root_row_enabled(menu, menu->root_row));
   } else if (menu->page == MENU_PAGE_SHORTCUTS) {
     menu->shortcut_row = (menu->shortcut_row + step + MENU_SHORTCUT_COUNT) % MENU_SHORTCUT_COUNT;
   } else if (menu->page == MENU_PAGE_GROUP) {
@@ -703,8 +710,15 @@ enum menu_result menu_update(struct menu *menu, unsigned pressed, unsigned held,
   }
 
   if (menu->page == MENU_PAGE_ROOT) {
+    int on_slot = menu->root_row == MENU_SAVE || menu->root_row == MENU_LOAD;
+
     if (pressed & MENU_B) {
       return MENU_CLOSE;
+    }
+    if (on_slot && (pressed & (MENU_LEFT | MENU_RIGHT))) {
+      menu->states.slot =
+          (menu->states.slot + (pressed & MENU_LEFT ? -1 : 1) + MENU_SLOTS) % MENU_SLOTS;
+      menu->dirty = 1;
     }
     if (!(pressed & MENU_A)) {
       return MENU_STAY;
@@ -713,6 +727,10 @@ enum menu_result menu_update(struct menu *menu, unsigned pressed, unsigned held,
     switch (menu->root_row) {
     case MENU_CONTINUE:
       return MENU_CLOSE;
+    case MENU_SAVE:
+      return MENU_SAVE_STATE;
+    case MENU_LOAD:
+      return menu->states.exists[menu->states.slot] ? MENU_LOAD_STATE : MENU_STAY;
     case MENU_OPTIONS:
       menu->page = MENU_PAGE_OPTIONS;
       menu->option_row = 0;
@@ -986,6 +1004,54 @@ static void draw_buttons(gfx_canvas *canvas, const gfx_metrics *m, const gfx_fon
   }
 }
 
+/* minarch's message: lines of the large font, centred in the box */
+static void draw_message(gfx_canvas *canvas, const gfx_metrics *m, const gfx_font *font, int x,
+                         int y, int w, int h, const char *text)
+{
+  int px = gfx_u(m, GFX_FONT_LARGE);
+
+  gfx_text_draw(canvas, font, x + (w - gfx_text_width(font, px, text)) / 2,
+                y + (h - gfx_line_height(font, px)) / 2, px, GFX_WHITE, text);
+}
+
+/*
+ * minarch's slot window at the right: a white frame around a picture of the
+ * slot at half the screen's size, or a message when there is none, and a dot
+ * for each slot under it with the chosen one larger and black.
+ */
+static void draw_slot(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
+                      const gfx_font *font)
+{
+  const struct menu_states *states = &menu->states;
+  int radius = gfx_u(m, 4), hw = canvas->w / 2, hh = canvas->h / 2;
+  int pw = hw + 2 * radius, ph = hh + gfx_u(m, 4 * 2 + 6 + 4);
+  int x = canvas->w - pw - gfx_u(m, m->padding), y = (canvas->h - ph) / 2;
+  int slot = states->slot, dots, i;
+
+  gfx_rounded(canvas, x, y, pw, ph, radius, GFX_WHITE);
+  x += radius;
+  y += radius;
+  gfx_fill(canvas, x, y, hw, hh, GFX_BLACK);
+  if (states->exists[slot] && states->preview[slot] != NULL) {
+    gfx_blit_scaled(canvas, x, y, hw, hh, states->preview[slot], states->preview_w[slot],
+                    states->preview_h[slot]);
+  } else {
+    draw_message(canvas, m, font, x, y, hw, hh, states->exists[slot] ? "No Preview" : "Empty Slot");
+  }
+
+  dots = x + (pw - gfx_u(m, 15 * MENU_SLOTS)) / 2;
+  y += hh + radius;
+  for (i = 0; i < MENU_SLOTS; i++) {
+    if (i == slot) {
+      gfx_rounded(canvas, dots + gfx_u(m, i * 15), y, gfx_u(m, 6), gfx_u(m, 6), gfx_u(m, 2),
+                  GFX_BLACK);
+    } else {
+      gfx_fill(canvas, dots + gfx_u(m, i * 15 + 2), y + gfx_u(m, 2), gfx_u(m, 2), gfx_u(m, 2),
+               GFX_LIGHT_GRAY);
+    }
+  }
+}
+
 static void draw_root(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *m,
                       const uint32_t *frame, const gfx_font *font, const gfx_theme *theme,
                       const gfx_battery *battery)
@@ -1027,7 +1093,11 @@ static void draw_root(struct menu *menu, gfx_canvas *canvas, const gfx_metrics *
                     label);
     }
     gfx_text_draw(canvas, font, x + padding, text_y, px,
-                  root_row_enabled(row) ? gfx_text(theme) : DISABLED_TEXT, label);
+                  root_row_dimmed(menu, row) ? DISABLED_TEXT : gfx_text(theme), label);
+  }
+
+  if (menu->states.available && (menu->root_row == MENU_SAVE || menu->root_row == MENU_LOAD)) {
+    draw_slot(menu, canvas, m, font);
   }
 }
 

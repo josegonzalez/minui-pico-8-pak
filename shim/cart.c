@@ -317,7 +317,7 @@ static int open_switcher(const char *switcher_dir, const char *cart_path, char *
   return 1;
 }
 
-static int write_slot(const char *switcher_dir, const char *name)
+static int write_slot(const char *switcher_dir, const char *name, int slot)
 {
   char path[8192];
   FILE *file;
@@ -327,8 +327,77 @@ static int write_slot(const char *switcher_dir, const char *name)
   if (file == NULL) {
     return 0;
   }
-  fputs("0\n", file);
+  fprintf(file, "%d\n", slot);
   return fclose(file) == 0;
+}
+
+int cart_write_slot(const char *switcher_dir, const char *cart_path, int slot)
+{
+  char name[1024];
+
+  if (!open_switcher(switcher_dir, cart_path, name, sizeof name) ||
+      !write_slot(switcher_dir, name, slot)) {
+    return 0;
+  }
+  return 1;
+}
+
+int cart_read_slot(const char *switcher_dir, const char *cart_path)
+{
+  char name[1024], path[8192], line[16] = "";
+  FILE *file;
+  int slot;
+
+  if (switcher_dir == NULL || *switcher_dir == '\0') {
+    return -1;
+  }
+  cart_switcher_name(cart_path, name, sizeof name);
+  snprintf(path, sizeof path, "%s/%s.txt", switcher_dir, name);
+  file = fopen(path, "r");
+  if (file == NULL) {
+    return -1;
+  }
+  if (fgets(line, sizeof line, file) == NULL || sscanf(line, "%d", &slot) != 1 || slot < 0) {
+    slot = -1;
+  }
+  fclose(file);
+  return slot;
+}
+
+int cart_state_path(const char *states_dir, const char *cart_path, int slot, char *out, size_t size)
+{
+  char name[1024];
+
+  if (states_dir == NULL || *states_dir == '\0' || cart_path == NULL || *cart_path == '\0') {
+    return 0;
+  }
+  cart_switcher_name(cart_path, name, sizeof name);
+  return name[0] != '\0' && snprintf(out, size, "%s/%s.st%d", states_dir, name, slot) < (int)size;
+}
+
+int cart_preview_path(const char *switcher_dir, const char *cart_path, int slot, char *out,
+                      size_t size)
+{
+  char name[1024];
+
+  if (switcher_dir == NULL || *switcher_dir == '\0' || cart_path == NULL || *cart_path == '\0') {
+    return 0;
+  }
+  cart_switcher_name(cart_path, name, sizeof name);
+  return name[0] != '\0' && snprintf(out, size, "%s/%s.%d.bmp", switcher_dir, name, slot) < (int)size;
+}
+
+int cart_has_state(const char *states_dir, const char *cart_path)
+{
+  char path[8192];
+  int slot;
+
+  for (slot = 0; slot < CART_SLOTS; slot++) {
+    if (cart_state_path(states_dir, cart_path, slot, path, sizeof path) && is_file(path)) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 int cart_write_preview_artwork(const char *switcher_dir, const char *cart_path)
@@ -345,7 +414,7 @@ int cart_write_preview_artwork(const char *switcher_dir, const char *cart_path)
 
   /* NextUI loads the picture by its content, so a PNG under a .bmp name works */
   snprintf(path, sizeof path, "%s/%s.0.bmp", switcher_dir, name);
-  if (!copy_file(artwork, path) || !write_slot(switcher_dir, name)) {
+  if (!copy_file(artwork, path) || !write_slot(switcher_dir, name, 0)) {
     LOG("cannot write the game switcher preview for %s to %s\n", name, switcher_dir);
     return 0;
   }
@@ -451,7 +520,7 @@ static int write_bmp(const char *path, const uint32_t *pixels, int w, int h, int
 }
 
 int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
-                             const uint32_t *pixels, int w, int h)
+                             const uint32_t *pixels, int w, int h, int slot)
 {
   char name[1024], path[8192];
   int step = cart_preview_step(w, h);
@@ -460,14 +529,14 @@ int cart_write_preview_frame(const char *switcher_dir, const char *cart_path,
     return 0;
   }
 
-  snprintf(path, sizeof path, "%s/%s.0.bmp", switcher_dir, name);
-  if (!write_bmp(path, pixels, w, h, step) || !write_slot(switcher_dir, name)) {
+  snprintf(path, sizeof path, "%s/%s.%d.bmp", switcher_dir, name, slot);
+  if (!write_bmp(path, pixels, w, h, step) || !write_slot(switcher_dir, name, slot)) {
     LOG("cannot write the game switcher preview for %s to %s\n", name, switcher_dir);
     return 0;
   }
 
-  LOG("gave the game switcher the last frame as the preview for %s, at %dx%d\n", name, w / step,
-      h / step);
+  LOG("gave the game switcher a frame as the preview of slot %d for %s, at %dx%d\n", slot, name,
+      w / step, h / step);
   return 1;
 }
 

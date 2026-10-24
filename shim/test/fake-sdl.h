@@ -92,6 +92,9 @@ struct fake_state {
   int audio_status;
   int audio_pauses;
   int audio_resumes;
+  /* held while a save state is taken or put back */
+  int audio_locks;
+  int audio_unlocks;
 
   int pushed;
   uint32_t pushed_type;

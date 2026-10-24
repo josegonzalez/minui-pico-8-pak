@@ -1,9 +1,10 @@
 /*
  * The in-game menu, laid out as minarch's: Continue, Save, Load, Options and
- * Quit over the dimmed game, with Save and Load shown but unavailable until
- * the pak has save states, and an Options page of groups, Frontend, Emulator,
- * Splore and Shortcuts, for the pak's settings and the PICO-8 settings it
- * writes into config.txt.
+ * Quit over the dimmed game, with a slot for Save and Load chosen with Left
+ * and Right and a preview of what it holds, and an Options page of groups,
+ * Frontend, Emulator, Splore and Shortcuts, for the pak's settings and the
+ * PICO-8 settings it writes into config.txt. Save and Load are shown but
+ * unavailable where there are no save states, as in Splore.
  *
  * Every setting is saved the moment it changes, to the same files launch.sh
  * reads, so there is no page for saving them. Like gfx.c, nothing here calls
@@ -30,7 +31,8 @@ enum {
   MENU_X = 1 << 7,
 };
 
-enum menu_result { MENU_STAY, MENU_CLOSE, MENU_QUIT };
+/* Save and Load leave the slot in menu->states.slot for sdl-display.c to carry out */
+enum menu_result { MENU_STAY, MENU_CLOSE, MENU_QUIT, MENU_SAVE_STATE, MENU_LOAD_STATE };
 
 /* which setting minarch's indicator shows, in place of the battery */
 enum menu_indicator { MENU_INDICATOR_NONE, MENU_INDICATOR_BRIGHTNESS, MENU_INDICATOR_VOLUME };
@@ -155,9 +157,27 @@ struct menu_settings {
   int overlay;
 };
 
+/* minarch's eight slots, as Save and Load step through them */
+#define MENU_SLOTS 8
+
+/*
+ * The save state slots, which sdl-display.c fills in once menu_open has run,
+ * as nothing here reads a state or decodes a picture.
+ */
+struct menu_states {
+  /* whether states can be saved at all, which Save and Load need */
+  int available;
+  int slot;
+  int exists[MENU_SLOTS];
+  /* each slot's preview, 0xAARRGGBB, or NULL when it has none */
+  const uint32_t *preview[MENU_SLOTS];
+  int preview_w[MENU_SLOTS], preview_h[MENU_SLOTS];
+};
+
 struct menu {
   struct menu_settings *settings;
   const char *title;
+  struct menu_states states;
 
   enum menu_page page;
   int root_row;
