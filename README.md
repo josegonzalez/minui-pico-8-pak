@@ -428,7 +428,7 @@ make test
 
 `make build` and `make release` additionally need Docker, which is what the SDL sensor shim and the display shim are cross-compiled in, the display shim once for `arm` and once for `arm64`. The display shim decodes overlays with [stb_image](https://github.com/nothings/stb) and draws the menu's text with stb_truetype from the same project, both of which the build fetches at a pinned commit and checks against a checksum. Its base image is pinned to Debian bullseye on purpose: glibc 2.34 folded `libdl` into `libc`, so a newer image produces an object that will not load on these devices. See `shim/Dockerfile`.
 
-`test/carts/whiskers.p8` is a small cart for trying the [shaders](#shaders) on a device. Walk a calico cat with `Left` and `Right` and jump with `O` to catch the falling fish. The game has an outline sprite, text, circles, scrolling clouds and every colour along the top. Press `X` for a test pattern of colour bars, one pixel checkerboards and lines, a dither ramp and rings, and press it again to go back. Copy it into your PICO-8 roms folder to play it.
+`test/carts/whiskers.p8.png` is a small cart for trying the [shaders](#shaders) on a device. Walk a calico cat with `Left` and `Right` and jump with `O` to catch the falling fish. The game has an outline sprite, text, circles, scrolling clouds and every colour along the top. Press `X` for a test pattern of colour bars, one pixel checkerboards and lines, a dither ramp and rings, and press it again to go back. Copy it into your PICO-8 roms folder to play it.
 
 `make build` also unpacks the pinned minui-power-control release into `bin/power-control` with `scripts/unpack-makeself.sh`. That script checks the archive against the MD5 it records for itself, and never runs any part of it.
 
