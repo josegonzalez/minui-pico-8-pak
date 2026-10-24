@@ -41,6 +41,8 @@ To being, make sure your MinUI SD card is mounted.
 1. Download the `Raspberry PI` Pico-8 zip. As of this time of writing, it will be `pico-8_0.2.7_raspi.zip`, available from the [Lexaloffle site](https://www.lexaloffle.com/pico-8.php).
 2. Extract the `pico-8_0.2.7_raspi.zip` zip and place the `pico8`, `pico8_dyn`, `pico8_64`, and`pico8.dat` in the `/Bios/PICO` folder on your SD card.
 
+The pak runs PICO-8 from `/Bios/PICO` directly, so replacing these files with a newer release takes effect the next time a game starts. Earlier versions of the pak copied them into `PICO.pak/pico8`. Those copies are no longer used and can be deleted.
+
 The following are the sha256sum of known working pico8 files:
 
 ```shell
