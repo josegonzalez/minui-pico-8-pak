@@ -659,6 +659,8 @@ teardown() {
   [ "$PICO_PAK_SPLORE_COVERS" = "$PAK_DIR/splore" ]
   [ "$PICO_PAK_CART_PATH" = "$cart" ]
   [ "$PICO_PAK_SHORTCUTS" = "$USERDATA_PATH/Pico-8-native/shortcuts" ]
+  [ "$PICO_PAK_SHADERS_DIR" = "$SDCARD_PATH/Shaders" ]
+  [ "$PICO_PAK_SHADER_SETTINGS" = "$USERDATA_PATH/Pico-8-native/shaders" ]
   [ "$PICO_PAK_SCREENSHOTS_DIR" = "$SDCARD_PATH/Screenshots" ]
   [ "$PICO_PAK_NOTIFY_SCREENSHOT" = "1" ]
   [ "$PICO_PAK_SWITCHER_DIR" = "$SHARED_USERDATA_PATH/.minui/PICO" ]
@@ -738,6 +740,21 @@ teardown() {
   setup_display_preload
 
   [ -d "$SDCARD_PATH/Overlays/PICO" ]
+}
+
+# NextUI's skeleton ships the shaders folder, and MinUI has none to make
+@test "setup_display_preload creates no shaders folder" {
+  PAK_DIR="$BATS_TEST_TMPDIR/pak"
+  mkdir -p "$PAK_DIR/lib/arm64"
+  : >"$PAK_DIR/lib/arm64/sdl-display.so"
+
+  PLATFORM=tg5040
+  architecture=arm64
+  LD_PRELOAD=
+  setup_display_preload
+
+  [ "$PICO_PAK_SHADERS_DIR" = "$SDCARD_PATH/Shaders" ]
+  [ ! -e "$SDCARD_PATH/Shaders" ]
 }
 
 @test "setup_display_preload creates no overlay folder without the shim" {

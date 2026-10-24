@@ -21,6 +21,27 @@ typedef struct {
 
 struct fake_texture {
   int w, h;
+  uint32_t format;
+  int access;
+};
+
+/*
+ * A GL call or SDL_RenderFlush, in the order they were made,
+ * with its whole number and float arguments and the first pixel it uploaded
+ */
+struct fake_gl_call {
+  char name[32];
+  int args[6];
+  float floats[4];
+  uint8_t pixel[4];
+};
+
+/* the GL state SDL's renderer keeps its own record of, which the shim has to put back */
+struct fake_gl_state {
+  int program, active_texture, textures[2], array_buffer, framebuffer;
+  int viewport[4];
+  int blend, scissor;
+  int attribs[8];
 };
 
 /* the renderer state at the time of one SDL_RenderCopy */
@@ -116,6 +137,22 @@ struct fake_state {
   fake_rect viewport;
   int clip_enabled;
   fake_rect clip;
+
+  /* the renderer's name, opengles2 when NULL, and whether it has no GL context */
+  const char *renderer_name;
+  int no_gl_context;
+  /* what glGetString(GL_VERSION) says, a GLES 3.2 when NULL */
+  const char *gl_version;
+  int flushes;
+  int gl_call_count;
+  struct fake_gl_call gl_calls[8192];
+  struct fake_gl_state gl;
+  /* the start of every shader source given to GL; one with FAIL in it does not build */
+  char gl_sources[32][48];
+  int gl_source_count;
+  /* each uniform's name, its location being its index */
+  char uniforms[64][64];
+  int uniform_count;
 };
 
 extern struct fake_state fake;

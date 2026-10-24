@@ -713,6 +713,11 @@ setup_display_preload() {
   export PICO_PAK_PICO8_CONFIG
   export PICO_PAK_INSTALLED_CONFIG="$HOME/config.txt"
 
+  # NextUI's shaders and presets, where its skeleton puts them, and the ones
+  # chosen, saved in minarch's own form. The folder is NextUI's to make
+  export PICO_PAK_SHADERS_DIR="$SDCARD_PATH/Shaders"
+  export PICO_PAK_SHADER_SETTINGS="$USERDATA_PATH/Pico-8-native/shaders"
+
   # the shortcuts set in the menu, and where the screenshot one saves to
   export PICO_PAK_SHORTCUTS="$USERDATA_PATH/Pico-8-native/shortcuts"
   PICO_PAK_SCREENSHOTS_DIR="$(get_screenshots_dir)"

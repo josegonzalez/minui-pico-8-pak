@@ -40,6 +40,12 @@
  * draws each frame with. launch.sh names every file the menu saves to in the
  * PICO_PAK_ variables read by init_display.
  *
+ * The Shaders group runs NextUI's shaders over the game as minarch does. When
+ * pico-8's renderer is SDL's GLES one, the frame pico-8 uploads each time is
+ * kept, and its copy to the screen is drawn through the shaders instead, in
+ * SDL's own GL context, by shader-gl.c. The overlay, the menu and the notices
+ * are drawn by SDL over that as they are over any frame.
+ *
  * Every SDL call goes through dlsym, like sdl-nosensor.c, so this builds without
  * SDL headers and asks glibc for nothing newer than that shim does. See
  * shim/Dockerfile.
@@ -64,6 +70,8 @@
 #include "cart.h"
 #include "crash.h"
 #include "menu.h"
+#include "shader-gl.h"
+#include "shader.h"
 #include "state.h"
 
 /*
@@ -129,6 +137,15 @@ typedef struct {
 #define SDL_CONTROLLER_BUTTON_DPAD_LEFT 13
 #define SDL_CONTROLLER_BUTTON_DPAD_RIGHT 14
 #define SDL_CONTROLLER_BUTTON_MAX 21
+/* From SDL_render.h, whose name is what tells the GLES renderer from the others. */
+typedef struct {
+  const char *name;
+  uint32_t flags;
+  uint32_t num_texture_formats;
+  uint32_t texture_formats[16];
+  int max_texture_width;
+  int max_texture_height;
+} SDL_RendererInfo;
 
 /* the most input devices watched for the volume keys */
 #define INPUT_DEVICES 16
@@ -215,6 +232,10 @@ static struct {
   void (*LockAudioDevice)(uint32_t);
   void (*UnlockAudioDevice)(uint32_t);
   int (*GetModState)(void);
+  int (*GetRendererInfo)(void *, SDL_RendererInfo *);
+  int (*RenderFlush)(void *);
+  void *(*GL_GetCurrentContext)(void);
+  void *(*GL_GetProcAddress)(const char *);
 } sdl;
 
 static void *overlay_renderer;
@@ -277,7 +298,7 @@ static const char *notification;
 static uint32_t notification_until;
 static void *notification_renderer;
 static void *notification_texture;
-static const char *notification_drawn;
+static char notification_drawn[128];
 /* Ctrl is reported held from a Ctrl key shortcut until pico-8 reads its release */
 static int ctrl_held;
 /* how far a shortcut has got in pressing Ctrl and a key, 0 when none is, and since when */
@@ -334,6 +355,20 @@ static size_t menu_buffer_size;
 /* the biggest rect pico-8 has drawn to, which is its own standard screen */
 static SDL_Rect game_rect;
 
+/* the presets and the shader files, read once at startup as the overlays are */
+static char **shader_presets;
+static char **shader_programs;
+static char shader_programs_dir[4096];
+/* the renderer the shaders were last checked for, and whether they can draw on it */
+static void *shader_renderer;
+static int shaders_ready;
+/* pico-8's frame as it last uploaded it, in the RGBA byte order GL takes */
+static void *game_texture;
+static uint8_t *game_pixels;
+static int game_w, game_h, game_pixels_size;
+/* the shader shortcut's notice, kept as notify keeps what it is given */
+static char shader_notice[128];
+
 #define LOG(...) gfx_log(__VA_ARGS__)
 
 /*
@@ -386,6 +421,11 @@ static int resolve_sdl(void)
   RESOLVE(RenderSetDrawColor);
   /* wrapped, for the Ctrl a shortcut presses */
   RESOLVE(GetModState);
+  /* only the shaders use these, and RenderFlush is SDL 2.0.10 and up, before which nothing waits */
+  RESOLVE(GetRendererInfo);
+  RESOLVE(RenderFlush);
+  RESOLVE(GL_GetCurrentContext);
+  RESOLVE(GL_GetProcAddress);
 
   resolved = RESOLVE(CreateRGBSurfaceFrom) && RESOLVE(CreateTextureFromSurface) &&
                      RESOLVE(DestroyTexture) &&
@@ -650,6 +690,33 @@ static void init_states(void)
   }
 }
 
+/*
+ * The presets are the .cfg files in PICO_PAK_SHADERS_DIR and the shaders the
+ * .glsl files in its glsl folder, as NextUI lays them out. Whether they can
+ * be drawn is only known once pico-8 has a renderer.
+ */
+static void init_shaders(void)
+{
+  const char *dir = getenv("PICO_PAK_SHADERS_DIR");
+
+  settings.shaders_path = getenv("PICO_PAK_SHADER_SETTINGS");
+  shader_read_settings(&settings.shaders, settings.shaders_path);
+  if (dir == NULL || *dir == '\0') {
+    LOG("PICO_PAK_SHADERS_DIR is not set, no shaders to draw\n");
+    return;
+  }
+
+  snprintf(shader_programs_dir, sizeof shader_programs_dir, "%s/glsl", dir);
+  settings.shader_presets_dir = dir;
+  settings.shader_programs_dir = shader_programs_dir;
+  settings.shader_preset_count = shader_list_files(dir, ".cfg", &shader_presets);
+  settings.shader_presets = shader_presets;
+  settings.shader_program_count = shader_list_files(shader_programs_dir, ".glsl", &shader_programs);
+  settings.shader_programs = shader_programs;
+  LOG("%d shader presets in %s and %d shaders in %s, %d in use\n", settings.shader_preset_count, dir,
+      settings.shader_program_count, shader_programs_dir, settings.shaders.passes);
+}
+
 static void init_display(void)
 {
   static int done;
@@ -701,6 +768,7 @@ static void init_display(void)
   }
   open_input_devices();
   open_msettings();
+  init_shaders();
 
   overlay_dir = getenv("PICO_PAK_OVERLAY_DIR");
   if (overlay_dir == NULL || *overlay_dir == '\0') {
@@ -1297,6 +1365,110 @@ static void notify(const char *text)
   }
 }
 
+/*
+ * Shaders need SDL's GLES renderer, whose GL context is current while pico-8
+ * draws. Anything else, or a GL missing what the passes need, leaves pico-8's
+ * own copy of the frame in place and the Shaders group showing only None.
+ * Nothing is asked of GL until there are shaders to draw.
+ */
+static void check_shaders(void *renderer)
+{
+  SDL_RendererInfo info;
+
+  if (renderer == shader_renderer || settings.shader_program_count == 0) {
+    return;
+  }
+  shader_renderer = renderer;
+  shaders_ready = 0;
+  shader_gl_reset();
+
+  memset(&info, 0, sizeof info);
+  if (sdl.GetRendererInfo == NULL || sdl.GetRendererInfo(renderer, &info) != 0 ||
+      info.name == NULL || strcmp(info.name, "opengles2") != 0) {
+    LOG("pico-8 draws with the %s renderer, shaders need opengles2\n",
+        info.name != NULL ? info.name : "unknown");
+  } else if (sdl.GL_GetCurrentContext == NULL || sdl.GL_GetProcAddress == NULL ||
+             sdl.GL_GetCurrentContext() == NULL) {
+    LOG("pico-8's renderer has no GL context, not drawing shaders\n");
+  } else {
+    if (sdl.RenderFlush != NULL) {
+      sdl.RenderFlush(renderer);
+    }
+    shaders_ready = shader_gl_init(sdl.GL_GetProcAddress);
+  }
+  settings.shaders_unavailable = !shaders_ready;
+}
+
+/*
+ * Keeps the frame pico-8 uploads to the texture it draws its screen from,
+ * which is a streaming ARGB8888 one at least 128 pixels square. Its frame
+ * rate counter is a strip of the same format, which this leaves out.
+ */
+static void keep_frame(void *texture, const void *pixels, int pitch)
+{
+  uint32_t format;
+  int access, w, h, x, y;
+  size_t size;
+
+  if (sdl.QueryTexture(texture, &format, &access, &w, &h) != 0 ||
+      format != SDL_PIXELFORMAT_ARGB8888 || access != SDL_TEXTUREACCESS_STREAMING || w < 128 ||
+      h < 128 || pitch < w * 4) {
+    return;
+  }
+
+  size = (size_t)w * h * 4;
+  if (size > (size_t)game_pixels_size) {
+    uint8_t *grown = realloc(game_pixels, size);
+
+    if (grown == NULL) {
+      return;
+    }
+    game_pixels = grown;
+    game_pixels_size = (int)size;
+  }
+
+  for (y = 0; y < h; y++) {
+    const uint32_t *row = (const uint32_t *)((const uint8_t *)pixels + (size_t)y * pitch);
+    uint8_t *out = game_pixels + (size_t)y * w * 4;
+
+    for (x = 0; x < w; x++) {
+      out[x * 4] = (uint8_t)(row[x] >> 16);
+      out[x * 4 + 1] = (uint8_t)(row[x] >> 8);
+      out[x * 4 + 2] = (uint8_t)row[x];
+      out[x * 4 + 3] = 0xff;
+    }
+  }
+  game_texture = texture;
+  game_w = w;
+  game_h = h;
+}
+
+/* draws pico-8's frame through the shaders into dst, or the whole screen, after what SDL has queued */
+static int draw_shaded(void *renderer, const SDL_Rect *dst)
+{
+  const char *failed = NULL;
+  SDL_Rect whole = {0, 0, 0, 0};
+  int drawn;
+
+  if (sdl.GetRendererOutputSize(renderer, &whole.w, &whole.h) != 0) {
+    return 0;
+  }
+  if (dst == NULL) {
+    dst = &whole;
+  }
+  if (sdl.RenderFlush != NULL) {
+    sdl.RenderFlush(renderer);
+  }
+
+  drawn = shader_gl_draw(&settings.shaders, settings.shader_programs_dir, game_pixels, game_w,
+                         game_h, dst->x, dst->y, dst->w, dst->h, whole.h, &failed);
+  if (failed != NULL) {
+    snprintf(shader_notice, sizeof shader_notice, "Cannot run %s", failed);
+    notify(shader_notice);
+  }
+  return drawn;
+}
+
 /* a state being written in the background, and its preview */
 struct state_job {
   struct state_snapshot *snapshot;
@@ -1874,12 +2046,12 @@ static void draw_notification(void *renderer)
   load_menu_look();
   menu_notification_size(width, height, menu_font, notification, &w, &h);
   if (renderer != notification_renderer || w != texture_w || h != texture_h ||
-      notification != notification_drawn) {
+      strcmp(notification, notification_drawn) != 0) {
     if (notification_texture != NULL && renderer == notification_renderer) {
       sdl.DestroyTexture(notification_texture);
     }
     notification_renderer = renderer;
-    notification_drawn = NULL;
+    notification_drawn[0] = '\0';
     notification_texture = sdl.CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
                                              SDL_TEXTUREACCESS_STREAMING, w, h);
     pixels = calloc((size_t)w * h, sizeof *pixels);
@@ -1896,7 +2068,7 @@ static void draw_notification(void *renderer)
     free(pixels);
     texture_w = w;
     texture_h = h;
-    notification_drawn = notification;
+    snprintf(notification_drawn, sizeof notification_drawn, "%s", notification);
   }
 
   m = gfx_metrics_for(width, height);
@@ -2093,6 +2265,10 @@ static void run_shortcut(int shortcut)
   case MENU_SHORTCUT_OVERLAY:
     menu_cycle_overlay(&settings);
     break;
+  case MENU_SHORTCUT_SHADER:
+    menu_cycle_shader(&settings, shader_notice, sizeof shader_notice);
+    notify(shader_notice);
+    break;
   }
 }
 
@@ -2144,6 +2320,8 @@ EXPORT void SDL_RenderPresent(void *renderer)
     presented = 1;
     LOG("pico-8 presented its first frame\n");
   }
+  /* before the menu can open, so it knows whether there are shaders to offer */
+  check_shaders(renderer);
   if (quitting) {
     clear_to_black(renderer);
     sdl.RenderPresent(renderer);
@@ -2228,7 +2406,30 @@ EXPORT int SDL_RenderCopy(void *renderer, void *texture, const SDL_Rect *src, co
     dst = &stretched;
   }
 
+  check_shaders(renderer);
+  if (texture != NULL && texture == game_texture && shaders_ready && menu_shaders_on(&settings) &&
+      draw_shaded(renderer, dst)) {
+    return 0;
+  }
+
   return sdl.RenderCopy(renderer, texture, src, dst);
+}
+
+/* pico-8 uploads its whole frame each time, which the shaders draw from */
+EXPORT int SDL_UpdateTexture(void *texture, const SDL_Rect *rect, const void *pixels, int pitch)
+{
+  resolve_sdl();
+  if (sdl.UpdateTexture == NULL) {
+    return -1;
+  }
+
+  init_display();
+  if (rect == NULL && pixels != NULL && texture != NULL && shaders_ready &&
+      menu_shaders_on(&settings)) {
+    keep_frame(texture, pixels, pitch);
+  }
+
+  return sdl.UpdateTexture(texture, rect, pixels, pitch);
 }
 
 EXPORT int SDL_PollEvent(void *event)
@@ -2388,6 +2589,13 @@ EXPORT void SDL_DestroyRenderer(void *renderer)
   if (renderer == toast_renderer) {
     toast_renderer = NULL;
     toast_texture = NULL;
+  }
+  /* the GL objects went with the renderer's context */
+  if (renderer == shader_renderer) {
+    shader_gl_reset();
+    shader_renderer = NULL;
+    shaders_ready = 0;
+    game_texture = NULL;
   }
 
   if (sdl.DestroyRenderer != NULL) {

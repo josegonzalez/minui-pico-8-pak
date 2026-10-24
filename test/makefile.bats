@@ -204,14 +204,16 @@ pak_platforms() {
   done
 }
 
-@test "both architectures run the display and menu tests" {
+@test "both architectures run the display, menu and shader tests" {
   mk ARCHITECTURES
   for architecture in $output; do
     awk -v stage="test-$architecture" '
       /^FROM / { in_stage = ($NF == stage) }
       in_stage && /LD_PRELOAD=\/display.so \/src\/test\/display-test/ { display = 1 }
       in_stage && /\/src\/test\/menu-test \/fonts\// { menu = 1 }
-      END { exit !(display && menu) }' "$REPO_ROOT/shim/Dockerfile"
+      in_stage && /display-test shaders/ { shaders = 1 }
+      in_stage && /\/src\/test\/shader-test$/ { settings = 1 }
+      END { exit !(display && menu && shaders && settings) }' "$REPO_ROOT/shim/Dockerfile"
   done
 }
 
@@ -232,9 +234,9 @@ pak_platforms() {
 # skips them
 @test "the display shim sources and tests are prerequisites of the shim build" {
   for prerequisite in shim/menu.c shim/menu.h shim/gfx.c shim/gfx.h shim/cart.c shim/cart.h \
-    shim/crash.c shim/crash.h \
+    shim/crash.c shim/crash.h shim/shader.c shim/shader.h shim/shader-gl.c shim/shader-gl.h \
     shim/test/display-test.c \
-    shim/test/menu-test.c shim/test/fake-sdl.c; do
+    shim/test/menu-test.c shim/test/fake-sdl.c shim/test/shader-test.c; do
     run make --no-print-directory -C "$REPO_ROOT" -n -W "$prerequisite" lib/arm64/sdl-display.so
     [ "$status" -eq 0 ]
     [[ "$output" == *"docker buildx build"* ]]
@@ -242,7 +244,7 @@ pak_platforms() {
 }
 
 @test "the display shim tests do not ship with the pak" {
-  for test_file in display-test.c menu-test.c; do
+  for test_file in display-test.c menu-test.c shader-test.c; do
     run sh -c "cd '$REPO_ROOT' && git check-attr export-ignore shim/test/$test_file"
     [ "$status" -eq 0 ]
     [[ "$output" == *"export-ignore: set"* ]]
@@ -260,7 +262,7 @@ pak_platforms() {
 # into pico-8 instead, and malloc's family is exported for the save state arena
 @test "the display shim exports only its SDL wrappers and malloc's family" {
   [ "$(grep -c -- '-fvisibility=hidden' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
-  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state)_'" \
+  grep -q "readelf -W --dyn-syms /display.so | grep -Eq 'stbi|stbtt|mspace|LZ4| (gfx|menu|cart|crash|state|shader)_'" \
     "$REPO_ROOT/shim/Dockerfile"
   [ "$(grep -c -- 'DEFAULT +\[0-9\]+ malloc\$' "$REPO_ROOT/shim/Dockerfile")" -eq 2 ]
 }
